@@ -74,6 +74,8 @@ portable:
 linux:
   icon: resources/icon.png
   category: Development
+  maintainer: Skill Control contributors <zifeixu85@users.noreply.github.com>
+  syncDesktopName: true
   synopsis: Manage skills across local AI coding agents
   description: Scan, preview, import, export, and synchronize local AI agent skills.
   target:

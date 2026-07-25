@@ -2,7 +2,11 @@
   "name": "skill-control",
   "version": "0.1.0",
   "description": "Local-first desktop manager for skills shared across AI coding agents.",
-  "author": "Skill Control contributors",
+  "author": {
+    "name": "Skill Control contributors",
+    "email": "zifeixu85@users.noreply.github.com"
+  },
+  "desktopName": "skill-control.desktop",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -30,12 +34,12 @@
     "desktop:start": "npm run desktop:runtime && electron .",
     "desktop:smoke": "node scripts/smoke-desktop.mjs",
     "desktop:pack": "npm run desktop:prepare && electron-builder --dir",
-    "desktop:build": "npm run desktop:prepare && electron-builder",
-    "desktop:build:mac": "npm run desktop:prepare && electron-builder --mac --x64 --arm64",
-    "desktop:build:mac:arm64": "npm run desktop:prepare && electron-builder --mac --arm64",
-    "desktop:build:mac:x64": "npm run desktop:prepare && electron-builder --mac --x64",
-    "desktop:build:win": "npm run desktop:prepare && electron-builder --win --x64",
-    "desktop:build:linux": "npm run desktop:prepare && electron-builder --linux --x64",
+    "desktop:build": "npm run desktop:prepare && electron-builder --publish never",
+    "desktop:build:mac": "npm run desktop:prepare && electron-builder --mac --x64 --arm64 --publish never",
+    "desktop:build:mac:arm64": "npm run desktop:prepare && electron-builder --mac --arm64 --publish never",
+    "desktop:build:mac:x64": "npm run desktop:prepare && electron-builder --mac --x64 --publish never",
+    "desktop:build:win": "npm run desktop:prepare && electron-builder --win --x64 --publish never",
+    "desktop:build:linux": "npm run desktop:prepare && electron-builder --linux --x64 --publish never",
     "test": "npm run build && node --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern desktop/runtime"
   },
