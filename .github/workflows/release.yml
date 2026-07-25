@@ -95,6 +95,13 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
+      - name: Configure Linux Chromium sandbox for smoke test
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo chown root:root release/linux-unpacked/chrome-sandbox
+          sudo chmod 4755 release/linux-unpacked/chrome-sandbox
+
       - name: Run packaged desktop smoke test
         run: ${{ matrix.smoke }}
 
