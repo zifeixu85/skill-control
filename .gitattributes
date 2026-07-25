@@ -1,0 +1,6 @@
+* text=auto eol=lf
+
+*.ico binary
+*.icns binary
+*.png binary
+*.skill binary

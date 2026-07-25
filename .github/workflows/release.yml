@@ -1,0 +1,164 @@
+name: Release desktop applications
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify source
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.13.0
+          cache: npm
+
+      - name: Verify tag matches package version
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          test "${GITHUB_REF_NAME}" = "v${package_version}"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit packaged runtime dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Run quality gates
+        run: npm run lint && npm test
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: verify
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-latest
+            command: npm run desktop:build:mac:arm64
+            smoke: npm run desktop:smoke
+            artifact: desktop-macos-arm64
+          - name: macOS x64
+            os: macos-15-intel
+            command: npm run desktop:build:mac:x64
+            smoke: npm run desktop:smoke
+            artifact: desktop-macos-x64
+          - name: Windows
+            os: windows-latest
+            command: npm run desktop:build:win
+            smoke: npm run desktop:smoke
+            artifact: desktop-windows
+          - name: Linux
+            os: ubuntu-latest
+            command: npm run desktop:build:linux
+            smoke: xvfb-run --auto-servernum npm run desktop:smoke
+            artifact: desktop-linux
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.13.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build desktop artifacts
+        run: ${{ matrix.command }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      - name: Run packaged desktop smoke test
+        run: ${{ matrix.smoke }}
+
+      - name: Upload platform artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.exe
+            release/*.AppImage
+            release/*.deb
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub Release
+    permissions:
+      contents: write
+    needs:
+      - verify
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Download platform artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: desktop-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Generate SHA-256 checksums
+        working-directory: release-artifacts
+        shell: bash
+        run: |
+          find . -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > SHA256SUMS.txt
+          test -s SHA256SUMS.txt
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          notes_file="docs/releases/${GITHUB_REF_NAME}.md"
+          release_args=(
+            --verify-tag
+            --title "Skill Control ${GITHUB_REF_NAME}"
+          )
+          if test -f "${notes_file}"; then
+            release_args+=(--notes-file "${notes_file}")
+          else
+            release_args+=(--generate-notes)
+          fi
+          gh release create "${GITHUB_REF_NAME}" \
+            release-artifacts/* \
+            "${release_args[@]}"

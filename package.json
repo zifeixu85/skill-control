@@ -1,0 +1,71 @@
+{
+  "name": "skill-control",
+  "version": "0.1.0",
+  "description": "Local-first desktop manager for skills shared across AI coding agents.",
+  "author": "Skill Control contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zifeixu85/skill-control.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zifeixu85/skill-control/issues"
+  },
+  "homepage": "https://github.com/zifeixu85/skill-control#readme",
+  "private": true,
+  "main": "desktop/main.mjs",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev": "node scripts/local-runner.mjs dev",
+    "dev:web": "vinext dev",
+    "build": "vinext build",
+    "start": "node scripts/local-runner.mjs start",
+    "start:web": "vinext start",
+    "manager": "node server/local-server.mjs",
+    "desktop:dev": "node desktop/dev-runner.mjs",
+    "desktop:runtime": "node scripts/build-desktop-runtime.mjs",
+    "desktop:prepare": "npm run build && npm run desktop:runtime",
+    "desktop:start": "npm run desktop:runtime && electron .",
+    "desktop:smoke": "node scripts/smoke-desktop.mjs",
+    "desktop:pack": "npm run desktop:prepare && electron-builder --dir",
+    "desktop:build": "npm run desktop:prepare && electron-builder",
+    "desktop:build:mac": "npm run desktop:prepare && electron-builder --mac --x64 --arm64",
+    "desktop:build:mac:arm64": "npm run desktop:prepare && electron-builder --mac --arm64",
+    "desktop:build:mac:x64": "npm run desktop:prepare && electron-builder --mac --x64",
+    "desktop:build:win": "npm run desktop:prepare && electron-builder --win --x64",
+    "desktop:build:linux": "npm run desktop:prepare && electron-builder --linux --x64",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern desktop/runtime"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.47.0",
+    "@tailwindcss/postcss": "4.2.1",
+    "@types/node": "22.19.19",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "^6.0.4",
+    "@vitejs/plugin-rsc": "^0.5.30",
+    "electron": "43.2.0",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.28.1",
+    "eslint": "^9.39.4",
+    "eslint-config-next": "16.2.11",
+    "next": "16.2.11",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-markdown": "^10.1.0",
+    "react-server-dom-webpack": "^19.2.8",
+    "remark-gfm": "^4.0.1",
+    "tailwindcss": "4.2.1",
+    "typescript": "5.9.3",
+    "vinext": "0.0.50",
+    "vite": "^8.1.5",
+    "wrangler": "^4.114.0"
+  },
+  "type": "module"
+}

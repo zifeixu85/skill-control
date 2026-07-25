@@ -1,0 +1,87 @@
+appId: dev.skillcontrol.desktop
+productName: Skill Control
+copyright: Copyright © 2026 Skill Control contributors
+
+directories:
+  output: release
+  buildResources: resources
+
+files:
+  - desktop/**/*
+  - server/**/*
+  - dist/**/*
+  - resources/licenses/**/*
+  - LICENSE
+  - THIRD_PARTY_NOTICES.md
+  - package.json
+
+asar: true
+npmRebuild: false
+artifactName: Skill-Control-${version}-${os}-${arch}.${ext}
+
+mac:
+  category: public.app-category.developer-tools
+  icon: resources/icon.png
+  hardenedRuntime: true
+  entitlements: resources/entitlements.mac.plist
+  entitlementsInherit: resources/entitlements.mac.plist
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
+
+dmg:
+  sign: false
+  window:
+    width: 560
+    height: 380
+  contents:
+    - x: 150
+      y: 190
+      type: file
+    - x: 410
+      y: 190
+      type: link
+      path: /Applications
+
+win:
+  icon: resources/icon.png
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+
+nsis:
+  artifactName: Skill-Control-${version}-${os}-${arch}-setup.${ext}
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+  deleteAppDataOnUninstall: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+
+portable:
+  artifactName: Skill-Control-${version}-${os}-${arch}-portable.${ext}
+
+linux:
+  icon: resources/icon.png
+  category: Development
+  synopsis: Manage skills across local AI coding agents
+  description: Scan, preview, import, export, and synchronize local AI agent skills.
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+
+publish: null
