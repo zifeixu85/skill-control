@@ -71,5 +71,9 @@
     "vite": "^8.1.5",
     "wrangler": "^4.114.0"
   },
+  "overrides": {
+    "postcss": "8.5.23",
+    "sharp@0.34.5": "0.35.3"
+  },
   "type": "module"
 }
