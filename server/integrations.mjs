@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { scanClaudePlugins } from "./claude-plugins.mjs";
+import { scanClaudePlugins, scanWorkBuddyPlugins } from "./installed-plugins.mjs";
 import { scanCodexConnectors, scanCodexPlugins } from "./codex-plugins.mjs";
 import { scanMcpInventory } from "./mcp-inventory.mjs";
 
@@ -10,8 +10,21 @@ import { scanMcpInventory } from "./mcp-inventory.mjs";
  * images and must stay server-side; only `payload` is returned over HTTP.
  */
 
-const emptyCodexPlugins = () => ({ available: false, plugins: [], marketplaces: [], warnings: [], assets: new Map() });
-const emptyClaudePlugins = () => ({ available: false, plugins: [], marketplaces: [], warnings: [] });
+const emptyCodexPlugins = () => ({
+  available: false,
+  plugins: [],
+  marketplaces: [],
+  warnings: [],
+  assets: new Map(),
+  roots: new Map(),
+});
+const emptyInstalledPlugins = () => ({
+  available: false,
+  plugins: [],
+  marketplaces: [],
+  warnings: [],
+  roots: new Map(),
+});
 const emptyMcp = () => ({ servers: [], matrix: [], warnings: [] });
 export const emptyCodexConnectors = (warning) => ({
   available: false,
@@ -34,11 +47,20 @@ async function isolate(task, fallback, label) {
 
 export async function scanIntegrations(
   homeDirectory = homedir(),
-  scanners = { scanCodexPlugins, scanClaudePlugins, scanMcpInventory, scanCodexConnectors },
+  overrides = {},
 ) {
-  const [codexPlugins, claudePlugins, mcp] = await Promise.all([
+  const scanners = {
+    scanCodexPlugins,
+    scanClaudePlugins,
+    scanWorkBuddyPlugins,
+    scanMcpInventory,
+    scanCodexConnectors,
+    ...overrides,
+  };
+  const [codexPlugins, claudePlugins, workbuddyPlugins, mcp] = await Promise.all([
     isolate(() => scanners.scanCodexPlugins(homeDirectory), emptyCodexPlugins, "Codex 插件"),
-    isolate(() => scanners.scanClaudePlugins(homeDirectory), emptyClaudePlugins, "Claude Code 插件"),
+    isolate(() => scanners.scanClaudePlugins(homeDirectory), emptyInstalledPlugins, "Claude Code 插件"),
+    isolate(() => scanners.scanWorkBuddyPlugins(homeDirectory), emptyInstalledPlugins, "WorkBuddy 插件"),
     isolate(() => scanners.scanMcpInventory(homeDirectory), emptyMcp, "MCP 配置"),
   ]);
   const codexConnectors = await isolate(
@@ -46,11 +68,18 @@ export async function scanIntegrations(
     () => emptyCodexConnectors(),
     "Codex 连接器",
   );
+  // Plugin roots stay server-side; keys are `codex:<id>` or the installed plugin key.
+  const roots = new Map([
+    ...[...(codexPlugins.roots || new Map())].map(([id, root]) => [`codex:${id}`, root]),
+    ...(claudePlugins.roots || new Map()),
+    ...(workbuddyPlugins.roots || new Map()),
+  ]);
   return {
     assets: codexPlugins.assets,
+    roots,
     codexConnectors,
     payload: {
-      plugins: [...codexPlugins.plugins, ...claudePlugins.plugins],
+      plugins: [...codexPlugins.plugins, ...claudePlugins.plugins, ...workbuddyPlugins.plugins],
       connectors: codexConnectors.connectors,
       mcpServers: mcp.servers,
       mcpMatrix: mcp.matrix,
@@ -64,11 +93,16 @@ export async function scanIntegrations(
           available: claudePlugins.available,
           marketplaces: claudePlugins.marketplaces,
         },
+        workbuddy: {
+          available: workbuddyPlugins.available,
+          marketplaces: workbuddyPlugins.marketplaces,
+        },
       },
       warnings: [
         ...codexPlugins.warnings,
         ...codexConnectors.warnings,
         ...claudePlugins.warnings,
+        ...workbuddyPlugins.warnings,
         ...mcp.warnings,
       ],
       scannedAt: new Date().toISOString(),

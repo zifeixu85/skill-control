@@ -28,14 +28,21 @@ const SMALL_CONFIG_LIMIT = 2_000_000;
 const SERVER_LIMIT = 300;
 const PROJECT_LIMIT = 500;
 
+/** Gemini CLI uses `url` for SSE and `httpUrl` for streamable HTTP. */
+export function serverTransport(agentId, value) {
+  return agentId === "gemini" && !value.type && !value.httpUrl && typeof value.url === "string"
+    ? "sse"
+    : mcpTransport(value);
+}
+
+export function serverUrl(value) {
+  return [value.httpUrl, value.url, value.serverUrl].find((item) => typeof item === "string");
+}
+
 function summarizeServer({ name, config, agentId, scope, projectPath = null, source }) {
   const value = object(config);
-  // Gemini CLI uses `url` for SSE and `httpUrl` for streamable HTTP.
-  const transport =
-    agentId === "gemini" && !value.type && !value.httpUrl && typeof value.url === "string"
-      ? "sse"
-      : mcpTransport(value);
-  const url = [value.httpUrl, value.url, value.serverUrl].find((item) => typeof item === "string");
+  const transport = serverTransport(agentId, value);
+  const url = serverUrl(value);
   const secrets = secretFieldReport(value);
   return {
     id: createHash("sha256")
@@ -60,11 +67,12 @@ function summarizeServer({ name, config, agentId, scope, projectPath = null, sou
   };
 }
 
-function serversFrom(map, context) {
+/** Raw entries stay server-side: { name, config, agentId, scope, projectPath, source, format }. */
+function rawEntries(map, context) {
   return Object.entries(object(map))
     .slice(0, SERVER_LIMIT)
     .filter(([name]) => identifier(name))
-    .map(([name, config]) => summarizeServer({ name: identifier(name), config, ...context }));
+    .map(([name, config]) => ({ name: identifier(name), config: object(config), ...context }));
 }
 
 async function readCodex(homeDirectory, warnings) {
@@ -76,10 +84,12 @@ async function readCodex(homeDirectory, warnings) {
     if (result.status !== "missing") warnings.push(readStatusMessage("Codex config.toml", result.status));
     return [];
   }
-  return serversFrom(object(result.value).mcp_servers, {
+  return rawEntries(object(result.value).mcp_servers, {
     agentId: "codex",
     scope: "user",
+    projectPath: null,
     source: "~/.codex/config.toml",
+    format: "toml",
   });
 }
 
@@ -90,19 +100,22 @@ async function readClaude(homeDirectory, homes, warnings) {
     return [];
   }
   const state = object(result.value);
-  const servers = serversFrom(state.mcpServers, {
+  const servers = rawEntries(state.mcpServers, {
     agentId: "claude",
     scope: "user",
+    projectPath: null,
     source: "~/.claude.json",
+    format: "json",
   });
   for (const [projectPath, project] of Object.entries(object(state.projects)).slice(0, PROJECT_LIMIT)) {
     if (!path.isAbsolute(projectPath)) continue;
     servers.push(
-      ...serversFrom(object(project).mcpServers, {
+      ...rawEntries(object(project).mcpServers, {
         agentId: "claude",
         scope: "project",
         projectPath: compactHomePath(projectPath, homes),
         source: "~/.claude.json",
+        format: "json",
       }),
     );
   }
@@ -115,11 +128,29 @@ async function readJsonServers(homeDirectory, relative, agentId, label, warnings
     if (result.status !== "missing") warnings.push(readStatusMessage(label, result.status));
     return [];
   }
-  return serversFrom(object(result.value).mcpServers, {
+  return rawEntries(object(result.value).mcpServers, {
     agentId,
     scope: "user",
+    projectPath: null,
     source: `~/${relative.split(path.sep).join("/")}`,
+    format: "json",
   });
+}
+
+/**
+ * Raw MCP definitions from every supported agent. Values are NOT safe to return; callers
+ * must summarize (scanMcpInventory) or mask (config-mask.mjs) before anything leaves.
+ */
+export async function readMcpSources(homeDirectory = homedir()) {
+  const homes = await homeVariants(homeDirectory);
+  const warnings = [];
+  const groups = await Promise.all([
+    readCodex(homeDirectory, warnings),
+    readClaude(homeDirectory, homes, warnings),
+    readJsonServers(homeDirectory, path.join(".cursor", "mcp.json"), "cursor", "Cursor mcp.json", warnings),
+    readJsonServers(homeDirectory, path.join(".gemini", "settings.json"), "gemini", "Gemini settings.json", warnings),
+  ]);
+  return { entries: groups.flat(), warnings };
 }
 
 export function buildMcpMatrix(servers) {
@@ -142,15 +173,8 @@ export function buildMcpMatrix(servers) {
 }
 
 export async function scanMcpInventory(homeDirectory = homedir()) {
-  const homes = await homeVariants(homeDirectory);
-  const warnings = [];
-  const groups = await Promise.all([
-    readCodex(homeDirectory, warnings),
-    readClaude(homeDirectory, homes, warnings),
-    readJsonServers(homeDirectory, path.join(".cursor", "mcp.json"), "cursor", "Cursor mcp.json", warnings),
-    readJsonServers(homeDirectory, path.join(".gemini", "settings.json"), "gemini", "Gemini settings.json", warnings),
-  ]);
-  const servers = groups.flat();
+  const { entries, warnings } = await readMcpSources(homeDirectory);
+  const servers = entries.map((entry) => summarizeServer(entry));
   return {
     servers,
     matrix: buildMcpMatrix(servers),

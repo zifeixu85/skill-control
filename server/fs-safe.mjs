@@ -2,8 +2,11 @@ import { constants } from "node:fs";
 import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { parse as parseToml } from "smol-toml";
+import { scrubTokens } from "./redact.mjs";
 
 /** Shared read-only helpers for integration scanners. Nothing here writes to disk. */
+
+export { MASK, scrubTokens } from "./redact.mjs";
 
 export const object = (value) =>
   value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -14,12 +17,25 @@ export const object = (value) =>
  */
 export const text = (value, limit = 160) =>
   typeof value === "string"
-    ? value
-        .slice(0, limit * 4)
-        .replace(/\p{Cf}/gu, "")
-        .replace(/[\u0000-\u001f\u007f]/gu, " ")
-        .trim()
-        .slice(0, limit)
+    ? scrubTokens(
+        value
+          .slice(0, limit * 4)
+          .replace(/\p{Cf}/gu, "")
+          .replace(/[\u0000-\u001f\u007f]/gu, " ")
+          .trim(),
+      ).slice(0, limit)
+    : "";
+
+/** Like text(), but keeps line breaks for multi-line values. */
+export const multilineText = (value, limit = 4_000) =>
+  typeof value === "string"
+    ? scrubTokens(
+        value
+          .slice(0, limit * 4)
+          .replace(/\p{Cf}/gu, "")
+          .replace(/[\u0000-\u0009\u000b-\u001f\u007f]/gu, " ")
+          .trim(),
+      ).slice(0, limit)
     : "";
 
 export const safeSegment = (value) =>
@@ -31,6 +47,29 @@ export const identifier = (value, limit = 160) =>
   typeof value === "string" && /^[\p{L}\p{N}_.:@/ -]{1,160}$/u.test(value)
     ? value.slice(0, limit)
     : "";
+
+/**
+ * File names that may hold credentials and are never shown or followed from manifests:
+ * .env*, *.pem, *.key, id_*, .npmrc, .netrc, auth*.json, credentials*, settings.json,
+ * .mcp.json (shown only after parsing and masking by the dedicated readers).
+ */
+export function isSensitiveFileName(relativePath, { allow = [] } = {}) {
+  const normalized = String(relativePath || "").replaceAll("\\", "/").toLowerCase();
+  if (allow.map((item) => item.toLowerCase()).includes(normalized.replace(/^\.\//u, ""))) return false;
+  const segments = normalized.split("/");
+  const name = segments.at(-1) || "";
+  return (
+    segments.includes(".git") ||
+    segments.includes(".ssh") ||
+    /^\.env(?:\.|$)/u.test(name) ||
+    /\.(?:pem|key|p12|pfx|keystore|jks|kdbx)$/u.test(name) ||
+    /^id_[a-z0-9]+/u.test(name) ||
+    [".npmrc", ".netrc", ".pypirc", ".git-credentials", ".mcp.json", "settings.json", "settings.local.json"].includes(name) ||
+    /^auth[^/]*\.json$/u.test(name) ||
+    /^credentials?/u.test(name) ||
+    /(?:^|[-_.])(?:api[-_.]?key|token|secret|credentials?|session|auth(?:entication)?|password)(?:[-_.]|$)/u.test(name)
+  );
+}
 
 export function isWithin(parentPath, childPath) {
   const relative = path.relative(parentPath, childPath);
@@ -64,6 +103,42 @@ export function compactHomePath(inputPath, homeDirectories, limit = 512) {
     }
   }
   return text(inputPath, limit);
+}
+
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+
+/**
+ * Patterns that match one home directory inside free or serialized text: POSIX homes
+ * exactly (and not as a prefix of a longer name), Windows homes with either separator,
+ * JSON-escaped backslashes and any drive-letter case.
+ */
+// A home path ends at a separator, quote, whitespace or punctuation — never mid-name.
+const HOME_END = String.raw`(?=[/\\"'\s:;,)\]}]|$)`;
+// Windows separators: "\", "/" or a JSON-escaped "\\".
+const WINDOWS_SEPARATOR = String.raw`(?:\\\\|\\|/)`;
+
+function homePatterns(home) {
+  const windows = home.match(/^([A-Za-z]):[\\/](.*)$/u);
+  if (!windows) {
+    return [new RegExp(`${escapeRegExp(home.replace(/\/+$/u, ""))}${HOME_END}`, "gu")];
+  }
+  const parts = windows[2].split(/[\\/]+/u).filter(Boolean).map(escapeRegExp);
+  return [
+    new RegExp(
+      `${escapeRegExp(windows[1])}:${WINDOWS_SEPARATOR}${parts.join(WINDOWS_SEPARATOR)}${HOME_END}`,
+      "giu",
+    ),
+  ];
+}
+
+/** Replaces every occurrence of a home directory inside free or serialized text with "~". */
+export function compactHomeInText(value, homeDirectories) {
+  let result = String(value);
+  const homes = [...new Set([...homeDirectories].filter(Boolean))].sort((a, b) => b.length - a.length);
+  for (const home of homes) {
+    for (const pattern of homePatterns(home)) result = result.replace(pattern, "~");
+  }
+  return result;
 }
 
 export async function homeVariants(homeDirectory) {
@@ -152,6 +227,38 @@ export async function readBoundedText(filePath, limit) {
       status: "ok",
       text: buffer.toString("utf8", 0, offset),
       mtimeMs: info.mtimeMs,
+    };
+  } catch {
+    return { status: "unreadable" };
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Reads at most `limit` bytes of a regular file for display; larger files are truncated. */
+export async function readTextPrefix(filePath, limit) {
+  let handle;
+  try {
+    handle = await open(filePath, READ_FLAGS);
+  } catch (error) {
+    return { status: error?.code === "ENOENT" ? "missing" : "unreadable" };
+  }
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) return { status: "unreadable" };
+    const length = Math.min(info.size, limit);
+    const buffer = Buffer.alloc(length);
+    let offset = 0;
+    while (offset < length) {
+      const { bytesRead } = await handle.read(buffer, offset, length - offset, offset);
+      if (!bytesRead) break;
+      offset += bytesRead;
+    }
+    return {
+      status: "ok",
+      text: buffer.toString("utf8", 0, offset),
+      truncated: info.size > limit,
+      size: info.size,
     };
   } catch {
     return { status: "unreadable" };

@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { scanClaudePlugins } from "../server/claude-plugins.mjs";
+import { scanClaudePlugins } from "../server/installed-plugins.mjs";
 import { scanCodexConnectors, scanCodexPlugins } from "../server/codex-plugins.mjs";
 import { scanIntegrations } from "../server/integrations.mjs";
 import { createCodexPluginFixture } from "./fixtures/integrations.mjs";

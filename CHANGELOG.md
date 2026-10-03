@@ -25,6 +25,15 @@ on Keep a Changelog and the project follows Semantic Versioning.
   plugins, and an MCP server inventory across Codex, Claude Code, Cursor and
   Gemini, via `GET /api/integrations`, `/api/plugins`, `/api/mcp`,
   `/api/plugin-asset` and a `codex` section in `/api/connectors`.
+- WorkBuddy "我的专家" (user-created experts) alongside marketplace experts, with
+  origin, version, install/in-use state, distributable package, skills, default
+  and quick prompts, tags, avatars for experts and team members
+  (`GET /api/expert-avatar`), and best-effort, read-only usage counts from
+  WorkBuddy's local database (expert id, count and last use only).
+- WorkBuddy installed plugins in `/api/integrations` and `/api/plugins`.
+- Read-only configuration details (`GET /api/config-detail`) for Agents
+  (Chinese setting rows), MCP servers (their own section in the native TOML or
+  JSON format with secrets masked), experts, plugins and skills.
 - Codex bundled system skills (`~/.codex/skills/.system`) and Mirasim-synced
   skills are recognized as managed copies, so they no longer show up as
   differing versions or duplicates.
@@ -90,6 +99,27 @@ on Keep a Changelog and the project follows Semantic Versioning.
   value shapes, arguments, URL userinfo and token-like path segments, while
   still returning field locations only; `likelySecretFields` marks the subset
   that looks like a credential.
+- Configuration details use default-deny masking: key names stay visible, but
+  a value is shown only when it is a boolean, short integer, known enum,
+  environment reference, hostname, credential-free path, URL reduced to host and
+  non-token path segments, identifier under a known identifier key, or redacted
+  text under a known descriptive key. Secret-named keys mask their whole
+  subtree; command lines and argument lists are tokenized so values after
+  credential flags, `K=V` values and header values are masked. Whole plugin and
+  expert manifests are masked, and manifest-declared files must be non-sensitive
+  `.json` files inside the plugin.
+- Free text (SKILL.md, agent prompts, SOUL.md, descriptions, permission rules,
+  status-line commands) is redacted for PEM private keys, URL credentials in any
+  scheme, secret-named assignments, `-u user:pass`, `-H "Name: value"`,
+  "key is …" phrases and common token formats; `Bearer`/`Basic` only before a
+  token-shaped value.
+- `/api/capability-file` masks or redacts WorkBuddy expert and Hermes files the
+  same way and refuses `.mcp.json`, `.npmrc`, `.netrc`, `*.pem`, `*.key` and
+  `id_*`.
+- Cross-site requests (`Sec-Fetch-Site: cross-site`) to configuration and asset
+  routes are rejected; SVG previews are capped at 256 KB with bounded
+  validation; Windows home paths are compacted; absolute symlink targets are
+  no longer returned; WorkBuddy's database is queried with `query_only`.
 - Error messages no longer include the home directory, configuration files are
   opened non-blocking (FIFO-safe), outbound strings drop bidi/zero-width
   characters, and SVG previews additionally reject namespaced scripts,

@@ -65,7 +65,14 @@ Electron renderer 使用 `contextIsolation: true`、`nodeIntegration: false` 和
 | `server/cached-loader.mjs` | 集成与活跃度扫描的单飞缓存（TTL、强制刷新防抖、失败不缓存） |
 | `server/agents-activity.mjs` | 只读 stat 会话文件，统计近 30 天活跃度并建议常用 Agent |
 | `server/codex-plugins.mjs` | 只读解析 Codex 插件缓存、启用状态、组件与已连接应用（connectors） |
-| `server/claude-plugins.mjs` | 只读解析 Claude Code 已安装插件、作用域、启用状态与组件 |
+| `server/installed-plugins.mjs` | 只读解析 Claude Code 与 WorkBuddy 的已安装插件（`installed_plugins.json` v2）、作用域、启用状态与组件 |
+| `server/frontmatter.mjs` | 有上限的 frontmatter / YAML 标量读取与 `parseFrontmatter` |
+| `server/workbuddy-experts.mjs` | WorkBuddy 专家市场与“我的专家”发现：版本、安装与使用中状态、分发包、技能、提示词、头像 |
+| `server/workbuddy-usage.mjs` | 只读查询 WorkBuddy 数据库中的专家使用次数与最近使用时间 |
+| `server/config-detail.mjs` | `/api/config-detail`：Agent、MCP、专家、插件、Skill 的只读脱敏配置详情 |
+| `server/agent-settings.mjs` | 各 Agent 关键设置的中文行（只取安全标量与计数） |
+| `server/config-mask.mjs` | 结构化配置的默认拒绝脱敏（键名保留，值仅在白名单内显示）、命令行与参数令牌化 |
+| `server/redact.mjs` | 自由文本脱敏：PEM 私钥、任意协议的 URL 凭据、敏感名赋值、`-u` / `-H`、常见令牌格式 |
 | `server/mcp-inventory.mjs` | 只读汇总 Codex / Claude Code / Cursor / Gemini 的 MCP 服务器 |
 | `server/integrations.mjs` | 聚合插件、连接器与 MCP，供 `/api/integrations` 使用 |
 | `server/fs-safe.mjs` | 集成扫描共用的限长读取、真实路径边界与 MCP 传输类型判断 |
@@ -167,8 +174,25 @@ Electron renderer 使用 `contextIsolation: true`、`nodeIntegration: false` 和
 `/api/capability-files`、`/api/capability-file` 和
 `/api/capability-asset` 提供只读数据：
 
-- WorkBuddy 从本机专家插件目录读取 `.codebuddy-plugin/plugin.json`、`agents/*.md`
-  和包内资源，优先使用中文名称与介绍；
+- WorkBuddy（`server/workbuddy-experts.mjs`）同时读取专家市场
+  `~/.workbuddy/plugins/marketplaces/experts/plugins/<name>/`（`origin: "market"`）和
+  用户自建的“我的专家” `marketplaces/my-experts/plugins/<name>/`（`origin: "mine"`），
+  以及已安装副本 `plugins/cache/<marketplace>/<name>/<version>/`（带 `.in_use` 表示正在
+  使用；只在缓存中存在的专家也会列出）。读取 `.codebuddy-plugin/plugin.json`、
+  `agents/*.md` 和包内资源，优先使用中文名称与介绍，并返回 `version`、`installed`、
+  `inUse`、`installedVersion`、`packaged`（`marketplaces/<marketplace>/dist/<name>.zip`
+  存在）、`skills`、`defaultPrompt`、`quickPrompts`、`tags`（均优先中文）、`category`；
+  所有目录都必须解析到 `~/.workbuddy/plugins` 之内；
+- 专家和成员头像：清单的 `avatar`（单专家缺省时回退到 `avatars/expert.png`）与
+  `members[].avatar`（按成员 `id` 与 agent 文件 `name` 对应）登记为不透明 ID，经
+  `GET /api/expert-avatar?id=` 读取，安全模型与 `/api/plugin-asset` 相同：真实路径必须在
+  专家目录内，只服务 PNG/JPEG/SVG 且不超过 2 MB，未知 ID 返回 404；
+- 使用记录（尽力而为）：用 Node 内置 `node:sqlite` 以只读方式打开
+  `~/.workbuddy/workbuddy.db`，只查询 `sessions` 表中 `expert_id` 的次数和
+  `MAX(updated_at)`，从不读取标题或内容；忽略云端专家 `ex_…`；`OpcTeam` 这类 PascalCase
+  与插件名 `opc-team` 归一化后匹配，返回 `used: { count, lastUsedAt }`。运行环境没有
+  `node:sqlite`、数据库被占用或结构不符时跳过并给出警告；结果缓存 10 分钟；
+- Hermes Profile 标记为 `origin: "profile"`；
 - Hermes 从 `~/.hermes` 及 `~/.hermes/profiles/<name>` 识别默认 Agent 和命名
   Profile，以 `SOUL.md` 作为身份说明；
 - Hermes 的“配置摘要”由服务端白名单生成，只包含模型、Agent、委派、显示、
@@ -308,12 +332,17 @@ SmartOrder 的系统/插件实例带 `readOnly` 和来源标签，安装/同步�
   （上限 20 MB，超限或损坏时返回警告），按 `connector_id` 聚合工具数和前 20 个工具名，
   并用插件 `.app.json` 反查 `providedByPlugins`。不读取 `codex_app_directory`，不返回
   `server_origin`。
-- **Claude Code 插件**（`server/claude-plugins.mjs`）：读取
+- **Claude Code 插件**（`server/installed-plugins.mjs`）：读取
   `~/.claude/plugins/installed_plugins.json`（v2）、`known_marketplaces.json`
   （仅来源类型）和 `~/.claude/settings.json` 的 `enabledPlugins`。`installPath` 必须解析到
   `~/.claude/plugins` 内，否则跳过；统计 skills、agents、commands、hooks 与 MCP 名称。
   只有 user 作用域能从用户设置判断启用状态；local/project 作用域以及设置中未出现的插件
   为 `enabled: "unknown"`（不打开项目内的设置文件）。
+- **WorkBuddy 插件**（同一模块）：读取 `~/.workbuddy/plugins/installed_plugins.json`
+  （与 Claude Code 相同的 v2 结构）和 `~/.workbuddy/settings.json` 的 `enabledPlugins`，
+  清单为 `<installPath>/.codebuddy-plugin/plugin.json`（`displayName` 可为 `{en,zh}`）；
+  `installPath` 必须在 `~/.workbuddy/plugins` 内。来自 `experts` / `my-experts` 市场的条目
+  标记 `kind: "expert"`，其余为 `kind: "plugin"`。
 - **MCP 清单**（`server/mcp-inventory.mjs`）：Codex `[mcp_servers.*]`、Claude Code
   `~/.claude.json` 顶层与 `projects.<path>.mcpServers`（`scope: "project"`，路径以 `~`
   表示；该文件上限 30 MB，只读一次、从不写入）、Cursor `~/.cursor/mcp.json`、Gemini
@@ -341,6 +370,79 @@ SmartOrder 的系统/插件实例带 `readOnly` 和来源标签，安装/同步�
 相互隔离：某个扫描器失败只会让对应部分为空并附带通用警告，`/api/connectors` 中
 SmartOrder 部分照常返回、`codex` 部分为 `{ available: false, warnings }`。
 
+## 配置详情（只读、脱敏）
+
+`GET /api/config-detail?kind=<kind>&id=<id>[&instance=<instanceId>]` 返回
+`{ title, rows: [{ label, value }], files: [{ path, label, language, text, truncated }], location }`：
+
+- `kind=agent`（`codex` / `claude` / `workbuddy` / `gemini` / `cursor`）：只有中文设置行，
+  不返回文件（完整配置含密钥和项目列表）。Codex：模型、推理强度、审批策略
+  （`never` →“从不询问（never）”、`on-request` →“需要时询问”、`on-failure` →
+  “失败后询问”、`untrusted` →“只放行已知安全命令”）、沙箱模式（`danger-full-access`
+  →“完全访问，不使用沙箱”、`workspace-write` →“只能写当前工作区”、`read-only` →
+  “只读”）、功能开关、MCP 服务数、已启用插件数、插件市场、Hooks 事件
+  （`~/.codex/hooks.json`）、受信任项目数、Shell 环境变量（只计数）、MCP 凭据存储。
+  Claude Code：允许/拒绝/询问规则、默认权限模式、Hooks 事件、已启用插件、额外插件市场、
+  跳过危险模式确认、状态栏、主题、MCP 服务数、环境变量（只计数）。WorkBuddy：沙箱
+  额外可写目录数、沙箱规则数、网络默认拒绝迁移、插件启用数、已安装插件数、Hooks 事件。
+  Gemini、Cursor 只给模型/认证方式/主题/MCP 等安全字段。
+- `kind=mcp&id=<服务名>`：每个配置了该服务的 Agent 一个文件，按原生格式渲染该服务自己的
+  段落（Codex 为 TOML `[mcp_servers.<name>]` 及子表，Claude/Cursor/Gemini 为 JSON
+  `{ "<name>": {...} }`），值经默认拒绝脱敏（见下）。行：服务名、配置在、连接方式、地址
+  （只给主机名）、启用状态、提醒（如“请求头里写着密钥”）。
+- `kind=expert&id=<capabilityId>`：类型、名称、技术名、版本、职业、成员、最大轮次（来自
+  agent 文件 frontmatter `maxTurns`）、依赖技能、开场提示、快捷提示、标签、来源、安装状态、
+  分发包、使用记录、位置；文件为 `.codebuddy-plugin/plugin.json` 和 `agents/*.md`
+  （各 ≤ 20 KB，超出截断并标记）。Hermes Profile 返回模型、轮次、委派和 `SOUL.md`。
+- `kind=plugin&id=<agent>:<name@marketplace>`：插件信息行，加上整个清单（含 lspServers、
+  hooks、userConfig、settings 和未知字段）的脱敏 JSON，以及清单声明的 JSON 文件
+  （`mcpServers` 为字符串时、`.mcp.json`、`apps`、字符串形式的 `hooks`）——它们必须解析到
+  插件目录内、文件名不能是敏感名（`.env*`、`*.pem`、`*.key`、`id_*`、`.npmrc`、`.netrc`、
+  `auth*.json`、`credentials*`、`settings.json` 等），且只接受 `.json`，读取后解析并脱敏，
+  从不原样返回。
+- `kind=skill&id=<skillId>&instance=<instanceId>`：frontmatter 顶层字段（敏感键名直接
+  脱敏，其余值经自由文本脱敏；嵌套字段只标注）加所属 Agent、来源、内容指纹、位置，以及
+  脱敏后的 `SKILL.md`（≤ 64 KB，超出截断）。
+
+**默认拒绝脱敏**（`server/config-mask.mjs`，用于 MCP 段落、插件与专家清单、声明的 JSON
+文件、Hermes 配置摘要和专家文件预览中的 JSON）：键名总是显示；标量值只有属于以下白名单才
+显示，否则一律为 `••••••`——布尔值、≤ 6 位整数、已知枚举词（日志级别、传输方式、Codex /
+Claude 的策略值等）、纯环境变量引用、颜色值、主机名（含端口）、URL（只保留协议、主机和
+不像令牌的路径段；userinfo、`;参数`、整个查询串和片段被遮盖；任何 `scheme://` 都按 URL
+处理，包括 postgres、mongodb+srv、redis、ssh、git+https 及前导空格）、不含 `@ = ? :` 的
+绝对路径 / `~/` / Windows 盘符路径（像令牌的路径段被遮盖）、已知标识键（model、type、
+transport、name、version、scope、category、provider 等）下不像令牌的标识符，以及已知描述键
+（description、displayName、keywords、tags、author.name 等）下经自由文本脱敏的文字。
+键名匹配 auth / secret / token / credential / cookie / session / header / password /
+pass / pwd / passphrase / pat / dsn / key / creds / salt / hmac / private 的整棵子树都被
+遮盖（纯环境变量引用除外）；`env` 对象与 `["K=V"]` 数组中的值同样只按白名单显示；
+`*_env_var`、`env_vars`、`env_http_headers` 只显示形如 `UPPER_SNAKE` 的变量名。
+`args`、`command`/`cmd`/`*_args` 会被令牌化（支持简单引号）：`--flag=value` 拆开后重新
+判断（`--env=K=V` 与 `-e K=V` 一致），`-e -p -u --user --pass --password --passphrase
+--token --api-key --key --secret --header -H --env --database-url --url --dsn --cookie` 及
+名称命中敏感词的参数会遮盖后一个值，`K=V` 只在白名单内显示值，`Header: value` 遮盖值，
+`-pX`、`-eFOO=X`、`-u admin:X` 也会处理。每个字符串上限 8 KB，每个渲染文件上限 64 KB
+（超出时 `truncated: true`）。
+
+**自由文本脱敏**（`server/redact.mjs`，用于 SKILL.md、agents/*.md、SOUL.md、描述、
+frontmatter 行、权限规则和状态栏命令，所有对外文本字段也会经过它）：PEM 私钥块、任意协议
+URL 中的 userinfo、敏感名赋值（`API_KEY=…`、`"password": "…"`、`X-Api-Key: …`、
+`Authorization: Bearer …`）、“key is X / 密钥是 X”这类说明中像令牌的值、命令行中的
+`-u user:pass` 与 `-H "Name: value"`，以及 AWS、Slack、Stripe、GitHub、OpenAI/Anthropic、
+JWT、Google 等令牌格式；`Bearer`/`Basic` 只有后面跟着 ≥ 16 位令牌字符时才会被遮盖。所有
+正则都有上限、线性执行。Claude 权限规则会拆出工具名和括号内的命令再逐个令牌脱敏，命令中的
+`NAME=value` 赋值一律遮盖；状态栏命令同样处理。
+
+所有文件都经过真实路径包含检查和体积上限；所有返回字符串都会去除 `\p{Cf}`，并在序列化
+前后把主目录替换为 `~`（同时识别 `C:\Users\x`、`C:/Users/x`、JSON 转义的
+`C:\\Users\\x` 和大小写不同的盘符，不会误替换 `/Users/xyz` 这类前缀相同的路径）。
+`~/.claude.json` 等 MCP 来源解析结果缓存 30 秒。找不到对象返回 404，参数无效返回 400。
+
+`/api/capability-file` 读取 WorkBuddy 专家与 Hermes Profile 文件时使用同一套管线：JSON
+解析后默认拒绝脱敏，其他文本经自由文本脱敏；`.mcp.json`、`.npmrc`、`.netrc`、`*.pem`、
+`*.key`、`id_*` 等敏感文件不会出现在列表中，也无法读取。Hermes 文件用有上限、FIFO 安全的
+方式读取，配置摘要中的模型提供方等值同样经过白名单。
+
 ## 本地服务防护（新增）
 
 - 除 Origin 检查外，所有请求的 `Host` 必须是 `127.0.0.1:<端口>`、`localhost:<端口>`
@@ -349,6 +451,11 @@ SmartOrder 部分照常返回、`codex` 部分为 `{ available: false, warnings 
   转换为通用中文提示。
 - 集成扫描器读取配置时使用 `O_NONBLOCK` 打开并校验普通文件，避免 FIFO 阻塞；对外字符串
   去除 `\p{Cf}` 格式字符（双向覆盖、零宽字符）并限制长度。
+- `/api/config-detail`、`/api/capability-file` 和所有图片资源接口拒绝
+  `Sec-Fetch-Site: cross-site` 请求（返回 403）。
+- SVG 校验前先限制为 256 KB，所有匹配都有长度上限，CSS `url(...)` 通过线性扫描检查；
+  文件列表中的软链接目标若是绝对路径，会转换为技能内相对路径、`~/…` 或省略。
+- WorkBuddy 数据库以只读方式打开，并设置 `PRAGMA query_only = 1`。
 
 ## 本地接口一览（新增部分）
 
@@ -357,11 +464,14 @@ SmartOrder 部分照常返回、`codex` 部分为 `{ available: false, warnings 
 | `GET /api/scan` | 原有字段 + `primaryAgentIds`、`suggestedPrimaryAgentIds`、`effectivePrimaryAgentIds`、`agentActivity`、`sharedRoots`、`summary`，Skill 上的新状态字段 |
 | `GET/PUT /api/config` | 新增 `primaryAgentIds: string[] \| null` |
 | `GET /api/agents/activity` | `{ windowDays, rankedBy: "bytes30d", agents: [{ agentId, status, files30d, bytes30d, activeDays30d, lastActiveAt, truncated }], suggestedPrimaryAgentIds, warnings }`，缓存 10 分钟 |
-| `GET /api/integrations` | `{ plugins, connectors, mcpServers, mcpMatrix, sources, warnings, scannedAt }`，缓存 60 秒，`?force=1` 刷新 |
+| `GET /api/integrations` | `{ plugins, connectors, mcpServers, mcpMatrix, sources, warnings, scannedAt }`；`plugins` 含 Codex、Claude Code 与 WorkBuddy，缓存 60 秒，`?force=1` 刷新 |
 | `GET /api/plugins` | `{ plugins, sources, warnings, scannedAt }`；Codex 与 Claude Code 插件共用同一结构（`id`、`agentId`、`displayName`、`enabled: true \| false \| "unknown"`、`version`、`components` 等） |
 | `GET /api/mcp` | `{ servers, matrix, warnings, scannedAt }` |
 | `GET /api/connectors` | 原 SmartOrder 结构不变，新增 `codex: { available, source, cachedAt, connectors, warnings }` |
 | `GET /api/plugin-asset?id=` | 插件清单引用的图标二进制；未知 ID 返回 404 |
+| `GET /api/capabilities` | 专家条目新增 `origin`（`mine` / `market` / `profile`）、`version`、`installed`、`inUse`、`installedVersion`、`packaged`、`skills`、`defaultPrompt`、`quickPrompts`、`avatar`、`used`，成员新增 `avatar` |
+| `GET /api/expert-avatar?id=` | 专家与成员头像（PNG/JPEG/SVG ≤ 2 MB）；未知 ID 返回 404 |
+| `GET /api/config-detail` | 见“配置详情（只读、脱敏）” |
 | `POST /api/sync`、`/api/import-install` | 动作新增 `realDestination`、`viaSymlink`、`reason`、`sharedWithAgentId`、`alsoVisibleTo`、`skippedLinks`；计划新增 `sharedDestinations`、`warnings` |
 
 ## 已知架构限制

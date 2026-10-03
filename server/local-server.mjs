@@ -23,18 +23,30 @@ import { spawn } from "node:child_process";
 import { Worker } from "node:worker_threads";
 import { unzipSync, zipSync } from "fflate";
 import { scanSmartOrder, scanSmartOrderConnectors } from "./smartorder.mjs";
+import { containsChinese } from "./skill-metadata.mjs";
 import {
-  chineseIntroduction,
-  containsChinese,
-  firstHeadingTitle,
-} from "./skill-metadata.mjs";
+  cleanMarkdownText,
+  frontmatterBlock,
+  parseFrontmatter,
+  parseSimpleYamlSection,
+  readYamlScalar,
+} from "./frontmatter.mjs";
 import { scanAgentActivity } from "./agents-activity.mjs";
 import {
+  capabilityId,
+  isSensitiveCapabilityPath,
+  scanWorkBuddyExperts,
+} from "./workbuddy-experts.mjs";
+import { readWorkBuddyExpertUsage } from "./workbuddy-usage.mjs";
+import {
+  compactHomeInText,
   compactHomePath,
   homeVariants,
   isWithin,
+  readBoundedText,
   text as outboundText,
 } from "./fs-safe.mjs";
+import { maskConfig } from "./config-mask.mjs";
 import {
   buildSharedRoots,
   classifyInstanceSource,
@@ -45,10 +57,13 @@ import {
 } from "./skill-status.mjs";
 import { emptyCodexConnectors, scanIntegrations } from "./integrations.mjs";
 import { createCachedLoader } from "./cached-loader.mjs";
+import { buildConfigDetail, cleanText } from "./config-detail.mjs";
 import { planTargetWrites, publicAction, publicPlan } from "./sync-targets.mjs";
 import { copySkillTree } from "./skill-copy.mjs";
 
 export { compareVersions } from "./skill-status.mjs";
+export { parseFrontmatter } from "./frontmatter.mjs";
+export { scanWorkBuddyExperts } from "./workbuddy-experts.mjs";
 
 const HOME_DIRECTORY = homedir();
 const REAL_HOME_DIRECTORY = (() => {
@@ -63,20 +78,6 @@ const CONFIG_FILE = path.join(STATE_DIRECTORY, "config.json");
 const HISTORY_FILE = path.join(STATE_DIRECTORY, "history.jsonl");
 const BACKUP_DIRECTORY = path.join(STATE_DIRECTORY, "backups");
 const IMPORT_DIRECTORY = path.join(STATE_DIRECTORY, "imports");
-const WORKBUDDY_EXPERTS_RELATIVE_PATH = path.join(
-  ".workbuddy",
-  "plugins",
-  "marketplaces",
-  "experts",
-  "plugins",
-);
-const WORKBUDDY_EXPERT_MANIFEST_RELATIVE_PATH = path.join(
-  ".workbuddy",
-  "app",
-  "cache",
-  "experts",
-  "manifest.json",
-);
 const HERMES_HOME_RELATIVE_PATH = ".hermes";
 const FINGERPRINT_CACHE_FILE = path.join(
   STATE_DIRECTORY,
@@ -305,9 +306,11 @@ function expandHome(inputPath) {
 }
 
 function compactHome(inputPath) {
-  if (inputPath === HOME_DIRECTORY) return "~";
-  if (inputPath.startsWith(`${HOME_DIRECTORY}${path.sep}`)) {
-    return `~/${inputPath.slice(HOME_DIRECTORY.length + 1)}`;
+  for (const home of [HOME_DIRECTORY, REAL_HOME_DIRECTORY]) {
+    if (inputPath === home) return "~";
+    if (inputPath.startsWith(`${home}${path.sep}`)) {
+      return `~/${inputPath.slice(home.length + 1)}`;
+    }
   }
   return inputPath;
 }
@@ -318,377 +321,12 @@ function invalidateScanCache() {
   scanGeneration += 1;
 }
 
-function stripYamlValue(value = "") {
-  const trimmed = value.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-    (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
-
-function readYamlScalar(block, key) {
-  const lines = block.split("\n");
-  const keyPattern = new RegExp(`^${key}:\\s*(.*)$`);
-  for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index].match(keyPattern);
-    if (!match) continue;
-    const value = match[1].trim();
-    if (!/^[>|][+-]?$/.test(value)) return stripYamlValue(value);
-    const collected = [];
-    for (let lineIndex = index + 1; lineIndex < lines.length; lineIndex += 1) {
-      const line = lines[lineIndex];
-      if (line && !/^\s/.test(line)) break;
-      collected.push(line.replace(/^\s{1,4}/, ""));
-    }
-    const separator = value.startsWith(">") ? " " : "\n";
-    return collected.join(separator).replace(/\s+/g, " ").trim();
-  }
-  return "";
-}
-
-function cleanMarkdownText(value = "", limit = 4_000) {
-  // Clamped input and bounded quantifiers keep untrusted Markdown from causing ReDoS.
-  return String(value)
-    .slice(0, limit)
-    .replace(/!\[[^\]\n]{0,200}\]\([^)\n]{1,300}\)/g, "")
-    .replace(/\[([^\]\n]{1,200})\]\([^)\n]{1,300}\)/g, "$1")
-    .replace(/[`*_~>#|]/g, "")
-    .replace(/^[ \t]*[-+\d.)]+[ \t]*/gm, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function firstScalar(block, keys, predicate = Boolean) {
-  for (const key of keys) {
-    const value = readYamlScalar(block, key);
-    if (predicate(value)) return value;
-  }
-  return "";
-}
-
-const DISPLAY_NAME_KEYS = [
-  "display_name",
-  "displayName",
-  "name_zh",
-  "name-zh",
-  "title",
-  "display_name_zh",
-  "displayNameZh",
-  "title_zh",
-  "name_cn",
-  "中文名称",
-];
-const LOCALIZED_DESCRIPTION_KEYS = [
-  "description_zh",
-  "description-zh",
-  "description_cn",
-  "summary_zh",
-  "intro_zh",
-  "中文描述",
-  "中文介绍",
-];
-
-/**
- * Display name: explicit frontmatter display keys, else the first H1 that precedes any
- * deeper heading (≤ 40 chars, outside code fences), else the technical name.
- * `description` stays the frontmatter description; a Chinese first paragraph is only
- * offered separately as `descriptionZh` when that description is not Chinese.
- */
-export function parseFrontmatter(source, fallbackName) {
-  const normalized = source.replace(/\r\n/g, "\n");
-  const match = normalized.match(/^---\n([\s\S]*?)\n---(?:\n|$)/);
-  const block = match?.[1] ?? "";
-  const body = match ? normalized.slice(match[0].length).trim() : normalized.trim();
-  const tagsMatch = block.match(/^tags:[ \t]*\[([^\]\n]{0,500})\]/m);
-  const name =
-    outboundText(readYamlScalar(block, "name"), 128) ||
-    outboundText(fallbackName, 128) ||
-    "unnamed-skill";
-  const displayName =
-    outboundText(firstScalar(block, DISPLAY_NAME_KEYS), 80) ||
-    firstHeadingTitle(body) ||
-    name;
-  const rawDescription = outboundText(readYamlScalar(block, "description"), 2_000);
-  const description =
-    rawDescription ||
-    outboundText(
-      body
-        .slice(0, 4_000)
-        .replace(/^#+[ \t]+/gm, "")
-        .replace(/\s+/g, " "),
-      180,
-    ) ||
-    "暂无描述";
-  const descriptionZh =
-    outboundText(firstScalar(block, LOCALIZED_DESCRIPTION_KEYS, containsChinese), 2_000) ||
-    (!containsChinese(rawDescription) ? chineseIntroduction(body) : "") ||
-    null;
-  const version = outboundText(
-    readYamlScalar(block, "version") ||
-      readNestedYamlScalar(block, "metadata", "version"),
-    64,
-  );
-  const tags = tagsMatch
-    ? tagsMatch[1]
-        .split(",")
-        .map((tag) => outboundText(stripYamlValue(tag), 48))
-        .filter(Boolean)
-        .slice(0, 6)
-    : [];
-
-  return { name, displayName, description, descriptionZh, version, tags, body };
-}
-
-function localizedText(value, fallback = "") {
-  if (typeof value === "string") return value.trim() || fallback;
-  if (!value || typeof value !== "object") return fallback;
-  return String(
-    value.zh ||
-      value["zh-CN"] ||
-      value.zh_CN ||
-      value.en ||
-      Object.values(value).find((item) => typeof item === "string") ||
-      fallback,
-  ).trim();
-}
-
-function frontmatterBlock(source) {
-  return (
-    source
-      .replace(/\r\n/g, "\n")
-      .match(/^---\n([\s\S]*?)\n---(?:\n|$)/)?.[1] || ""
-  );
-}
-
-function readNestedYamlScalar(block, parentKey, childKey) {
-  const escapedParent = parentKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const escapedChild = childKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const parentMatch = block.match(
-    new RegExp(
-      `^${escapedParent}:\\s*\\n((?:[ \\t]+[^\\n]*(?:\\n|$))*)`,
-      "m",
-    ),
-  );
-  if (!parentMatch) return "";
-  const childMatch = parentMatch[1].match(
-    new RegExp(`^[ \\t]+${escapedChild}:\\s*(.+)$`, "m"),
-  );
-  return childMatch ? stripYamlValue(childMatch[1]) : "";
-}
-
-function parseSimpleYamlSection(source, sectionName, allowedKeys) {
-  const lines = source.replace(/\r\n/g, "\n").split("\n");
-  const sectionIndex = lines.findIndex(
-    (line) => line.trimEnd() === `${sectionName}:`,
-  );
-  if (sectionIndex < 0) return {};
-  const result = {};
-  for (let index = sectionIndex + 1; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (/^[^\s#][^:]*:/u.test(line)) break;
-    const match = line.match(/^\s{2}([a-zA-Z0-9_-]+):\s*(.*?)\s*$/u);
-    if (!match || !allowedKeys.includes(match[1]) || !match[2]) continue;
-    const rawValue = stripYamlValue(match[2]);
-    if (/^(true|false)$/i.test(rawValue)) {
-      result[match[1]] = rawValue.toLowerCase() === "true";
-    } else if (/^-?\d+(?:\.\d+)?$/u.test(rawValue)) {
-      result[match[1]] = Number(rawValue);
-    } else {
-      result[match[1]] = rawValue;
-    }
-  }
-  return result;
-}
-
-function capabilityId(productId, sourcePath) {
-  return createHash("sha256")
-    .update(`${productId}:${sourcePath}`)
-    .digest("hex")
-    .slice(0, 20);
-}
-
 function publicCapability(capability) {
   const publicValue = { ...capability };
   delete publicValue.rootPath;
   delete publicValue.virtualFiles;
   delete publicValue.allowedFiles;
   return publicValue;
-}
-
-async function parseWorkBuddyExpertMember(pluginPath, relativePath) {
-  const normalizedPath = String(relativePath || "")
-    .replace(/^\.\//u, "")
-    .split(path.sep)
-    .join("/");
-  const extension = path.extname(normalizedPath).toLowerCase();
-  if (
-    !normalizedPath ||
-    ![".md", ".markdown"].includes(extension) ||
-    isSensitiveCapabilityPath(normalizedPath)
-  ) {
-    return null;
-  }
-  try {
-    const { resolvedFile, fileStats } = await resolveSkillFile(
-      pluginPath,
-      normalizedPath,
-    );
-    if (fileStats.size > SKILL_CONTENT_LIMIT) return null;
-    const source = await readFile(resolvedFile, "utf8");
-    const parsed = parseFrontmatter(
-      source,
-      path.basename(normalizedPath, ".md"),
-    );
-    const block = frontmatterBlock(source);
-    const displayName =
-      readNestedYamlScalar(block, "displayName", "zh") ||
-      readNestedYamlScalar(block, "displayName", "en") ||
-      parsed.displayName;
-    const profession =
-      readNestedYamlScalar(block, "profession", "zh") ||
-      readNestedYamlScalar(block, "profession", "en") ||
-      "";
-    const maxTurns = Number(readYamlScalar(block, "maxTurns")) || null;
-    return {
-      id: createHash("sha256").update(resolvedFile).digest("hex").slice(0, 16),
-      name: parsed.name,
-      displayName,
-      profession,
-      description: parsed.description,
-      maxTurns,
-      filePath: normalizedPath,
-    };
-  } catch {
-    return null;
-  }
-}
-
-export async function scanWorkBuddyExperts(homeDirectory = HOME_DIRECTORY) {
-  const expertsRoot = path.join(homeDirectory, WORKBUDDY_EXPERTS_RELATIVE_PATH);
-  if (!(await pathExists(expertsRoot))) {
-    return {
-      id: "workbuddy",
-      name: "WorkBuddy",
-      shortName: "WB",
-      color: "#78d4c7",
-      kindLabel: "专家 / 专家团",
-      sourcePath: compactHome(expertsRoot),
-      available: false,
-      catalogCount: 0,
-      itemCount: 0,
-      memberCount: 0,
-      items: [],
-    };
-  }
-
-  let catalogCount = 0;
-  const catalogManifest = await readJsonFile(
-    path.join(homeDirectory, WORKBUDDY_EXPERT_MANIFEST_RELATIVE_PATH),
-    null,
-  );
-  if (Array.isArray(catalogManifest?.experts)) {
-    catalogCount = catalogManifest.experts.length;
-  }
-
-  const pluginEntries = (await readdir(expertsRoot, { withFileTypes: true }))
-    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-    .sort((left, right) => left.name.localeCompare(right.name));
-  const items = [];
-
-  for (const pluginEntry of pluginEntries) {
-    const pluginPath = path.join(expertsRoot, pluginEntry.name);
-    const pluginConfig = await readJsonFile(
-      path.join(pluginPath, ".codebuddy-plugin", "plugin.json"),
-      null,
-    );
-    if (!pluginConfig) continue;
-    const configuredAgentPaths = Array.isArray(pluginConfig.agents)
-      ? pluginConfig.agents
-      : [];
-    const members = (
-      await Promise.all(
-        configuredAgentPaths.map((agentPath) =>
-          parseWorkBuddyExpertMember(pluginPath, agentPath),
-        ),
-      )
-    ).filter(Boolean);
-    const listing = await listSkillFiles(pluginPath);
-    const modifiedAt = (
-      await stat(
-        path.join(pluginPath, ".codebuddy-plugin", "plugin.json"),
-      )
-    ).mtime.toISOString();
-    const isTeam =
-      pluginConfig.expertType === "team" ||
-      members.length > 1 ||
-      Array.isArray(pluginConfig.members);
-    const fallbackName = pluginConfig.name || pluginEntry.name;
-    const displayName =
-      localizedText(pluginConfig.displayName, fallbackName) || fallbackName;
-    const description =
-      localizedText(
-        pluginConfig.displayDescription,
-        pluginConfig.description || "",
-      ) || "暂无专家说明";
-    const primaryFilePath =
-      members[0]?.filePath ||
-      (listing.entries.some(
-        (entry) => entry.type === "file" && entry.path === "README.md",
-      )
-        ? "README.md"
-        : ".codebuddy-plugin/plugin.json");
-    items.push({
-      id: capabilityId("workbuddy", pluginPath),
-      productId: "workbuddy",
-      productName: "WorkBuddy",
-      productShortName: "WB",
-      productColor: "#78d4c7",
-      kind: isTeam ? "expert-team" : "expert",
-      kindLabel: isTeam ? "专家团" : "专家",
-      name: fallbackName,
-      displayName,
-      description,
-      profession: localizedText(pluginConfig.profession),
-      version: String(pluginConfig.version || ""),
-      tags: (Array.isArray(pluginConfig.tags) ? pluginConfig.tags : [])
-        .map((tag) => localizedText(tag))
-        .filter(Boolean)
-        .slice(0, 8),
-      members,
-      memberCount: members.length,
-      fileCount: listing.fileCount,
-      connectorCount: Array.isArray(pluginConfig.connectorIds)
-        ? pluginConfig.connectorIds.length
-        : 0,
-      skillCount: Array.isArray(pluginConfig.skills)
-        ? pluginConfig.skills.length
-        : 0,
-      model: "",
-      sourcePath: compactHome(pluginPath),
-      primaryFilePath,
-      modifiedAt,
-      rootPath: pluginPath,
-      allowedFiles: null,
-      virtualFiles: new Map(),
-    });
-  }
-
-  return {
-    id: "workbuddy",
-    name: "WorkBuddy",
-    shortName: "WB",
-    color: "#78d4c7",
-    kindLabel: "专家 / 专家团",
-    sourcePath: compactHome(expertsRoot),
-    available: true,
-    catalogCount,
-    itemCount: items.length,
-    memberCount: items.reduce((sum, item) => sum + item.memberCount, 0),
-    items,
-  };
 }
 
 function safeHermesConfiguration(source, profileRoot) {
@@ -753,27 +391,32 @@ async function createHermesProfileCapability(profileRoot, profileName, isDefault
   const configPath = path.join(profileRoot, "config.yaml");
   const soulPath = path.join(profileRoot, "SOUL.md");
   const profileMetadataPath = path.join(profileRoot, "profile.yaml");
-  const configSource = (await pathExists(configPath))
-    ? await readFile(configPath, "utf8")
-    : "";
-  const soulSource = (await pathExists(soulPath))
-    ? await readFile(soulPath, "utf8")
-    : "";
-  const metadataSource = (await pathExists(profileMetadataPath))
-    ? await readFile(profileMetadataPath, "utf8")
-    : "";
-  const safeConfig = safeHermesConfiguration(configSource, profileRoot);
+  // Bounded, FIFO-safe reads: a missing, oversized or special file reads as empty.
+  const readOptional = async (filePath) => {
+    const result = await readBoundedText(filePath, SKILL_CONTENT_LIMIT);
+    return result.status === "ok" ? result.text : "";
+  };
+  const configSource = await readOptional(configPath);
+  const soulSource = await readOptional(soulPath);
+  const metadataSource = await readOptional(profileMetadataPath);
+  const safeConfig = maskConfig(safeHermesConfiguration(configSource, profileRoot), {
+    homes: [HOME_DIRECTORY, REAL_HOME_DIRECTORY],
+  });
   const modelConfig = safeConfig.model || {};
   const agentConfig = safeConfig.agent || {};
   const delegationConfig = safeConfig.delegation || {};
   const profileDescription =
-    readYamlScalar(frontmatterBlock(metadataSource) || metadataSource, "description") ||
-    cleanMarkdownText(soulSource).slice(0, 220) ||
-    "使用 Hermes Profile、SOUL.md 与委派设置定义的本地 Agent。";
+    outboundText(
+      readYamlScalar(frontmatterBlock(metadataSource) || metadataSource, "description") ||
+        cleanMarkdownText(soulSource).slice(0, 220),
+      400,
+    ) || "使用 Hermes Profile、SOUL.md 与委派设置定义的本地 Agent。";
   const displayName =
-    readYamlScalar(frontmatterBlock(metadataSource) || metadataSource, "displayName") ||
-    readYamlScalar(frontmatterBlock(metadataSource) || metadataSource, "name") ||
-    (isDefault ? "Hermes 默认 Agent" : profileName);
+    outboundText(
+      readYamlScalar(frontmatterBlock(metadataSource) || metadataSource, "displayName") ||
+        readYamlScalar(frontmatterBlock(metadataSource) || metadataSource, "name"),
+      80,
+    ) || (isDefault ? "Hermes 默认 Agent" : profileName);
   const virtualPath = "配置摘要.json";
   const virtualFiles = new Map([
     [
@@ -800,6 +443,8 @@ async function createHermesProfileCapability(profileRoot, profileName, isDefault
     productShortName: "HM",
     productColor: "#e4b86a",
     kind: "agent-profile",
+    origin: "profile",
+    originLabel: "Agent Profile",
     kindLabel: isDefault ? "默认 Agent" : "Agent Profile",
     name: profileName,
     displayName,
@@ -890,6 +535,11 @@ export async function scanHermesProfiles(homeDirectory = HOME_DIRECTORY) {
   };
 }
 
+// Expert usage comes from WorkBuddy's SQLite database; it is cached separately (10 min).
+const expertUsageLoader = createCachedLoader(() => readWorkBuddyExpertUsage(HOME_DIRECTORY), {
+  ttlMs: 10 * 60_000,
+});
+
 async function getCapabilityProducts(force = false) {
   if (
     !force &&
@@ -898,13 +548,20 @@ async function getCapabilityProducts(force = false) {
   ) {
     return cachedCapabilityProducts;
   }
+  const usage = await expertUsageLoader.get(force).catch(() => null);
   const products = await Promise.all([
-    scanWorkBuddyExperts(),
+    scanWorkBuddyExperts(HOME_DIRECTORY, { usage }),
     scanHermesProfiles(),
   ]);
   cachedCapabilityProducts = products;
   cachedCapabilityProductsAt = Date.now();
   return products;
+}
+
+function publicProduct(product) {
+  const publicValue = { ...product, items: product.items.map(publicCapability) };
+  delete publicValue.assets;
+  return publicValue;
 }
 
 export async function scanCapabilityCatalog(
@@ -920,10 +577,7 @@ export async function scanCapabilityCatalog(
         ]);
   const availableProducts = products.filter((product) => product.available);
   return {
-    products: availableProducts.map((product) => ({
-      ...product,
-      items: product.items.map(publicCapability),
-    })),
+    products: availableProducts.map(publicProduct),
     totals: {
       products: availableProducts.length,
       profiles: availableProducts.reduce(
@@ -949,24 +603,6 @@ async function resolveCapability(capabilityIdValue) {
     if (capability) return capability;
   }
   return null;
-}
-
-function isSensitiveCapabilityPath(relativePath) {
-  const normalizedPath = String(relativePath || "")
-    .replaceAll("\\", "/")
-    .toLowerCase();
-  const segments = normalizedPath.split("/");
-  const filename = segments.at(-1) || "";
-  return (
-    segments.includes(".git") ||
-    filename === ".env" ||
-    filename.startsWith(".env.") ||
-    filename === "auth.json" ||
-    filename === "credentials.json" ||
-    /(?:^|[-_.])(?:api[-_.]?key|token|secret|credentials?|session|auth(?:entication)?)(?:[-_.]|$)/u.test(
-      filename,
-    )
-  );
 }
 
 async function listCapabilityFiles(capability) {
@@ -1048,7 +684,28 @@ async function readCapabilityFile(capability, requestedPath) {
   ) {
     throw new Error("这个 Agent 配置文件未开放预览。");
   }
-  return readSkillFileContent(capability.rootPath, normalizedPath);
+  return protectCapabilityContent(
+    await readSkillFileContent(capability.rootPath, normalizedPath),
+  );
+}
+
+/**
+ * Expert and profile files go through the same pipeline as /api/config-detail: JSON is
+ * parsed and default-deny masked, other text is redacted. Images are unaffected.
+ */
+function protectCapabilityContent(file) {
+  if (file.previewKind !== "text" || typeof file.content !== "string") return file;
+  const homes = [HOME_DIRECTORY, REAL_HOME_DIRECTORY];
+  if (file.language === "json") {
+    let content;
+    try {
+      content = `${JSON.stringify(maskConfig(JSON.parse(file.content), { homes }), null, 2)}\n`;
+    } catch {
+      return { ...file, content: null, previewable: false, previewKind: "unavailable", reason: "JSON 格式无效，未显示内容。" };
+    }
+    return { ...file, content };
+  }
+  return { ...file, content: cleanText(file.content, homes) };
 }
 
 async function pathExists(inputPath) {
@@ -2052,6 +1709,14 @@ async function resolveSkillFile(directoryPath, requestedPath) {
   return { relativePath, resolvedFile, fileStats };
 }
 
+/** Absolute link targets never leave the service: inside the skill → relative, else "~/…" or null. */
+function publicLinkTarget(target, rootPath) {
+  if (!path.isAbsolute(target)) return target;
+  if (isWithin(rootPath, target)) return path.relative(rootPath, target).split(path.sep).join("/") || ".";
+  const compacted = compactHome(target);
+  return compacted.startsWith("~") ? compacted : null;
+}
+
 export async function listSkillFiles(directoryPath) {
   const resolvedRoot = await realpath(directoryPath);
   const entries = [];
@@ -2093,7 +1758,7 @@ export async function listSkillFiles(directoryPath) {
       if (childStats.isSymbolicLink()) {
         let linkTarget = "";
         try {
-          linkTarget = await readlink(absolutePath);
+          linkTarget = publicLinkTarget(await readlink(absolutePath), resolvedRoot);
         } catch {
           linkTarget = "链接目标不可用";
         }
@@ -2237,7 +1902,34 @@ function svgStyleHasEscapes(source) {
   return false;
 }
 
+const SVG_VALIDATION_LIMIT = 256_000;
+
+/** Targets of every CSS url(…) in the document, found by scanning (no backtracking). */
+function cssUrlTargets(source) {
+  const lowerSource = source.toLowerCase();
+  const targets = [];
+  let cursor = 0;
+  for (;;) {
+    const start = lowerSource.indexOf("url(", cursor);
+    if (start < 0) break;
+    const inner = source.slice(start + 4, start + 4 + 2_048).trimStart();
+    const unquoted = inner.replace(/^["']/u, "");
+    const end = unquoted.search(/["')]/u);
+    targets.push((end < 0 ? unquoted : unquoted.slice(0, end)).trim());
+    cursor = start + 4;
+  }
+  return targets;
+}
+
+/**
+ * SVG previews are only consumed through <img> and served with a sandbox CSP; this
+ * validator is a second line of defense. Input is capped at 256 KB and every pattern is
+ * bounded so a hostile file cannot stall the service.
+ */
 function validateSvgPreview(buffer) {
+  if (buffer.length > SVG_VALIDATION_LIMIT) {
+    throw new Error("SVG 超过 256 KB，未预览。");
+  }
   if (!bufferLooksLikeText(buffer)) {
     throw new Error("SVG 文件不是有效的文本格式。");
   }
@@ -2246,24 +1938,19 @@ function validateSvgPreview(buffer) {
     throw new Error("文件扩展名是 SVG，但没有找到 SVG 根元素。");
   }
   const unsafeMarkup =
-    /<\s*(?:[\w-]{1,64}:)?(?:script|foreignObject|iframe|object|embed|audio|video|set|animate\w{0,32})\b/i;
-  const eventHandler = /\b(?:on[a-z]+)\s*=/i;
+    /<\s{0,8}(?:[\w-]{1,64}:)?(?:script|foreignObject|iframe|object|embed|audio|video|set|animate\w{0,32})\b/i;
+  const eventHandler = /\b(?:on[a-z]{1,32})\s{0,8}=/i;
   const referenceValues = [
-    ...source.matchAll(
-      /\b(?:href|xlink:href)\s*=\s*["']([^"']*)["']/gi,
-    ),
+    ...source.matchAll(/\b(?:href|xlink:href)\s{0,8}=\s{0,8}["']([^"']{0,2048})["']/gi),
   ].map((match) => match[1].trim());
-  const cssUrlValues = [
-    ...source.matchAll(/url\s*\(\s*["']?([^'")]+)["']?\s*\)/gi),
-  ].map((match) => match[1].trim());
-  const hasExternalReference = [...referenceValues, ...cssUrlValues].some(
+  const hasExternalReference = [...referenceValues, ...cssUrlTargets(source)].some(
     (value) => value && !value.startsWith("#") && !value.startsWith("data:image/"),
   );
   if (
     unsafeMarkup.test(source) ||
     eventHandler.test(source) ||
     /@import\b/i.test(source) ||
-    /image-set\s*\(/i.test(source) ||
+    /image-set\s{0,8}\(/i.test(source) ||
     svgStyleHasEscapes(source) ||
     hasExternalReference
   ) {
@@ -2284,6 +1971,9 @@ export async function readSkillImageAsset(directoryPath, requestedPath) {
     );
   }
 
+  if (mimeType === "image/svg+xml" && fileStats.size > SVG_VALIDATION_LIMIT) {
+    throw new Error("SVG 超过 256 KB，未预览。");
+  }
   const buffer = await readFile(resolvedFile);
   if (mimeType === "image/svg+xml") validateSvgPreview(buffer);
   return {
@@ -3125,12 +2815,28 @@ function hostAllowed(request) {
   return [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`].includes(host);
 }
 
+// Content and asset routes that must never be readable by a cross-site page.
+const SAME_SITE_ONLY_ROUTES = new Set([
+  "/api/config-detail",
+  "/api/capability-file",
+  "/api/capability-asset",
+  "/api/skill-asset",
+  "/api/import-asset",
+  "/api/plugin-asset",
+  "/api/expert-avatar",
+]);
+
+function crossSiteBlocked(request, pathname) {
+  return (
+    SAME_SITE_ONLY_ROUTES.has(pathname) &&
+    String(request.headers["sec-fetch-site"] || "").toLowerCase() === "cross-site"
+  );
+}
+
 /** Last line of defense: never echo the home directory in an error message. */
 function publicErrorMessage(error) {
   let message = String(error?.message || "本地服务处理失败。").slice(0, 600);
-  for (const home of [HOME_DIRECTORY, REAL_HOME_DIRECTORY].filter(Boolean)) {
-    message = message.split(home).join("~");
-  }
+  message = compactHomeInText(message, [HOME_DIRECTORY, REAL_HOME_DIRECTORY]);
   return message;
 }
 
@@ -3186,32 +2892,85 @@ const activityLoader = createCachedLoader(
  * meant to be consumed through <img> only, and are additionally served with a sandbox
  * CSP and nosniff so a direct navigation cannot run script either.
  */
-async function readPluginAsset(assetIdValue) {
-  if (!/^[a-f0-9]{24}$/u.test(String(assetIdValue || ""))) {
-    throw new HttpError(404, "找不到这个插件图标。");
-  }
-  const integrations = await integrationsLoader.peek();
-  const asset = integrations?.assets.get(assetIdValue);
-  if (!asset) throw new HttpError(404, "找不到这个插件图标。");
+/** Reads a manifest-referenced image (png/jpg/svg ≤ 2 MB) inside its registered root. */
+async function readManifestImage(asset, label) {
+  if (!asset) throw new HttpError(404, `找不到这个${label}。`);
   let file;
   try {
     file = await resolveSkillFile(asset.root, asset.relativePath);
   } catch {
-    throw new HttpError(404, "插件图标已不存在或无法安全读取。");
+    throw new HttpError(404, `${label}已不存在或无法安全读取。`);
   }
   const { relativePath, resolvedFile, fileStats } = file;
   const mimeType = PLUGIN_ASSET_TYPES.get(path.extname(relativePath).toLowerCase());
-  if (!mimeType) throw new Error("插件图标格式不受支持。");
-  if (fileStats.size > PLUGIN_ASSET_LIMIT) throw new Error("插件图标超过 2 MB。");
+  if (!mimeType) throw new Error(`${label}格式不受支持。`);
+  if (fileStats.size > PLUGIN_ASSET_LIMIT) throw new Error(`${label}超过 2 MB。`);
+  if (mimeType === "image/svg+xml" && fileStats.size > SVG_VALIDATION_LIMIT) {
+    throw new Error(`${label}是超过 256 KB 的 SVG，未预览。`);
+  }
   let buffer;
   try {
     buffer = await readFile(resolvedFile);
   } catch {
-    throw new HttpError(404, "插件图标已不存在或无法安全读取。");
+    throw new HttpError(404, `${label}已不存在或无法安全读取。`);
   }
-  if (buffer.length > PLUGIN_ASSET_LIMIT) throw new Error("插件图标超过 2 MB。");
+  if (buffer.length > PLUGIN_ASSET_LIMIT) throw new Error(`${label}超过 2 MB。`);
   if (mimeType === "image/svg+xml") validateSvgPreview(buffer);
   return { buffer, mimeType, filename: path.basename(relativePath) };
+}
+
+const isAssetId = (value) => /^[a-f0-9]{24}$/u.test(String(value || ""));
+
+async function readPluginAsset(assetIdValue) {
+  if (!isAssetId(assetIdValue)) throw new HttpError(404, "找不到这个插件图标。");
+  const integrations = await integrationsLoader.peek();
+  return readManifestImage(integrations?.assets.get(assetIdValue), "插件图标");
+}
+
+/** Expert and team-member avatars registered by the last capability scan. */
+async function readExpertAvatar(assetIdValue) {
+  if (!isAssetId(assetIdValue)) throw new HttpError(404, "找不到这个专家头像。");
+  const products = cachedCapabilityProducts || (await getCapabilityProducts());
+  const asset = products
+    .map((product) => product.assets?.get(assetIdValue))
+    .find(Boolean);
+  return readManifestImage(asset, "专家头像");
+}
+
+function configDetailContext() {
+  return {
+    homeDirectory: HOME_DIRECTORY,
+    displayHomes: [HOME_DIRECTORY, REAL_HOME_DIRECTORY],
+    getCapability: resolveCapability,
+    getIntegrations: () => integrationsLoader.get(),
+    async findSkillInstance(skillId, instanceId) {
+      const scan = await getScan();
+      const skill = scan.skills.find((item) => item.id === skillId);
+      const instance = skill?.instances.find((item) => item.id === instanceId);
+      return instance ? { skill, instance, absolutePath: expandHome(instance.path) } : null;
+    },
+  };
+}
+
+const IMAGE_RESPONSE_HEADERS = {
+  "cache-control": "private, max-age=300",
+  "content-security-policy":
+    "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
+  "cross-origin-resource-policy": "same-site",
+};
+
+function imageResponse(response, asset, origin) {
+  binaryResponse(
+    response,
+    200,
+    asset.buffer,
+    {
+      "content-type": asset.mimeType,
+      "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(asset.filename)}`,
+      ...IMAGE_RESPONSE_HEADERS,
+    },
+    origin,
+  );
 }
 
 function publicCodexConnectors(codexConnectors) {
@@ -3247,6 +3006,10 @@ export async function handleRequest(request, response) {
 
   try {
     const requestUrl = new URL(request.url, `http://${request.headers.host}`);
+    if (crossSiteBlocked(request, requestUrl.pathname)) {
+      jsonResponse(response, 403, { error: "不允许跨站读取本地配置或资源。" }, origin);
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname === "/api/health") {
       jsonResponse(
         response,
@@ -3339,21 +3102,27 @@ export async function handleRequest(request, response) {
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/api/plugin-asset") {
-      const asset = await readPluginAsset(requestUrl.searchParams.get("id"));
-      binaryResponse(
+      imageResponse(response, await readPluginAsset(requestUrl.searchParams.get("id")), origin);
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/api/config-detail") {
+      jsonResponse(
         response,
         200,
-        asset.buffer,
-        {
-          "content-type": asset.mimeType,
-          "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(asset.filename)}`,
-          "cache-control": "private, max-age=300",
-          "content-security-policy":
-            "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
-          "cross-origin-resource-policy": "same-site",
-        },
+        await buildConfigDetail(
+          {
+            kind: requestUrl.searchParams.get("kind"),
+            id: requestUrl.searchParams.get("id"),
+            instance: requestUrl.searchParams.get("instance"),
+          },
+          configDetailContext(),
+        ),
         origin,
       );
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/api/expert-avatar") {
+      imageResponse(response, await readExpertAvatar(requestUrl.searchParams.get("id")), origin);
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/api/agents/activity") {
@@ -3711,7 +3480,7 @@ export async function handleRequest(request, response) {
   } catch (error) {
     jsonResponse(
       response,
-      error instanceof HttpError ? error.statusCode : 400,
+      Number.isInteger(error?.statusCode) ? error.statusCode : 400,
       { error: publicErrorMessage(error) },
       origin,
     );

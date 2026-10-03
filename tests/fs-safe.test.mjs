@@ -4,7 +4,12 @@ import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { findSkillDirectoryNames, readBoundedText, text } from "../server/fs-safe.mjs";
+import {
+  compactHomeInText,
+  findSkillDirectoryNames,
+  readBoundedText,
+  text,
+} from "../server/fs-safe.mjs";
 import { scanMcpInventory } from "../server/mcp-inventory.mjs";
 import { writeFixtureFile } from "./fixtures/smartorder.mjs";
 
@@ -44,4 +49,22 @@ test("visits each real directory once when skill folders link back to themselves
   const names = await findSkillDirectoryNames(skills, root, { maxDepth: 6 });
   assert.deepEqual(names, ["real-skill"]);
   assert.ok(performance.now() - started < 500);
+});
+
+test("compacts Windows and POSIX home paths in serialized text", () => {
+  const windowsHome = "C:\\Users\\bob";
+  const serialized = JSON.stringify({
+    command: "C:\\Users\\bob\\bin\\srv.exe",
+    args: ["C:/Users/bob/.cfg/x.json", "c:\\users\\BOB\\data", "C:\\Users\\bobby\\other"],
+  });
+  const compacted = compactHomeInText(serialized, [windowsHome]);
+  assert.doesNotMatch(compacted, /Users\\\\bob\\\\|Users\/bob\//iu);
+  assert.match(compacted, /~\\\\bin\\\\srv\.exe/u);
+  assert.match(compacted, /~\/\.cfg\/x\.json/u);
+  assert.match(compacted, /bobby/u);
+  assert.equal(compactHomeInText("C:\\Users\\bob and C:/Users/bob", [windowsHome]), "~ and ~");
+  assert.equal(
+    compactHomeInText("file:///Users/ameng/x /Users/amengxyz/y", ["/Users/ameng"]),
+    "file://~/x /Users/amengxyz/y",
+  );
 });

@@ -589,6 +589,20 @@ test("previews raster images and safe SVG files without allowing active SVG cont
     '<svg xmlns="http://www.w3.org/2000/svg"><style>rect { fill: \\75 rl(x) }</style></svg>',
     '<svg xmlns="http://www.w3.org/2000/svg"><rect style="background:\\75 rl(x)"/></svg>',
   ];
+  const hostile = [
+    `<svg xmlns="http://www.w3.org/2000/svg">${"url(   ".repeat(300_000)}</svg>`,
+    `<svg xmlns="http://www.w3.org/2000/svg">${"url(   ".repeat(35_000)}</svg>`,
+    `<svg xmlns="http://www.w3.org/2000/svg">${"<".repeat(240_000)}</svg>`,
+    `<svg xmlns="http://www.w3.org/2000/svg">${"href='".repeat(40_000)}</svg>`,
+  ];
+  await writeFile(path.join(skillDirectory, "assets", "large.svg"), hostile[0], "utf8");
+  await assert.rejects(readSkillImageAsset(skillDirectory, "assets/large.svg"), /256 KB/u);
+  for (const [index, svg] of hostile.entries()) {
+    await writeFile(path.join(skillDirectory, "assets", `hostile-${index}.svg`), svg, "utf8");
+    const started = performance.now();
+    await readSkillImageAsset(skillDirectory, `assets/hostile-${index}.svg`).catch(() => null);
+    assert.ok(performance.now() - started < 200, `hostile SVG ${index}`);
+  }
   for (const [index, variant] of unsafeVariants.entries()) {
     await writeFile(path.join(skillDirectory, "assets", `variant-${index}.svg`), variant, "utf8");
     await assert.rejects(

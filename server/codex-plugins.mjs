@@ -193,7 +193,7 @@ function emptyPlugin(id, name, marketplace, enabled, configured) {
   };
 }
 
-async function describePlugin({ id, name, marketplace, enabled, configured, cacheRoot, realCacheRoot, assets, warnings }) {
+async function describePlugin({ id, name, marketplace, enabled, configured, cacheRoot, realCacheRoot, assets, roots, warnings }) {
   const plugin = emptyPlugin(id, name, marketplace, enabled, configured);
   const pluginDirectory = path.join(cacheRoot, marketplace, name);
   if (!(await exists(pluginDirectory))) return plugin;
@@ -206,6 +206,7 @@ async function describePlugin({ id, name, marketplace, enabled, configured, cach
   plugin.versions = versions;
   if (!selected) return plugin;
   const versionRoot = await realpathOrNull(selected.path);
+  roots.set(id, versionRoot);
   plugin.installed = true;
   plugin.version = selected.name;
 
@@ -263,6 +264,7 @@ export async function scanCodexPlugins(homeDirectory = homedir()) {
     marketplaces: [],
     warnings: [],
     assets: new Map(),
+    roots: new Map(),
   };
   if (!(await exists(codexRoot))) return result;
   result.available = true;
@@ -306,6 +308,7 @@ export async function scanCodexPlugins(homeDirectory = homedir()) {
       cacheRoot,
       realCacheRoot,
       assets: result.assets,
+      roots: result.roots,
       warnings: result.warnings,
     });
     if (plugin) result.plugins.push(plugin);

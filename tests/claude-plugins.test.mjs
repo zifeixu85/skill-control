@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { scanClaudePlugins } from "../server/claude-plugins.mjs";
+import { scanClaudePlugins } from "../server/installed-plugins.mjs";
 import {
   SECRET_PATTERN,
   createClaudePluginFixture,
