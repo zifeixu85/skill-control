@@ -10,7 +10,7 @@ terms.
 ## JavaScript 与桌面依赖
 
 直接和传递依赖记录在 `package.json` 与 `package-lock.json` 中，包括但不限于
-Electron、React、Vinext、Vite、Tailwind CSS、fflate、react-markdown 和
+Electron、React、Vinext、Vite、Tailwind CSS、fflate、smol-toml、react-markdown 和
 remark-gfm。准确版本以对应 Release 的 lockfile 和构建记录为准。
 
 Direct and transitive JavaScript dependencies are recorded in `package.json`
@@ -21,6 +21,7 @@ authoritative source for exact versions.
 
 ```text
 resources/licenses/vinext-LICENSE
+resources/licenses/smol-toml-LICENSE
 ```
 
 Electron 和 electron-builder 生成的产物还可能包含其运行时许可证和 Chromium

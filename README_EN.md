@@ -8,9 +8,9 @@ inspect, compare, import, export, and synchronize Skills across tools.
 
 ![Skill Control overview](./docs/images/overview.png)
 
-> Current version: the first public `v0.1.0` release. Source code and desktop
-> artifacts that passed smoke tests on their target platforms are available on
-> the [Releases](../../releases) page.
+> Published version: `v0.1.0`. The current `main` source includes additional
+> unreleased features and fixes. See [Releases](../../releases) for downloadable
+> desktop artifacts and their actual platform-validation status.
 
 ## Why Skill Control
 
@@ -48,19 +48,42 @@ to be uploaded to a remote service.
   limit), with directories collapsed by default in installed-Skill details;
 - select `SKILL.md` by default;
 - switch Markdown files between rendered preview and source;
-- preview text files and inspect metadata for non-previewable files;
+- preview PNG, JPEG, GIF, WebP, AVIF, BMP, ICO, and security-filtered SVG
+  images;
+- switch SVG files between the rendered result and source;
+- preview other text files and inspect metadata for non-previewable binaries;
 - reveal a Skill directory in the system file manager;
-- export a local Skill as a portable `.skill` archive;
+- export a local Skill as a portable `.skill` archive or standard `.zip` file;
 - drag or choose a `.skill` file, inspect it first, and then select installation
   targets;
-- use collapsible directories, rendered Markdown, and source view in `.skill`
-  import previews as well.
+- use collapsible directories, rendered Markdown, source view, and image/SVG
+  preview in `.skill` import previews as well.
 
 ![Skill Control Skill detail and Markdown preview](./docs/images/skill-detail.png)
 
+### Inspect experts and Agent profiles
+
+- Discover installed WorkBuddy experts and expert teams, including localized
+  names, responsibilities, versions, tags, and member roles;
+- inspect each team member's Markdown instructions and turn limit;
+- discover the default Hermes Agent and local profiles, including `SOUL.md`,
+  model, Skill count, and delegation settings;
+- browse rules, Skills, references, images, and plugin manifests in expert
+  packages;
+- keep the view read-only and exclude `.env`, API keys, tokens, credentials,
+  authentication, and session files.
+
+Expert discovery currently supports WorkBuddy and Hermes Agent. It is separate
+from the broader set of products supported for ordinary Skill directories.
+
 ### Synchronize safely
 
-- Generate a create, replace, and skip plan before synchronization;
+- open each Agent installation as a complete Skill version from the conflict
+  view;
+- inspect file changes, line-level text differences, and side-by-side images
+  under an optional advanced comparison;
+- choose any inspected Agent version as the authoritative source;
+- generate a create, replace, and skip plan before synchronization;
 - use copy mode for independent copies;
 - use symbolic-link mode when multiple tools should share one live directory;
 - back up existing directories before replacement;
@@ -74,13 +97,14 @@ with the corresponding privilege. Use the default copy mode when unsure.
 
 The built-in directory rules are listed below. A tool becomes a data source only
 when it is detected locally or configured manually. By default, the Skill list
-shows Codex and Claude Code; this can be changed under Tool Sources.
+shows Codex and Claude Code; this can be changed under Products and directories.
 
 | Tool | Default directories |
 | --- | --- |
 | Codex | `~/.codex/skills`, `~/.agents/skills`, `~/.codex/vendor_imports/skills` |
 | Claude Code | `~/.claude/skills` |
 | WorkBuddy | `~/.workbuddy/skills`, `~/.workbuddy/connectors/skills` |
+| SmartOrder (订单来了) | `~/.smartorder/skills` and skill directories of explicitly enabled plugins |
 | Cursor | `~/.cursor/skills` |
 | Gemini CLI | `~/.gemini/skills` |
 | Kiro | `~/.kiro/skills` |
@@ -95,6 +119,19 @@ shows Codex and Claude Code; this can be changed under Tool Sources.
 
 Other compatible tools can be added manually with a name, short label, color,
 and one or more Skill directories.
+
+### SmartOrder skills and connectors
+
+Enable SmartOrder in Products & Directories to browse local, built-in and
+explicitly enabled plugin skills. Disabled skills and marketplace/history
+caches are excluded. Ambiguous cached versions are reported instead of guessing.
+Managed plugin and system skills are read-only and cannot be overwritten.
+
+Other → Connectors shows allowlisted MCP configuration from `config.toml` and
+enabled plugins' `.mcp.json` files. It reports configuration state, transport,
+URL origin and tool settings, without running commands or contacting services.
+Credentials, environment values, command arguments and URL paths/query strings
+are omitted. Configuration state does not imply connectivity or authentication.
 
 ## Install and run
 
@@ -153,10 +190,13 @@ UI and manager service. Desktop packaging commands are listed in `package.json`;
 release maintainers should build and validate each artifact on its target
 platform.
 
-## The `.skill` format
+## `.skill` and ZIP export
 
 Skill Control treats `.skill` files as ZIP containers. An archive must include
 one `SKILL.md`, either at its root or inside one top-level directory.
+Exports can keep the `.skill` extension or use a standard `.zip`; their internal
+layout is the same. For an Agent that does not import `.skill` directly, extract
+the ZIP and copy its Skill directory to that Agent's Skills location.
 
 Import limits:
 
@@ -180,6 +220,7 @@ are stored under:
 ```text
 ~/.agent-skill-manager/
 ├── config.json
+├── fingerprint-cache.json
 ├── history.jsonl
 ├── imports/
 └── backups/
@@ -200,6 +241,7 @@ npm start        # Built UI + local manager service
 npm run desktop:dev # Electron development window
 npm test         # Build and run the Node test suite
 npm run lint     # ESLint
+npm run typecheck # TypeScript type checking
 ```
 
 Main directories:

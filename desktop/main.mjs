@@ -210,7 +210,7 @@ function installSessionSecurity(developmentMode) {
       "script-src 'self' 'unsafe-inline'",
       "style-src 'self' 'unsafe-inline'",
       `connect-src 'self' ${getManagerUrl()}`,
-      "img-src 'self' data:",
+      `img-src 'self' data: blob: ${getManagerUrl()}`,
       "font-src 'self' data:",
       "media-src 'self' data:",
       "object-src 'none'",
@@ -333,13 +333,54 @@ function installSmokeTest(window) {
   window.webContents.once("did-finish-load", async () => {
     try {
       const expectedApiBase = JSON.stringify(getManagerUrl());
+      const imageProbeConfig = JSON.stringify({
+        instanceId: process.env.SKILL_CONTROL_SMOKE_IMAGE_INSTANCE || "",
+        path: process.env.SKILL_CONTROL_SMOKE_IMAGE_PATH || "",
+      });
       const result = await window.webContents.executeJavaScript(`
         (async () => {
           const expectedApiBase = ${expectedApiBase};
-          const [healthResponse, pageResponse, runtimeInfo] = await Promise.all([
+          const imageProbeConfig = ${imageProbeConfig};
+          const probeImage = async () => {
+            if (!imageProbeConfig.instanceId || !imageProbeConfig.path) {
+              return { ok: true, skipped: true };
+            }
+            const assetUrl =
+              expectedApiBase +
+              "/api/skill-asset?instanceId=" +
+              encodeURIComponent(imageProbeConfig.instanceId) +
+              "&path=" +
+              encodeURIComponent(imageProbeConfig.path);
+            const response = await fetch(assetUrl);
+            if (!response.ok) {
+              return { ok: false, error: "HTTP " + response.status };
+            }
+            const objectUrl = URL.createObjectURL(await response.blob());
+            try {
+              const dimensions = await new Promise((resolve, reject) => {
+                const image = new Image();
+                image.onload = () =>
+                  resolve({
+                    width: image.naturalWidth,
+                    height: image.naturalHeight,
+                  });
+                image.onerror = () => reject(new Error("Chromium 图片解码失败"));
+                image.src = objectUrl;
+              });
+              return {
+                ok: dimensions.width > 0 && dimensions.height > 0,
+                ...dimensions,
+              };
+            } finally {
+              URL.revokeObjectURL(objectUrl);
+            }
+          };
+          const [healthResponse, pageResponse, runtimeInfo, imageProbe] =
+            await Promise.all([
             fetch(expectedApiBase + "/api/health"),
             fetch(window.location.href),
             window.skillManagerDesktop.getRuntimeInfo(),
+            probeImage(),
           ]);
           const health = await healthResponse.json();
           const csp = pageResponse.headers.get("content-security-policy") || "";
@@ -357,15 +398,17 @@ function installSmokeTest(window) {
               window.skillManagerDesktop.apiBase === expectedApiBase,
             csp:
               csp.includes("connect-src 'self' " + expectedApiBase) &&
-              csp.includes("img-src 'self' data:") &&
+              csp.includes("img-src 'self' data: blob:") &&
               csp.includes("object-src 'none'") &&
               csp.includes("frame-src 'none'"),
+            image: imageProbe.ok === true,
           };
           return {
             ok: Object.values(checks).every(Boolean),
             checks,
             runtimeInfo,
             csp,
+            imageProbe,
           };
         })()
       `);

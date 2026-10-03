@@ -20,7 +20,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import http from "node:http";
 import { spawn } from "node:child_process";
+import { Worker } from "node:worker_threads";
 import { unzipSync, zipSync } from "fflate";
+import { scanSmartOrder, scanSmartOrderConnectors } from "./smartorder.mjs";
 
 const HOME_DIRECTORY = homedir();
 const STATE_DIRECTORY = path.join(HOME_DIRECTORY, ".agent-skill-manager");
@@ -28,10 +30,33 @@ const CONFIG_FILE = path.join(STATE_DIRECTORY, "config.json");
 const HISTORY_FILE = path.join(STATE_DIRECTORY, "history.jsonl");
 const BACKUP_DIRECTORY = path.join(STATE_DIRECTORY, "backups");
 const IMPORT_DIRECTORY = path.join(STATE_DIRECTORY, "imports");
+const WORKBUDDY_EXPERTS_RELATIVE_PATH = path.join(
+  ".workbuddy",
+  "plugins",
+  "marketplaces",
+  "experts",
+  "plugins",
+);
+const WORKBUDDY_EXPERT_MANIFEST_RELATIVE_PATH = path.join(
+  ".workbuddy",
+  "app",
+  "cache",
+  "experts",
+  "manifest.json",
+);
+const HERMES_HOME_RELATIVE_PATH = ".hermes";
+const FINGERPRINT_CACHE_FILE = path.join(
+  STATE_DIRECTORY,
+  "fingerprint-cache.json",
+);
 const SERVER_PORT = Number(process.env.SKILL_MANAGER_PORT || 43110);
 const SERVER_HOST = process.env.SKILL_MANAGER_HOST || "127.0.0.1";
+const SCAN_CACHE_TTL = 5 * 60_000;
+const CAPABILITY_CACHE_TTL = 2 * 60_000;
+const FINGERPRINT_CACHE_LIMIT = 4_000;
 const SKILL_ENTRY_LIMIT = 1_500;
 const SKILL_CONTENT_LIMIT = 2_000_000;
+const SKILL_IMAGE_PREVIEW_LIMIT = 20_000_000;
 const SKILL_ARCHIVE_LIMIT = 25_000_000;
 const SKILL_UNPACKED_LIMIT = 100_000_000;
 const ALLOWED_ORIGINS = new Set(
@@ -43,12 +68,33 @@ const ALLOWED_ORIGINS = new Set(
 );
 
 const IGNORED_DIRECTORIES = new Set([
+  ".backup",
+  ".backups",
   ".git",
   ".svn",
   ".cache",
   ".DS_Store",
+  ".mypy_cache",
+  ".nox",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".tox",
+  ".venv",
   "node_modules",
+  "venv",
   "__pycache__",
+]);
+
+const IMAGE_MIME_TYPES = new Map([
+  [".avif", "image/avif"],
+  [".bmp", "image/bmp"],
+  [".gif", "image/gif"],
+  [".ico", "image/x-icon"],
+  [".jpeg", "image/jpeg"],
+  [".jpg", "image/jpeg"],
+  [".png", "image/png"],
+  [".svg", "image/svg+xml"],
+  [".webp", "image/webp"],
 ]);
 
 const AGENT_CATALOG = [
@@ -56,7 +102,7 @@ const AGENT_CATALOG = [
     id: "codex",
     name: "Codex",
     shortName: "CX",
-    color: "#d7f56d",
+    color: "#8fc9ef",
     paths: [
       "~/.codex/skills",
       "~/.agents/skills",
@@ -67,42 +113,49 @@ const AGENT_CATALOG = [
     id: "claude",
     name: "Claude Code",
     shortName: "CC",
-    color: "#ff7a4d",
+    color: "#c7b7ef",
     paths: ["~/.claude/skills"],
   },
   {
     id: "workbuddy",
     name: "WorkBuddy",
     shortName: "WB",
-    color: "#74c7ec",
+    color: "#78d4c7",
     paths: ["~/.workbuddy/skills", "~/.workbuddy/connectors/skills"],
   },
   {
     id: "cursor",
     name: "Cursor",
     shortName: "CR",
-    color: "#65d6b4",
+    color: "#8fd0ae",
     paths: ["~/.cursor/skills"],
+  },
+  {
+    id: "smartorder",
+    name: "订单来了",
+    shortName: "订",
+    color: "#9abbd6",
+    paths: ["~/.smartorder/skills"],
   },
   {
     id: "gemini",
     name: "Gemini CLI",
     shortName: "GM",
-    color: "#8ab4f8",
+    color: "#9ebbf4",
     paths: ["~/.gemini/skills"],
   },
   {
     id: "kiro",
     name: "Kiro",
     shortName: "KI",
-    color: "#c6a5f7",
+    color: "#d0afe8",
     paths: ["~/.kiro/skills"],
   },
   {
     id: "trae",
     name: "Trae",
     shortName: "TR",
-    color: "#54d8d0",
+    color: "#7bcbd5",
     paths: ["~/.trae/skills"],
   },
   {
@@ -116,55 +169,88 @@ const AGENT_CATALOG = [
     id: "windsurf",
     name: "Windsurf",
     shortName: "WS",
-    color: "#47d7a2",
+    color: "#70cfa5",
     paths: ["~/.windsurf/skills"],
   },
   {
     id: "cline",
     name: "Cline",
     shortName: "CL",
-    color: "#f2a94f",
+    color: "#d8c08a",
     paths: ["~/.cline/skills"],
   },
   {
     id: "roo-code",
     name: "Roo Code",
     shortName: "RO",
-    color: "#ff8a72",
+    color: "#d1afd7",
     paths: ["~/.roo/skills", "~/.roo-code/skills"],
   },
   {
     id: "codebuddy",
     name: "CodeBuddy",
     shortName: "CB",
-    color: "#f0ce5a",
+    color: "#bfd49b",
     paths: ["~/.codebuddy/skills"],
   },
   {
     id: "qwen-code",
     name: "Qwen Code",
     shortName: "QW",
-    color: "#a98cf3",
+    color: "#a995df",
     paths: ["~/.qwen/skills", "~/.qwen-code/skills"],
   },
   {
     id: "copilot",
     name: "GitHub Copilot",
     shortName: "GH",
-    color: "#b1a3d8",
+    color: "#aeb7d4",
     paths: ["~/.copilot/skills", "~/.github/copilot/skills"],
   },
 ];
 
+const LEGACY_AGENT_COLORS = new Map([
+  ["codex", "#d7f56d"],
+  ["claude", "#ff7a4d"],
+  ["workbuddy", "#74c7ec"],
+  ["cursor", "#65d6b4"],
+  ["gemini", "#8ab4f8"],
+  ["kiro", "#c6a5f7"],
+  ["trae", "#54d8d0"],
+  ["opencode", "#d8d6ce"],
+  ["windsurf", "#47d7a2"],
+  ["cline", "#f2a94f"],
+  ["roo-code", "#ff8a72"],
+  ["codebuddy", "#f0ce5a"],
+  ["qwen-code", "#a98cf3"],
+  ["copilot", "#b1a3d8"],
+]);
+
+const AGENT_FALLBACK_COLORS = [
+  "#8fc9ef",
+  "#c7b7ef",
+  "#78d4c7",
+  "#aeb7d4",
+];
+
 const DEFAULT_CONFIG = {
-  version: 1,
+  version: 3,
   syncMode: "copy",
   agents: AGENT_CATALOG.slice(0, 3),
   visibleAgentIds: ["codex", "claude"],
+  dismissedAgentIds: [],
 };
 
 let cachedScan = null;
 let cachedScanAt = 0;
+let cachedCapabilityProducts = null;
+let cachedCapabilityProductsAt = 0;
+let pendingScan = null;
+let scanGeneration = 0;
+let fingerprintCacheLoaded = false;
+let fingerprintCacheDirty = false;
+let fingerprintCacheLoadPromise = null;
+const fingerprintCache = new Map();
 const importedSkills = new Map();
 
 function expandHome(inputPath) {
@@ -181,6 +267,12 @@ function compactHome(inputPath) {
     return `~/${inputPath.slice(HOME_DIRECTORY.length + 1)}`;
   }
   return inputPath;
+}
+
+function invalidateScanCache() {
+  cachedScan = null;
+  cachedScanAt = 0;
+  scanGeneration += 1;
 }
 
 function stripYamlValue(value = "") {
@@ -316,6 +408,615 @@ export function parseFrontmatter(source, fallbackName) {
   return { name, displayName, description, tags, body };
 }
 
+function localizedText(value, fallback = "") {
+  if (typeof value === "string") return value.trim() || fallback;
+  if (!value || typeof value !== "object") return fallback;
+  return String(
+    value.zh ||
+      value["zh-CN"] ||
+      value.zh_CN ||
+      value.en ||
+      Object.values(value).find((item) => typeof item === "string") ||
+      fallback,
+  ).trim();
+}
+
+function frontmatterBlock(source) {
+  return (
+    source
+      .replace(/\r\n/g, "\n")
+      .match(/^---\n([\s\S]*?)\n---(?:\n|$)/)?.[1] || ""
+  );
+}
+
+function readNestedYamlScalar(block, parentKey, childKey) {
+  const escapedParent = parentKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedChild = childKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const parentMatch = block.match(
+    new RegExp(
+      `^${escapedParent}:\\s*\\n((?:[ \\t]+[^\\n]*(?:\\n|$))*)`,
+      "m",
+    ),
+  );
+  if (!parentMatch) return "";
+  const childMatch = parentMatch[1].match(
+    new RegExp(`^[ \\t]+${escapedChild}:\\s*(.+)$`, "m"),
+  );
+  return childMatch ? stripYamlValue(childMatch[1]) : "";
+}
+
+function parseSimpleYamlSection(source, sectionName, allowedKeys) {
+  const lines = source.replace(/\r\n/g, "\n").split("\n");
+  const sectionIndex = lines.findIndex(
+    (line) => line.trimEnd() === `${sectionName}:`,
+  );
+  if (sectionIndex < 0) return {};
+  const result = {};
+  for (let index = sectionIndex + 1; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (/^[^\s#][^:]*:/u.test(line)) break;
+    const match = line.match(/^\s{2}([a-zA-Z0-9_-]+):\s*(.*?)\s*$/u);
+    if (!match || !allowedKeys.includes(match[1]) || !match[2]) continue;
+    const rawValue = stripYamlValue(match[2]);
+    if (/^(true|false)$/i.test(rawValue)) {
+      result[match[1]] = rawValue.toLowerCase() === "true";
+    } else if (/^-?\d+(?:\.\d+)?$/u.test(rawValue)) {
+      result[match[1]] = Number(rawValue);
+    } else {
+      result[match[1]] = rawValue;
+    }
+  }
+  return result;
+}
+
+function capabilityId(productId, sourcePath) {
+  return createHash("sha256")
+    .update(`${productId}:${sourcePath}`)
+    .digest("hex")
+    .slice(0, 20);
+}
+
+function publicCapability(capability) {
+  const publicValue = { ...capability };
+  delete publicValue.rootPath;
+  delete publicValue.virtualFiles;
+  delete publicValue.allowedFiles;
+  return publicValue;
+}
+
+async function parseWorkBuddyExpertMember(pluginPath, relativePath) {
+  const normalizedPath = String(relativePath || "")
+    .replace(/^\.\//u, "")
+    .split(path.sep)
+    .join("/");
+  const extension = path.extname(normalizedPath).toLowerCase();
+  if (
+    !normalizedPath ||
+    ![".md", ".markdown"].includes(extension) ||
+    isSensitiveCapabilityPath(normalizedPath)
+  ) {
+    return null;
+  }
+  try {
+    const { resolvedFile, fileStats } = await resolveSkillFile(
+      pluginPath,
+      normalizedPath,
+    );
+    if (fileStats.size > SKILL_CONTENT_LIMIT) return null;
+    const source = await readFile(resolvedFile, "utf8");
+    const parsed = parseFrontmatter(
+      source,
+      path.basename(normalizedPath, ".md"),
+    );
+    const block = frontmatterBlock(source);
+    const displayName =
+      readNestedYamlScalar(block, "displayName", "zh") ||
+      readNestedYamlScalar(block, "displayName", "en") ||
+      parsed.displayName;
+    const profession =
+      readNestedYamlScalar(block, "profession", "zh") ||
+      readNestedYamlScalar(block, "profession", "en") ||
+      "";
+    const maxTurns = Number(readYamlScalar(block, "maxTurns")) || null;
+    return {
+      id: createHash("sha256").update(resolvedFile).digest("hex").slice(0, 16),
+      name: parsed.name,
+      displayName,
+      profession,
+      description: parsed.description,
+      maxTurns,
+      filePath: normalizedPath,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function scanWorkBuddyExperts(homeDirectory = HOME_DIRECTORY) {
+  const expertsRoot = path.join(homeDirectory, WORKBUDDY_EXPERTS_RELATIVE_PATH);
+  if (!(await pathExists(expertsRoot))) {
+    return {
+      id: "workbuddy",
+      name: "WorkBuddy",
+      shortName: "WB",
+      color: "#78d4c7",
+      kindLabel: "专家 / 专家团",
+      sourcePath: compactHome(expertsRoot),
+      available: false,
+      catalogCount: 0,
+      itemCount: 0,
+      memberCount: 0,
+      items: [],
+    };
+  }
+
+  let catalogCount = 0;
+  const catalogManifest = await readJsonFile(
+    path.join(homeDirectory, WORKBUDDY_EXPERT_MANIFEST_RELATIVE_PATH),
+    null,
+  );
+  if (Array.isArray(catalogManifest?.experts)) {
+    catalogCount = catalogManifest.experts.length;
+  }
+
+  const pluginEntries = (await readdir(expertsRoot, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const items = [];
+
+  for (const pluginEntry of pluginEntries) {
+    const pluginPath = path.join(expertsRoot, pluginEntry.name);
+    const pluginConfig = await readJsonFile(
+      path.join(pluginPath, ".codebuddy-plugin", "plugin.json"),
+      null,
+    );
+    if (!pluginConfig) continue;
+    const configuredAgentPaths = Array.isArray(pluginConfig.agents)
+      ? pluginConfig.agents
+      : [];
+    const members = (
+      await Promise.all(
+        configuredAgentPaths.map((agentPath) =>
+          parseWorkBuddyExpertMember(pluginPath, agentPath),
+        ),
+      )
+    ).filter(Boolean);
+    const listing = await listSkillFiles(pluginPath);
+    const modifiedAt = (
+      await stat(
+        path.join(pluginPath, ".codebuddy-plugin", "plugin.json"),
+      )
+    ).mtime.toISOString();
+    const isTeam =
+      pluginConfig.expertType === "team" ||
+      members.length > 1 ||
+      Array.isArray(pluginConfig.members);
+    const fallbackName = pluginConfig.name || pluginEntry.name;
+    const displayName =
+      localizedText(pluginConfig.displayName, fallbackName) || fallbackName;
+    const description =
+      localizedText(
+        pluginConfig.displayDescription,
+        pluginConfig.description || "",
+      ) || "暂无专家说明";
+    const primaryFilePath =
+      members[0]?.filePath ||
+      (listing.entries.some(
+        (entry) => entry.type === "file" && entry.path === "README.md",
+      )
+        ? "README.md"
+        : ".codebuddy-plugin/plugin.json");
+    items.push({
+      id: capabilityId("workbuddy", pluginPath),
+      productId: "workbuddy",
+      productName: "WorkBuddy",
+      productShortName: "WB",
+      productColor: "#78d4c7",
+      kind: isTeam ? "expert-team" : "expert",
+      kindLabel: isTeam ? "专家团" : "专家",
+      name: fallbackName,
+      displayName,
+      description,
+      profession: localizedText(pluginConfig.profession),
+      version: String(pluginConfig.version || ""),
+      tags: (Array.isArray(pluginConfig.tags) ? pluginConfig.tags : [])
+        .map((tag) => localizedText(tag))
+        .filter(Boolean)
+        .slice(0, 8),
+      members,
+      memberCount: members.length,
+      fileCount: listing.fileCount,
+      connectorCount: Array.isArray(pluginConfig.connectorIds)
+        ? pluginConfig.connectorIds.length
+        : 0,
+      skillCount: Array.isArray(pluginConfig.skills)
+        ? pluginConfig.skills.length
+        : 0,
+      model: "",
+      sourcePath: compactHome(pluginPath),
+      primaryFilePath,
+      modifiedAt,
+      rootPath: pluginPath,
+      allowedFiles: null,
+      virtualFiles: new Map(),
+    });
+  }
+
+  return {
+    id: "workbuddy",
+    name: "WorkBuddy",
+    shortName: "WB",
+    color: "#78d4c7",
+    kindLabel: "专家 / 专家团",
+    sourcePath: compactHome(expertsRoot),
+    available: true,
+    catalogCount,
+    itemCount: items.length,
+    memberCount: items.reduce((sum, item) => sum + item.memberCount, 0),
+    items,
+  };
+}
+
+function safeHermesConfiguration(source, profileRoot) {
+  const sectionKeys = {
+    model: ["provider", "default"],
+    agent: [
+      "max_turns",
+      "reasoning_effort",
+      "tool_use_enforcement",
+      "disabled_toolsets",
+    ],
+    delegation: [
+      "model",
+      "provider",
+      "reasoning_effort",
+      "max_iterations",
+      "child_timeout_seconds",
+      "max_concurrent_children",
+      "max_spawn_depth",
+      "orchestrator_enabled",
+      "subagent_auto_approve",
+      "inherit_mcp_toolsets",
+    ],
+    display: ["personality", "language", "interface"],
+    terminal: ["backend", "cwd", "timeout", "working_dir"],
+    skills: ["external_dirs", "guard_agent_created"],
+    kanban: [
+      "auto_decompose",
+      "default_assignee",
+      "orchestrator_profile",
+      "max_in_progress_per_profile",
+    ],
+  };
+  const summary = {
+    note: "仅展示非敏感配置；API Key、Token、认证与会话数据已省略。",
+    profilePath: compactHome(profileRoot),
+  };
+  for (const [sectionName, allowedKeys] of Object.entries(sectionKeys)) {
+    const values = parseSimpleYamlSection(source, sectionName, allowedKeys);
+    for (const pathKey of ["cwd", "working_dir"]) {
+      if (typeof values[pathKey] === "string" && path.isAbsolute(values[pathKey])) {
+        values[pathKey] = compactHome(values[pathKey]);
+      }
+    }
+    if (Object.keys(values).length) summary[sectionName] = values;
+  }
+  return summary;
+}
+
+async function countDirectSkillDirectories(rootPath) {
+  if (!(await pathExists(rootPath))) return 0;
+  const entries = await readdir(rootPath, { withFileTypes: true });
+  let count = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    if (await pathExists(path.join(rootPath, entry.name, "SKILL.md"))) count += 1;
+  }
+  return count;
+}
+
+async function createHermesProfileCapability(profileRoot, profileName, isDefault) {
+  const configPath = path.join(profileRoot, "config.yaml");
+  const soulPath = path.join(profileRoot, "SOUL.md");
+  const profileMetadataPath = path.join(profileRoot, "profile.yaml");
+  const configSource = (await pathExists(configPath))
+    ? await readFile(configPath, "utf8")
+    : "";
+  const soulSource = (await pathExists(soulPath))
+    ? await readFile(soulPath, "utf8")
+    : "";
+  const metadataSource = (await pathExists(profileMetadataPath))
+    ? await readFile(profileMetadataPath, "utf8")
+    : "";
+  const safeConfig = safeHermesConfiguration(configSource, profileRoot);
+  const modelConfig = safeConfig.model || {};
+  const agentConfig = safeConfig.agent || {};
+  const delegationConfig = safeConfig.delegation || {};
+  const profileDescription =
+    readYamlScalar(frontmatterBlock(metadataSource) || metadataSource, "description") ||
+    cleanMarkdownText(soulSource).slice(0, 220) ||
+    "使用 Hermes Profile、SOUL.md 与委派设置定义的本地 Agent。";
+  const displayName =
+    readYamlScalar(frontmatterBlock(metadataSource) || metadataSource, "displayName") ||
+    readYamlScalar(frontmatterBlock(metadataSource) || metadataSource, "name") ||
+    (isDefault ? "Hermes 默认 Agent" : profileName);
+  const virtualPath = "配置摘要.json";
+  const virtualFiles = new Map([
+    [
+      virtualPath,
+      `${JSON.stringify(safeConfig, null, 2)}\n`,
+    ],
+  ]);
+  const allowedFiles = new Set();
+  for (const fileName of ["SOUL.md", "profile.yaml", "AGENTS.md"]) {
+    if (await pathExists(path.join(profileRoot, fileName))) {
+      allowedFiles.add(fileName);
+    }
+  }
+  const primaryFilePath = allowedFiles.has("SOUL.md")
+    ? "SOUL.md"
+    : virtualPath;
+  const referenceStats = await stat(
+    (await pathExists(configPath)) ? configPath : profileRoot,
+  );
+  return {
+    id: capabilityId("hermes", profileRoot),
+    productId: "hermes",
+    productName: "Hermes Agent",
+    productShortName: "HM",
+    productColor: "#e4b86a",
+    kind: "agent-profile",
+    kindLabel: isDefault ? "默认 Agent" : "Agent Profile",
+    name: profileName,
+    displayName,
+    description: profileDescription,
+    profession: "",
+    version: "",
+    tags: [
+      "SOUL.md",
+      delegationConfig.orchestrator_enabled ? "可委派" : "",
+    ].filter(Boolean),
+    members: [],
+    memberCount: 0,
+    fileCount: allowedFiles.size + virtualFiles.size,
+    connectorCount: 0,
+    skillCount: await countDirectSkillDirectories(
+      path.join(profileRoot, "skills"),
+    ),
+    model: [modelConfig.provider, modelConfig.default]
+      .filter(Boolean)
+      .join(" / "),
+    maxTurns: agentConfig.max_turns || null,
+    delegation: {
+      enabled: Boolean(delegationConfig.orchestrator_enabled),
+      maxConcurrentChildren:
+        Number(delegationConfig.max_concurrent_children) || null,
+      maxSpawnDepth: Number(delegationConfig.max_spawn_depth) || null,
+    },
+    sourcePath: compactHome(profileRoot),
+    primaryFilePath,
+    modifiedAt: referenceStats.mtime.toISOString(),
+    rootPath: profileRoot,
+    allowedFiles,
+    virtualFiles,
+  };
+}
+
+export async function scanHermesProfiles(homeDirectory = HOME_DIRECTORY) {
+  const hermesRoot = path.join(homeDirectory, HERMES_HOME_RELATIVE_PATH);
+  if (!(await pathExists(hermesRoot))) {
+    return {
+      id: "hermes",
+      name: "Hermes Agent",
+      shortName: "HM",
+      color: "#e4b86a",
+      kindLabel: "Agent Profile",
+      sourcePath: compactHome(hermesRoot),
+      available: false,
+      catalogCount: 0,
+      itemCount: 0,
+      memberCount: 0,
+      items: [],
+    };
+  }
+
+  const items = [
+    await createHermesProfileCapability(hermesRoot, "default", true),
+  ];
+  const profilesRoot = path.join(hermesRoot, "profiles");
+  if (await pathExists(profilesRoot)) {
+    const profileEntries = (
+      await readdir(profilesRoot, { withFileTypes: true })
+    )
+      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+      .sort((left, right) => left.name.localeCompare(right.name));
+    for (const profileEntry of profileEntries) {
+      items.push(
+        await createHermesProfileCapability(
+          path.join(profilesRoot, profileEntry.name),
+          profileEntry.name,
+          false,
+        ),
+      );
+    }
+  }
+
+  return {
+    id: "hermes",
+    name: "Hermes Agent",
+    shortName: "HM",
+    color: "#e4b86a",
+    kindLabel: "Agent Profile",
+    sourcePath: compactHome(hermesRoot),
+    available: true,
+    catalogCount: items.length,
+    itemCount: items.length,
+    memberCount: 0,
+    items,
+  };
+}
+
+async function getCapabilityProducts(force = false) {
+  if (
+    !force &&
+    cachedCapabilityProducts &&
+    Date.now() - cachedCapabilityProductsAt < CAPABILITY_CACHE_TTL
+  ) {
+    return cachedCapabilityProducts;
+  }
+  const products = await Promise.all([
+    scanWorkBuddyExperts(),
+    scanHermesProfiles(),
+  ]);
+  cachedCapabilityProducts = products;
+  cachedCapabilityProductsAt = Date.now();
+  return products;
+}
+
+export async function scanCapabilityCatalog(
+  homeDirectory = HOME_DIRECTORY,
+  { force = false } = {},
+) {
+  const products =
+    homeDirectory === HOME_DIRECTORY
+      ? await getCapabilityProducts(force)
+      : await Promise.all([
+          scanWorkBuddyExperts(homeDirectory),
+          scanHermesProfiles(homeDirectory),
+        ]);
+  const availableProducts = products.filter((product) => product.available);
+  return {
+    products: availableProducts.map((product) => ({
+      ...product,
+      items: product.items.map(publicCapability),
+    })),
+    totals: {
+      products: availableProducts.length,
+      profiles: availableProducts.reduce(
+        (sum, product) => sum + product.itemCount,
+        0,
+      ),
+      members: availableProducts.reduce(
+        (sum, product) => sum + product.memberCount,
+        0,
+      ),
+    },
+    scannedAt: new Date().toISOString(),
+  };
+}
+
+async function resolveCapability(capabilityIdValue) {
+  if (!/^[a-f0-9]{20}$/u.test(String(capabilityIdValue || ""))) return null;
+  const products = await getCapabilityProducts();
+  for (const product of products) {
+    const capability = product.items.find(
+      (item) => item.id === capabilityIdValue,
+    );
+    if (capability) return capability;
+  }
+  return null;
+}
+
+function isSensitiveCapabilityPath(relativePath) {
+  const normalizedPath = String(relativePath || "")
+    .replaceAll("\\", "/")
+    .toLowerCase();
+  const segments = normalizedPath.split("/");
+  const filename = segments.at(-1) || "";
+  return (
+    segments.includes(".git") ||
+    filename === ".env" ||
+    filename.startsWith(".env.") ||
+    filename === "auth.json" ||
+    filename === "credentials.json" ||
+    /(?:^|[-_.])(?:api[-_.]?key|token|secret|credentials?|session|auth(?:entication)?)(?:[-_.]|$)/u.test(
+      filename,
+    )
+  );
+}
+
+async function listCapabilityFiles(capability) {
+  if (capability.productId === "workbuddy") {
+    const listing = await listSkillFiles(capability.rootPath);
+    const entries = listing.entries.filter(
+      (entry) => !isSensitiveCapabilityPath(entry.path),
+    );
+    return {
+      ...listing,
+      entries,
+      fileCount: entries.filter((entry) => entry.type === "file").length,
+      directoryCount: entries.filter((entry) => entry.type === "directory")
+        .length,
+    };
+  }
+  const entries = [];
+  for (const filePath of capability.allowedFiles) {
+    const fileStats = await stat(path.join(capability.rootPath, filePath));
+    entries.push({
+      path: filePath,
+      name: path.basename(filePath),
+      type: "file",
+      size: fileStats.size,
+      modifiedAt: fileStats.mtime.toISOString(),
+      language: languageForFile(filePath),
+      linkTarget: null,
+    });
+  }
+  for (const [filePath, content] of capability.virtualFiles) {
+    entries.push({
+      path: filePath,
+      name: filePath,
+      type: "file",
+      size: Buffer.byteLength(content),
+      modifiedAt: capability.modifiedAt,
+      language: "json",
+      linkTarget: null,
+    });
+  }
+  entries.sort((left, right) => {
+    if (left.path === capability.primaryFilePath) return -1;
+    if (right.path === capability.primaryFilePath) return 1;
+    return left.path.localeCompare(right.path);
+  });
+  return {
+    entries,
+    fileCount: entries.length,
+    directoryCount: 0,
+    truncated: false,
+  };
+}
+
+async function readCapabilityFile(capability, requestedPath) {
+  const normalizedPath = String(requestedPath || "")
+    .split(path.sep)
+    .join("/");
+  if (isSensitiveCapabilityPath(normalizedPath)) {
+    throw new Error("为保护本机隐私，这类认证或会话文件不会开放预览。");
+  }
+  if (capability.virtualFiles.has(normalizedPath)) {
+    const content = capability.virtualFiles.get(normalizedPath);
+    return {
+      path: normalizedPath,
+      name: path.basename(normalizedPath),
+      size: Buffer.byteLength(content),
+      modifiedAt: capability.modifiedAt,
+      language: languageForFile(normalizedPath),
+      mimeType: null,
+      previewKind: "text",
+      content,
+      previewable: true,
+      reason: null,
+    };
+  }
+  if (
+    capability.allowedFiles &&
+    !capability.allowedFiles.has(normalizedPath)
+  ) {
+    throw new Error("这个 Agent 配置文件未开放预览。");
+  }
+  return readSkillFileContent(capability.rootPath, normalizedPath);
+}
+
 async function pathExists(inputPath) {
   try {
     await lstat(inputPath);
@@ -337,6 +1038,8 @@ async function readJsonFile(filePath, fallback) {
 
 function sanitizeConfig(input) {
   const rawAgents = Array.isArray(input?.agents) ? input.agents.slice(0, 24) : [];
+  const inputVersion = Number(input?.version) || 1;
+  const catalogById = new Map(AGENT_CATALOG.map((agent) => [agent.id, agent]));
   const seenIds = new Set();
   const agents = rawAgents
     .map((agent, index) => {
@@ -368,6 +1071,17 @@ function sanitizeConfig(input) {
         ),
       ];
 
+      const suppliedColor = /^#[0-9a-f]{6}$/i.test(String(agent?.color))
+        ? String(agent.color).toLowerCase()
+        : "";
+      const legacyColor = LEGACY_AGENT_COLORS.get(id);
+      const catalogColor = catalogById.get(id)?.color;
+      const shouldMigrateLegacyColor =
+        inputVersion < 2 &&
+        legacyColor &&
+        catalogColor &&
+        suppliedColor === legacyColor.toLowerCase();
+
       return {
         id,
         name,
@@ -376,9 +1090,9 @@ function sanitizeConfig(input) {
             .trim()
             .slice(0, 3)
             .toUpperCase() || "AG",
-        color: /^#[0-9a-f]{6}$/i.test(String(agent?.color))
-          ? String(agent.color)
-          : ["#d7f56d", "#ff7a4d", "#74c7ec", "#f6ca45"][index % 4],
+        color: shouldMigrateLegacyColor
+          ? catalogColor
+          : suppliedColor || AGENT_FALLBACK_COLORS[index % AGENT_FALLBACK_COLORS.length],
         paths,
       };
     })
@@ -399,12 +1113,28 @@ function sanitizeConfig(input) {
       : defaultVisibleIds.length > 0
         ? defaultVisibleIds
         : finalAgents.slice(0, 2).map((agent) => agent.id);
+  const dismissedAgentIds = Array.isArray(input?.dismissedAgentIds)
+    ? [
+        ...new Set(
+          input.dismissedAgentIds
+            .map((id) =>
+              String(id)
+                .toLowerCase()
+                .replace(/[^a-z0-9-]+/g, "-")
+                .replace(/^-+|-+$/g, "")
+                .slice(0, 32),
+            )
+            .filter((id) => id && !configuredIds.has(id)),
+        ),
+      ]
+    : [];
 
   return {
-    version: 1,
+    version: 3,
     syncMode: input?.syncMode === "symlink" ? "symlink" : "copy",
     agents: finalAgents,
     visibleAgentIds,
+    dismissedAgentIds,
   };
 }
 
@@ -417,7 +1147,10 @@ export async function loadConfig() {
     const detectedAgents = [];
     for (const agent of AGENT_CATALOG) {
       const detected = (
-        await Promise.all(agent.paths.map((agentPath) => pathExists(expandHome(agentPath))))
+        await Promise.all([
+          ...agent.paths,
+          ...(agent.id === "smartorder" ? ["~/.smartorder/config.toml"] : []),
+        ].map((agentPath) => pathExists(expandHome(agentPath))))
       ).some(Boolean);
       if (detected) detectedAgents.push(agent);
     }
@@ -428,11 +1161,15 @@ export async function loadConfig() {
   }
 
   const configuredIds = new Set(config.agents.map((agent) => agent.id));
+  const dismissedAgentIds = new Set(config.dismissedAgentIds);
   const newlyDetected = [];
   for (const agent of AGENT_CATALOG) {
-    if (configuredIds.has(agent.id)) continue;
+    if (configuredIds.has(agent.id) || dismissedAgentIds.has(agent.id)) continue;
     const detected = (
-      await Promise.all(agent.paths.map((agentPath) => pathExists(expandHome(agentPath))))
+      await Promise.all([
+        ...agent.paths,
+        ...(agent.id === "smartorder" ? ["~/.smartorder/config.toml"] : []),
+      ].map((agentPath) => pathExists(expandHome(agentPath))))
     ).some(Boolean);
     if (detected) newlyDetected.push(agent);
   }
@@ -448,17 +1185,19 @@ async function saveConfig(input) {
   const temporaryFile = `${CONFIG_FILE}.tmp-${process.pid}`;
   await writeFile(temporaryFile, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   await rename(temporaryFile, CONFIG_FILE);
-  cachedScan = null;
+  invalidateScanCache();
   return config;
 }
 
-async function discoverSkillDirectories(rootPath, maxDepth = 4) {
+async function discoverSkillDirectories(rootPath, maxDepth = 4, strictBoundary = false) {
   const discovered = [];
+  const boundary = strictBoundary ? await realpath(rootPath) : null;
 
   async function visit(currentPath, depth) {
     if (depth > maxDepth) return;
     let entries;
     try {
+      if (boundary && !isWithin(boundary, await realpath(currentPath))) return;
       entries = await readdir(currentPath, { withFileTypes: true });
     } catch (error) {
       if (["ENOENT", "EACCES", "EPERM"].includes(error?.code)) return;
@@ -495,7 +1234,65 @@ async function discoverSkillDirectories(rootPath, maxDepth = 4) {
   return discovered;
 }
 
-async function fingerprintDirectory(directoryPath) {
+async function loadFingerprintCache() {
+  if (fingerprintCacheLoaded) return;
+  if (fingerprintCacheLoadPromise) return fingerprintCacheLoadPromise;
+
+  fingerprintCacheLoadPromise = (async () => {
+    const stored = await readJsonFile(FINGERPRINT_CACHE_FILE, null);
+    if (stored?.version === 1 && Array.isArray(stored.entries)) {
+      for (const entry of stored.entries.slice(-FINGERPRINT_CACHE_LIMIT)) {
+        if (
+          typeof entry?.path === "string" &&
+          typeof entry?.snapshot === "string" &&
+          typeof entry?.fingerprint?.hash === "string"
+        ) {
+          fingerprintCache.set(entry.path, {
+            snapshot: entry.snapshot,
+            fingerprint: entry.fingerprint,
+            usedAt: Number(entry.usedAt) || 0,
+          });
+        }
+      }
+    }
+    fingerprintCacheLoaded = true;
+  })().finally(() => {
+    fingerprintCacheLoadPromise = null;
+  });
+
+  return fingerprintCacheLoadPromise;
+}
+
+async function persistFingerprintCache() {
+  if (!fingerprintCacheDirty) return;
+  const entries = [...fingerprintCache.entries()]
+    .map(([cachePath, entry]) => ({ path: cachePath, ...entry }))
+    .sort((left, right) => left.usedAt - right.usedAt)
+    .slice(-FINGERPRINT_CACHE_LIMIT);
+  const retainedPaths = new Set(entries.map((entry) => entry.path));
+  for (const cachePath of fingerprintCache.keys()) {
+    if (!retainedPaths.has(cachePath)) fingerprintCache.delete(cachePath);
+  }
+
+  await mkdir(STATE_DIRECTORY, { recursive: true });
+  const temporaryFile = `${FINGERPRINT_CACHE_FILE}.tmp-${process.pid}`;
+  await writeFile(
+    temporaryFile,
+    `${JSON.stringify({ version: 1, entries })}\n`,
+    "utf8",
+  );
+  await rename(temporaryFile, FINGERPRINT_CACHE_FILE);
+  fingerprintCacheDirty = false;
+}
+
+async function fingerprintDirectory(
+  directoryPath,
+  { persistentCache = false, force = false } = {},
+) {
+  if (persistentCache) await loadFingerprintCache();
+
+  const metadataHash = createHash("sha256");
+  const records = [];
   const hash = createHash("sha256");
   let fileCount = 0;
   let byteCount = 0;
@@ -532,43 +1329,99 @@ async function fingerprintDirectory(directoryPath) {
       latestModified = Math.max(latestModified, entryStats.mtimeMs);
 
       if (entryStats.isDirectory()) {
+        metadataHash.update(
+          `directory:${relativePath}:${entryStats.mtimeMs};`,
+        );
         await visit(absolutePath, relativePath);
       } else if (entryStats.isSymbolicLink()) {
+        let linkTarget = "";
+        try {
+          linkTarget = await readlink(absolutePath);
+        } catch {
+          linkTarget = "链接目标不可用";
+        }
         fileCount += 1;
-        hash.update(`link:${relativePath}:${await readlink(absolutePath)}`);
+        metadataHash.update(
+          `link:${relativePath}:${entryStats.mtimeMs}:${linkTarget};`,
+        );
+        records.push({
+          type: "link",
+          relativePath,
+          linkTarget,
+        });
       } else if (entryStats.isFile()) {
         fileCount += 1;
         byteCount += entryStats.size;
-        hash.update(`file:${relativePath}:${entryStats.size}:`);
-        if (entryStats.size <= 512_000 && byteCount <= 4_000_000) {
-          await new Promise((resolve) => {
-            const stream = createReadStream(absolutePath);
-            stream.on("data", (chunk) => hash.update(chunk));
-            stream.on("error", () => resolve());
-            stream.on("end", resolve);
-          });
-        } else {
-          hash.update(String(entryStats.mtimeMs));
-        }
+        metadataHash.update(
+          `file:${relativePath}:${entryStats.size}:${entryStats.mtimeMs};`,
+        );
+        records.push({
+          type: "file",
+          absolutePath,
+          relativePath,
+          size: entryStats.size,
+          modifiedAt: entryStats.mtimeMs,
+        });
       }
     }
   }
 
   await visit(directoryPath);
-  return {
+  metadataHash.update(`truncated:${truncated};`);
+  const snapshot = metadataHash.digest("hex");
+  const cached = fingerprintCache.get(directoryPath);
+  if (!force && cached?.snapshot === snapshot) {
+    cached.usedAt = Date.now();
+    return cached.fingerprint;
+  }
+
+  let hashedByteCount = 0;
+  for (const record of records) {
+    if (record.type === "link") {
+      hash.update(`link:${record.relativePath}:${record.linkTarget}`);
+      continue;
+    }
+
+    hashedByteCount += record.size;
+    hash.update(`file:${record.relativePath}:${record.size}:`);
+    if (record.size <= 512_000 && hashedByteCount <= 4_000_000) {
+      await new Promise((resolve) => {
+        const stream = createReadStream(record.absolutePath);
+        stream.on("data", (chunk) => hash.update(chunk));
+        stream.on("error", () => resolve());
+        stream.on("end", resolve);
+      });
+    } else {
+      hash.update(String(record.modifiedAt));
+    }
+  }
+
+  const fingerprint = {
     hash: hash.digest("hex"),
     fileCount,
     byteCount,
     latestModified,
     truncated,
   };
+  fingerprintCache.set(directoryPath, {
+    snapshot,
+    fingerprint,
+    usedAt: Date.now(),
+  });
+  fingerprintCacheDirty = true;
+  return fingerprint;
 }
 
-async function describeSkillDirectory(skillPath, agent, rootPath) {
+async function describeSkillDirectory(
+  skillPath,
+  agent,
+  rootPath,
+  fingerprintOptions,
+) {
   const manifestPath = path.join(skillPath, "SKILL.md");
   const manifest = await readFile(manifestPath, "utf8");
   const parsed = parseFrontmatter(manifest, path.basename(skillPath));
-  const fingerprint = await fingerprintDirectory(skillPath);
+  const fingerprint = await fingerprintDirectory(skillPath, fingerprintOptions);
   const linkStats = await lstat(skillPath);
   let linkTarget = null;
   if (linkStats.isSymbolicLink()) {
@@ -595,7 +1448,6 @@ async function describeSkillDirectory(skillPath, agent, rootPath) {
     displayName: parsed.displayName,
     description: parsed.description,
     tags: parsed.tags,
-    excerpt: parsed.body.slice(0, 1200),
     hash: fingerprint.hash,
     shortHash: fingerprint.hash.slice(0, 8),
     fileCount: fingerprint.fileCount,
@@ -609,9 +1461,10 @@ async function describeSkillDirectory(skillPath, agent, rootPath) {
   };
 }
 
-async function readHistory(limit = 16) {
+async function readHistory(limit = 16, homeDirectory = HOME_DIRECTORY) {
   try {
-    const content = await readFile(HISTORY_FILE, "utf8");
+    const historyPath = homeDirectory === HOME_DIRECTORY ? HISTORY_FILE : path.join(homeDirectory, ".agent-skill-manager", "history.jsonl");
+    const content = await readFile(historyPath, "utf8");
     return content
       .trim()
       .split("\n")
@@ -632,56 +1485,103 @@ async function readHistory(limit = 16) {
   }
 }
 
-export async function scanAll(configInput) {
+export async function scanAll(
+  configInput,
+  { persistentCache = false, forceFingerprints = false, homeDirectory = HOME_DIRECTORY } = {},
+) {
   const config = sanitizeConfig(configInput);
   const visibleAgentIds = new Set(config.visibleAgentIds);
   const visibleAgents = config.agents.filter((agent) =>
     visibleAgentIds.has(agent.id),
   );
-  const agentResults = [];
-  const allInstances = [];
-
-  for (const agent of config.agents) {
-    const roots = [];
-    for (const configuredPath of agent.paths) {
-      const rootPath = expandHome(configuredPath);
-      const available = await pathExists(rootPath);
-      const skillDirectories = available
-        ? await discoverSkillDirectories(rootPath)
-        : [];
-      const instances = (
-        await Promise.all(
-          skillDirectories.map(async (skillPath) => {
-            try {
-              return await describeSkillDirectory(skillPath, agent, rootPath);
-            } catch (error) {
-              return {
-                error: error?.message || "读取失败",
-                agentId: agent.id,
-                path: compactHome(skillPath),
-              };
-            }
-          }),
-        )
-      ).filter((instance) => !instance.error);
-      allInstances.push(...instances);
-      roots.push({
-        configuredPath,
-        path: compactHome(rootPath),
-        available,
-        skillCount: instances.length,
-      });
-    }
-    agentResults.push({
-      ...agent,
-      roots,
-      available: roots.some((root) => root.available),
-      visible: visibleAgentIds.has(agent.id),
-      installationCount: allInstances.filter(
-        (instance) => instance.agentId === agent.id,
-      ).length,
-    });
-  }
+  const agentScans = await Promise.all(
+    config.agents.map(async (agent) => {
+      const visible = visibleAgentIds.has(agent.id);
+      const smartOrder = agent.id === "smartorder" ? await scanSmartOrder(homeDirectory) : null;
+      const scanSources = [
+        ...agent.paths.map((sourcePath) => ({ path: sourcePath, readOnly: false, label: "" })),
+        ...(smartOrder?.skillSources || []),
+      ].filter((source, index, list) => list.findIndex((item) => expandHome(item.path) === expandHome(source.path)) === index);
+      const rootScans = await Promise.all(
+        scanSources.map(async (source) => {
+          const configuredPath = source.path;
+          const rootPath = expandHome(configuredPath);
+          const available = await pathExists(rootPath);
+          const skillDirectories = (available
+            ? await discoverSkillDirectories(rootPath, 4, agent.id === "smartorder")
+            : []).filter((skillPath) => !(smartOrder?.disabledSkillPaths || []).some((disabled) =>
+              disabled === skillPath || disabled === path.join(skillPath, "SKILL.md")));
+          const instances = visible
+            ? (
+                await Promise.all(
+                  skillDirectories.map(async (skillPath) => {
+                    try {
+                      const instance = await describeSkillDirectory(
+                        skillPath,
+                        agent,
+                        rootPath,
+                        {
+                          persistentCache,
+                          force: forceFingerprints,
+                        },
+                      );
+                      if (agent.id === "smartorder") {
+                        instance.readOnly = source.readOnly || path.relative(rootPath, skillPath).split(path.sep).includes(".system");
+                        instance.sourceLabel = source.label || (instance.readOnly ? "客户端内置" : "本地技能");
+                      }
+                      return instance;
+                    } catch (error) {
+                      return {
+                        error: error?.message || "读取失败",
+                        agentId: agent.id,
+                        path: compactHome(skillPath),
+                      };
+                    }
+                  }),
+                )
+              ).filter((instance) => !instance.error)
+            : [];
+          return {
+            root: {
+              configuredPath,
+              path: compactHome(rootPath),
+              available,
+              skillCount: skillDirectories.length,
+              ...(source.readOnly ? { readOnly: true, sourceLabel: source.label } : {}),
+            },
+            instances,
+            directoryNames: skillDirectories.map((skillPath) =>
+              path.basename(skillPath).trim().toLocaleLowerCase(),
+            ),
+          };
+        }),
+      );
+      const instances = rootScans.flatMap((rootScan) => rootScan.instances);
+      const skillNames = visible
+        ? instances.map((instance) =>
+            instance.name.trim().toLocaleLowerCase(),
+          )
+        : rootScans.flatMap((rootScan) => rootScan.directoryNames);
+      return {
+        agent: {
+          ...agent,
+          roots: rootScans.map((rootScan) => rootScan.root),
+          available: rootScans.some((rootScan) => rootScan.root.available),
+          visible,
+          ...(smartOrder ? { warnings: smartOrder.warnings } : {}),
+          installationCount: rootScans.reduce(
+            (total, rootScan) => total + rootScan.root.skillCount,
+            0,
+          ),
+          skillCount: new Set(skillNames).size,
+        },
+        instances,
+      };
+    }),
+  );
+  const agentResults = agentScans.map((agentScan) => agentScan.agent);
+  const allInstances = agentScans.flatMap((agentScan) => agentScan.instances);
+  if (persistentCache) await persistFingerprintCache();
 
   const groups = new Map();
   for (const instance of allInstances) {
@@ -726,7 +1626,6 @@ export async function scanAll(configInput) {
           0,
           6,
         ),
-        excerpt: newest.excerpt,
         status,
         conflict,
         coverage,
@@ -740,26 +1639,15 @@ export async function scanAll(configInput) {
         instances: sortedInstances.map((instance) => {
           const publicInstance = { ...instance };
           delete publicInstance.absolutePath;
+          delete publicInstance.description;
+          delete publicInstance.tags;
+          delete publicInstance.linkTarget;
+          delete publicInstance.truncated;
           return publicInstance;
         }),
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
-
-  const skillsPerAgent = new Map(
-    config.agents.map((agent) => [
-      agent.id,
-      new Set(
-        allInstances
-          .filter((instance) => instance.agentId === agent.id)
-          .map((instance) => instance.name.trim().toLocaleLowerCase()),
-      ).size,
-    ]),
-  );
-
-  for (const agent of agentResults) {
-    agent.skillCount = skillsPerAgent.get(agent.id) || 0;
-  }
 
   return {
     agents: agentResults,
@@ -778,18 +1666,87 @@ export async function scanAll(configInput) {
         ? skills.reduce((sum, skill) => sum + skill.coverage, 0) / skills.length
         : 0,
     },
-    history: await readHistory(),
+    history: await readHistory(16, homeDirectory),
     scannedAt: new Date().toISOString(),
   };
 }
 
+async function scanInWorker(config, forceFingerprints) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./scan-worker.mjs", import.meta.url), {
+      workerData: { config, forceFingerprints },
+    });
+    let settled = false;
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      callback(value);
+      void worker.terminate();
+    };
+    worker.once("message", (message) => {
+      if (message?.ok) {
+        finish(resolve, message.scan);
+      } else {
+        const error = new Error(message?.error || "后台扫描失败。");
+        if (message?.stack) error.stack = message.stack;
+        finish(reject, error);
+      }
+    });
+    worker.once("error", (error) => finish(reject, error));
+    worker.once("exit", (code) => {
+      if (!settled) {
+        finish(reject, new Error(`后台扫描线程异常退出（${code}）。`));
+      }
+    });
+  });
+}
+
 async function getScan(force = false) {
-  if (!force && cachedScan && Date.now() - cachedScanAt < 10_000) {
+  if (
+    !force &&
+    cachedScan &&
+    Date.now() - cachedScanAt < SCAN_CACHE_TTL
+  ) {
     return cachedScan;
   }
-  cachedScan = await scanAll(await loadConfig());
-  cachedScanAt = Date.now();
-  return cachedScan;
+
+  const generation = scanGeneration;
+  if (
+    pendingScan?.generation === generation &&
+    (!force || pendingScan.force)
+  ) {
+    return pendingScan.promise;
+  }
+
+  const promise = (async () => {
+    const config = await loadConfig();
+    let scan;
+    try {
+      scan = await scanInWorker(config, force);
+    } catch (workerError) {
+      console.warn(
+        `[skills] 后台扫描不可用，已回退到当前进程：${
+          workerError?.message || workerError
+        }`,
+      );
+      scan = await scanAll(config, {
+        persistentCache: true,
+        forceFingerprints: force,
+      });
+    }
+    if (generation === scanGeneration) {
+      cachedScan = scan;
+      cachedScanAt = Date.now();
+    }
+    return scan;
+  })();
+  pendingScan = { generation, force, promise };
+
+  try {
+    return await promise;
+  } finally {
+    if (pendingScan?.promise === promise) pendingScan = null;
+  }
 }
 
 function resolveInstance(scan, instanceId) {
@@ -848,6 +1805,10 @@ function languageForFile(filePath) {
   );
 }
 
+function imageMimeTypeForFile(filePath) {
+  return IMAGE_MIME_TYPES.get(path.extname(filePath).toLowerCase()) || null;
+}
+
 function bufferLooksLikeText(buffer) {
   if (buffer.length === 0) return true;
   const sample = buffer.subarray(0, Math.min(buffer.length, 8_192));
@@ -857,6 +1818,33 @@ function bufferLooksLikeText(buffer) {
     if (byte < 7 || (byte > 13 && byte < 32)) suspicious += 1;
   }
   return suspicious / sample.length < 0.05;
+}
+
+async function resolveSkillFile(directoryPath, requestedPath) {
+  const relativePath = String(requestedPath || "").split("\\").join("/");
+  if (
+    !relativePath ||
+    relativePath.includes("\0") ||
+    path.posix.isAbsolute(relativePath) ||
+    relativePath === ".." ||
+    relativePath.startsWith("../")
+  ) {
+    throw new Error("文件路径无效。");
+  }
+
+  const rootPath = await realpath(directoryPath);
+  const candidatePath = path.resolve(directoryPath, relativePath);
+  if (!isWithin(path.resolve(directoryPath), candidatePath)) {
+    throw new Error("不能读取 Skill 目录之外的文件。");
+  }
+
+  const resolvedFile = await realpath(candidatePath);
+  if (!isWithin(rootPath, resolvedFile)) {
+    throw new Error("不能读取指向 Skill 目录之外的文件。");
+  }
+  const fileStats = await stat(resolvedFile);
+  if (!fileStats.isFile()) throw new Error("所选路径不是文件。");
+  return { relativePath, resolvedFile, fileStats };
 }
 
 export async function listSkillFiles(directoryPath) {
@@ -954,29 +1942,11 @@ export async function listSkillFiles(directoryPath) {
 }
 
 export async function readSkillFileContent(directoryPath, requestedPath) {
-  const relativePath = String(requestedPath || "").split("\\").join("/");
-  if (
-    !relativePath ||
-    relativePath.includes("\0") ||
-    path.posix.isAbsolute(relativePath) ||
-    relativePath === ".." ||
-    relativePath.startsWith("../")
-  ) {
-    throw new Error("文件路径无效。");
-  }
-
-  const rootPath = await realpath(directoryPath);
-  const candidatePath = path.resolve(directoryPath, relativePath);
-  if (!isWithin(path.resolve(directoryPath), candidatePath)) {
-    throw new Error("不能读取 Skill 目录之外的文件。");
-  }
-
-  const resolvedFile = await realpath(candidatePath);
-  if (!isWithin(rootPath, resolvedFile)) {
-    throw new Error("不能读取指向 Skill 目录之外的文件。");
-  }
-  const fileStats = await stat(resolvedFile);
-  if (!fileStats.isFile()) throw new Error("所选路径不是文件。");
+  const { relativePath, resolvedFile, fileStats } = await resolveSkillFile(
+    directoryPath,
+    requestedPath,
+  );
+  const imageMimeType = imageMimeTypeForFile(relativePath);
 
   const base = {
     path: relativePath,
@@ -984,12 +1954,43 @@ export async function readSkillFileContent(directoryPath, requestedPath) {
     size: fileStats.size,
     modifiedAt: fileStats.mtime.toISOString(),
     language: languageForFile(relativePath),
+    mimeType: imageMimeType,
+    previewKind: imageMimeType ? "image" : "text",
   };
+  if (imageMimeType) {
+    if (fileStats.size > SKILL_IMAGE_PREVIEW_LIMIT) {
+      return {
+        ...base,
+        content: null,
+        previewable: false,
+        previewKind: "unavailable",
+        reason: `图片超过 ${Math.round(SKILL_IMAGE_PREVIEW_LIMIT / 1_000_000)} MB，未在界面中加载。`,
+      };
+    }
+    if (imageMimeType !== "image/svg+xml") {
+      return {
+        ...base,
+        content: null,
+        previewable: true,
+        reason: null,
+      };
+    }
+    if (fileStats.size > SKILL_CONTENT_LIMIT) {
+      return {
+        ...base,
+        content: null,
+        previewable: true,
+        reason: null,
+      };
+    }
+  }
+
   if (fileStats.size > SKILL_CONTENT_LIMIT) {
     return {
       ...base,
       content: null,
       previewable: false,
+      previewKind: "unavailable",
       reason: `文件超过 ${Math.round(SKILL_CONTENT_LIMIT / 1_000_000)} MB，未在界面中加载。`,
     };
   }
@@ -1000,6 +2001,7 @@ export async function readSkillFileContent(directoryPath, requestedPath) {
       ...base,
       content: null,
       previewable: false,
+      previewKind: "unavailable",
       reason: "这是二进制文件，暂不支持文本预览。",
     };
   }
@@ -1008,6 +2010,381 @@ export async function readSkillFileContent(directoryPath, requestedPath) {
     content: buffer.toString("utf8"),
     previewable: true,
     reason: null,
+  };
+}
+
+function validateSvgPreview(buffer) {
+  if (!bufferLooksLikeText(buffer)) {
+    throw new Error("SVG 文件不是有效的文本格式。");
+  }
+  const source = buffer.toString("utf8");
+  if (!/<svg(?:\s|>)/i.test(source)) {
+    throw new Error("文件扩展名是 SVG，但没有找到 SVG 根元素。");
+  }
+  const unsafeMarkup =
+    /<\s*(?:script|foreignObject|iframe|object|embed|audio|video)\b/i;
+  const eventHandler = /\b(?:on[a-z]+)\s*=/i;
+  const referenceValues = [
+    ...source.matchAll(
+      /\b(?:href|xlink:href)\s*=\s*["']([^"']*)["']/gi,
+    ),
+  ].map((match) => match[1].trim());
+  const cssUrlValues = [
+    ...source.matchAll(/url\s*\(\s*["']?([^'")]+)["']?\s*\)/gi),
+  ].map((match) => match[1].trim());
+  const hasExternalReference = [...referenceValues, ...cssUrlValues].some(
+    (value) => value && !value.startsWith("#") && !value.startsWith("data:image/"),
+  );
+  if (
+    unsafeMarkup.test(source) ||
+    eventHandler.test(source) ||
+    /@import\b/i.test(source) ||
+    hasExternalReference
+  ) {
+    throw new Error("SVG 包含脚本、外部资源或其他不安全内容，已阻止渲染。");
+  }
+}
+
+export async function readSkillImageAsset(directoryPath, requestedPath) {
+  const { relativePath, resolvedFile, fileStats } = await resolveSkillFile(
+    directoryPath,
+    requestedPath,
+  );
+  const mimeType = imageMimeTypeForFile(relativePath);
+  if (!mimeType) throw new Error("该文件不是支持预览的图片格式。");
+  if (fileStats.size > SKILL_IMAGE_PREVIEW_LIMIT) {
+    throw new Error(
+      `图片超过 ${Math.round(SKILL_IMAGE_PREVIEW_LIMIT / 1_000_000)} MB，无法预览。`,
+    );
+  }
+
+  const buffer = await readFile(resolvedFile);
+  if (mimeType === "image/svg+xml") validateSvgPreview(buffer);
+  return {
+    buffer,
+    mimeType,
+    filename: path.basename(relativePath),
+  };
+}
+
+async function hashFileForDiff(directoryPath, requestedPath) {
+  const { resolvedFile } = await resolveSkillFile(directoryPath, requestedPath);
+  const hash = createHash("sha256");
+  await new Promise((resolve, reject) => {
+    const stream = createReadStream(resolvedFile);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", resolve);
+  });
+  return hash.digest("hex");
+}
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let cursor = 0;
+
+  async function run() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+
+  await Promise.all(
+    Array.from(
+      { length: Math.min(concurrency, Math.max(items.length, 1)) },
+      () => run(),
+    ),
+  );
+  return results;
+}
+
+function diffEntryMetadata(entry) {
+  if (!entry) return null;
+  return {
+    type: entry.type,
+    size: entry.size,
+    modifiedAt: entry.modifiedAt,
+    language: entry.language,
+    mimeType:
+      entry.type === "file" ? imageMimeTypeForFile(entry.path) : null,
+    linkTarget: entry.type === "symlink" ? entry.linkTarget : null,
+  };
+}
+
+export async function compareSkillDirectories(leftDirectory, rightDirectory) {
+  const [leftListing, rightListing] = await Promise.all([
+    listSkillFiles(leftDirectory),
+    listSkillFiles(rightDirectory),
+  ]);
+  const leftEntries = new Map(
+    leftListing.entries
+      .filter((entry) => entry.type !== "directory")
+      .map((entry) => [entry.path, entry]),
+  );
+  const rightEntries = new Map(
+    rightListing.entries
+      .filter((entry) => entry.type !== "directory")
+      .map((entry) => [entry.path, entry]),
+  );
+  const paths = [...new Set([...leftEntries.keys(), ...rightEntries.keys()])].sort(
+    (left, right) => {
+      if (left.toLowerCase() === "skill.md") return -1;
+      if (right.toLowerCase() === "skill.md") return 1;
+      return left.localeCompare(right);
+    },
+  );
+
+  const compared = await mapWithConcurrency(paths, 6, async (entryPath) => {
+    const left = leftEntries.get(entryPath) || null;
+    const right = rightEntries.get(entryPath) || null;
+    let change;
+
+    if (!left) {
+      change = "right-only";
+    } else if (!right) {
+      change = "left-only";
+    } else if (left.type !== right.type) {
+      change = "type-changed";
+    } else if (left.type === "symlink") {
+      change =
+        left.linkTarget === right.linkTarget ? "unchanged" : "modified";
+    } else if (left.size !== right.size) {
+      change = "modified";
+    } else {
+      const [leftHash, rightHash] = await Promise.all([
+        hashFileForDiff(leftDirectory, entryPath),
+        hashFileForDiff(rightDirectory, entryPath),
+      ]);
+      change = leftHash === rightHash ? "unchanged" : "modified";
+    }
+
+    return {
+      path: entryPath,
+      name: path.basename(entryPath),
+      change,
+      left: diffEntryMetadata(left),
+      right: diffEntryMetadata(right),
+    };
+  });
+  const summary = {
+    modified: compared.filter((entry) => entry.change === "modified").length,
+    leftOnly: compared.filter((entry) => entry.change === "left-only").length,
+    rightOnly: compared.filter((entry) => entry.change === "right-only").length,
+    typeChanged: compared.filter((entry) => entry.change === "type-changed")
+      .length,
+    unchanged: compared.filter((entry) => entry.change === "unchanged").length,
+    total: compared.length,
+  };
+
+  return {
+    summary,
+    entries: compared.filter((entry) => entry.change !== "unchanged"),
+    truncated: leftListing.truncated || rightListing.truncated,
+  };
+}
+
+function lineOperations(leftSource, rightSource) {
+  const maxLines = 2_000;
+  const allLeftLines = leftSource === "" ? [] : leftSource.split(/\r?\n/);
+  const allRightLines = rightSource === "" ? [] : rightSource.split(/\r?\n/);
+  const leftLines = allLeftLines.slice(0, maxLines);
+  const rightLines = allRightLines.slice(0, maxLines);
+  const truncated =
+    allLeftLines.length > maxLines || allRightLines.length > maxLines;
+  const columns = rightLines.length + 1;
+  const cellCount = (leftLines.length + 1) * columns;
+  const operations = [];
+
+  if (cellCount <= 1_250_000) {
+    const table = new Uint32Array(cellCount);
+    for (let leftIndex = 1; leftIndex <= leftLines.length; leftIndex += 1) {
+      for (
+        let rightIndex = 1;
+        rightIndex <= rightLines.length;
+        rightIndex += 1
+      ) {
+        const cell = leftIndex * columns + rightIndex;
+        table[cell] =
+          leftLines[leftIndex - 1] === rightLines[rightIndex - 1]
+            ? table[(leftIndex - 1) * columns + rightIndex - 1] + 1
+            : Math.max(
+                table[(leftIndex - 1) * columns + rightIndex],
+                table[leftIndex * columns + rightIndex - 1],
+              );
+      }
+    }
+
+    let leftIndex = leftLines.length;
+    let rightIndex = rightLines.length;
+    while (leftIndex > 0 || rightIndex > 0) {
+      if (
+        leftIndex > 0 &&
+        rightIndex > 0 &&
+        leftLines[leftIndex - 1] === rightLines[rightIndex - 1]
+      ) {
+        operations.push({
+          kind: "context",
+          text: leftLines[leftIndex - 1],
+        });
+        leftIndex -= 1;
+        rightIndex -= 1;
+      } else if (
+        rightIndex > 0 &&
+        (leftIndex === 0 ||
+          table[leftIndex * columns + rightIndex - 1] >
+            table[(leftIndex - 1) * columns + rightIndex])
+      ) {
+        operations.push({
+          kind: "added",
+          text: rightLines[rightIndex - 1],
+        });
+        rightIndex -= 1;
+      } else {
+        operations.push({
+          kind: "removed",
+          text: leftLines[leftIndex - 1],
+        });
+        leftIndex -= 1;
+      }
+    }
+    operations.reverse();
+  } else {
+    let prefixLength = 0;
+    while (
+      prefixLength < leftLines.length &&
+      prefixLength < rightLines.length &&
+      leftLines[prefixLength] === rightLines[prefixLength]
+    ) {
+      operations.push({
+        kind: "context",
+        text: leftLines[prefixLength],
+      });
+      prefixLength += 1;
+    }
+    let leftSuffix = leftLines.length - 1;
+    let rightSuffix = rightLines.length - 1;
+    const suffix = [];
+    while (
+      leftSuffix >= prefixLength &&
+      rightSuffix >= prefixLength &&
+      leftLines[leftSuffix] === rightLines[rightSuffix]
+    ) {
+      suffix.unshift({ kind: "context", text: leftLines[leftSuffix] });
+      leftSuffix -= 1;
+      rightSuffix -= 1;
+    }
+    for (let index = prefixLength; index <= leftSuffix; index += 1) {
+      operations.push({ kind: "removed", text: leftLines[index] });
+    }
+    for (let index = prefixLength; index <= rightSuffix; index += 1) {
+      operations.push({ kind: "added", text: rightLines[index] });
+    }
+    operations.push(...suffix);
+  }
+
+  let leftNumber = 0;
+  let rightNumber = 0;
+  const numbered = operations.map((operation) => {
+    if (operation.kind !== "added") leftNumber += 1;
+    if (operation.kind !== "removed") rightNumber += 1;
+    return {
+      ...operation,
+      leftNumber: operation.kind === "added" ? null : leftNumber,
+      rightNumber: operation.kind === "removed" ? null : rightNumber,
+    };
+  });
+  const collapsed = [];
+  for (let index = 0; index < numbered.length; ) {
+    if (numbered[index].kind !== "context") {
+      collapsed.push(numbered[index]);
+      index += 1;
+      continue;
+    }
+    let end = index;
+    while (end < numbered.length && numbered[end].kind === "context") end += 1;
+    const run = numbered.slice(index, end);
+    if (run.length > 8) {
+      collapsed.push(
+        ...run.slice(0, 3),
+        {
+          kind: "skip",
+          text: `${run.length - 6} 行未变化`,
+          leftNumber: null,
+          rightNumber: null,
+        },
+        ...run.slice(-3),
+      );
+    } else {
+      collapsed.push(...run);
+    }
+    index = end;
+  }
+
+  return { lines: collapsed, truncated };
+}
+
+export async function readSkillDirectoryDiffFile(
+  leftDirectory,
+  rightDirectory,
+  requestedPath,
+) {
+  const normalizedPath = String(requestedPath || "").split("\\").join("/");
+  const [leftListing, rightListing] = await Promise.all([
+    listSkillFiles(leftDirectory),
+    listSkillFiles(rightDirectory),
+  ]);
+  const leftEntry =
+    leftListing.entries.find(
+      (entry) => entry.path === normalizedPath && entry.type !== "directory",
+    ) || null;
+  const rightEntry =
+    rightListing.entries.find(
+      (entry) => entry.path === normalizedPath && entry.type !== "directory",
+    ) || null;
+  if (!leftEntry && !rightEntry) throw new Error("差异列表中没有这个文件。");
+
+  const left =
+    leftEntry?.type === "file"
+      ? await readSkillFileContent(leftDirectory, normalizedPath)
+      : null;
+  const right =
+    rightEntry?.type === "file"
+      ? await readSkillFileContent(rightDirectory, normalizedPath)
+      : null;
+  const existingSides = [left, right].filter(Boolean);
+  const previewKind =
+    existingSides.length > 0 &&
+    existingSides.every(
+      (side) => side.previewKind === "image" && side.previewable,
+    )
+    ? "image"
+    : existingSides.length > 0 &&
+        existingSides.every(
+          (side) => side.previewKind === "text" && side.previewable,
+        )
+      ? "text"
+      : "unavailable";
+  const textDiff =
+    previewKind === "text"
+      ? lineOperations(right?.content || "", left?.content || "")
+      : null;
+
+  return {
+    path: normalizedPath,
+    name: path.basename(normalizedPath),
+    previewKind,
+    left,
+    right,
+    leftLinkTarget: leftEntry?.linkTarget || null,
+    rightLinkTarget: rightEntry?.linkTarget || null,
+    lines: textDiff?.lines || [],
+    truncated: textDiff?.truncated || false,
+    reason:
+      previewKind === "unavailable"
+        ? "该文件类型暂不支持内容级比较，可根据文件大小和修改时间判断。"
+        : null,
   };
 }
 
@@ -1179,13 +2556,18 @@ function resolveImportedSkill(importId) {
   return imported;
 }
 
-export async function createSkillArchive(directoryPath, directoryName) {
+export async function createSkillArchive(
+  directoryPath,
+  directoryName,
+  format = "skill",
+) {
+  const archiveLabel = format === "zip" ? "ZIP" : ".skill";
   const safeDirectoryName =
     sanitizeSkillDirectoryName(directoryName) || "exported-skill";
   const listing = await listSkillFiles(directoryPath);
   if (listing.truncated) {
     throw new Error(
-      `.skill 导出最多支持 ${SKILL_ENTRY_LIMIT} 个条目，请先精简技能目录。`,
+      `${archiveLabel} 导出最多支持 ${SKILL_ENTRY_LIMIT} 个条目，请先精简技能目录。`,
     );
   }
   const archiveFiles = {};
@@ -1199,11 +2581,11 @@ export async function createSkillArchive(directoryPath, directoryName) {
     const fileStats = await stat(resolvedFile);
     if (!fileStats.isFile()) continue;
     if (fileStats.size > SKILL_ARCHIVE_LIMIT) {
-      throw new Error(".skill 导出不支持超过 25 MB 的单个文件。");
+      throw new Error(`${archiveLabel} 导出不支持超过 25 MB 的单个文件。`);
     }
     unpackedSize += fileStats.size;
     if (unpackedSize > SKILL_UNPACKED_LIMIT) {
-      throw new Error(".skill 导出内容总大小不能超过 100 MB。");
+      throw new Error(`${archiveLabel} 导出内容总大小不能超过 100 MB。`);
     }
     archiveFiles[`${safeDirectoryName}/${entry.path}`] = await readFile(resolvedFile);
   }
@@ -1212,7 +2594,7 @@ export async function createSkillArchive(directoryPath, directoryName) {
   }
   const archive = Buffer.from(zipSync(archiveFiles, { level: 6 }));
   if (archive.length > SKILL_ARCHIVE_LIMIT) {
-    throw new Error(".skill 导出文件超过 25 MB，请先精简技能内容。");
+    throw new Error(`${archiveLabel} 导出文件超过 25 MB，请先精简技能内容。`);
   }
   return archive;
 }
@@ -1236,6 +2618,7 @@ async function planImportInstall({ importId, targetAgentIds }) {
     const existing = existingSkill?.instances.find(
       (instance) => instance.agentId === targetAgentId,
     );
+    if (existing?.readOnly) throw new Error(`${agent.name} 的该技能由客户端或插件管理，请在原客户端更新，管理器仅提供读取。`);
     const existingPath = existing ? expandHome(existing.path) : null;
     const rootPath =
       (existingPath
@@ -1391,7 +2774,7 @@ async function executeImportInstall(input) {
   };
   await mkdir(STATE_DIRECTORY, { recursive: true });
   await appendFile(HISTORY_FILE, `${JSON.stringify(historyEntry)}\n`, "utf8");
-  cachedScan = null;
+  invalidateScanCache();
   return { ...plan, actions: completed, historyEntry };
 }
 
@@ -1420,6 +2803,7 @@ async function planSync({
     const existing = resolved.skill.instances.find(
       (instance) => instance.agentId === targetAgentId,
     );
+    if (existing?.readOnly) throw new Error(`${agent.name} 的该技能由客户端或插件管理，请在原客户端更新，管理器仅提供读取。`);
     const existingPath = existing ? expandHome(existing.path) : null;
     const rootPath =
       (existingPath
@@ -1517,7 +2901,7 @@ async function executeSync(input) {
   };
   await mkdir(STATE_DIRECTORY, { recursive: true });
   await appendFile(HISTORY_FILE, `${JSON.stringify(historyEntry)}\n`, "utf8");
-  cachedScan = null;
+  invalidateScanCache();
   return { ...plan, actions: completed, historyEntry };
 }
 
@@ -1653,6 +3037,159 @@ export async function handleRequest(request, response) {
       jsonResponse(response, 200, await getScan(force), origin);
       return;
     }
+    if (request.method === "GET" && requestUrl.pathname === "/api/connectors") {
+      jsonResponse(response, 200, await scanSmartOrderConnectors(HOME_DIRECTORY), origin);
+      return;
+    }
+    if (
+      request.method === "GET" &&
+      requestUrl.pathname === "/api/capabilities"
+    ) {
+      const force = requestUrl.searchParams.get("force") === "1";
+      jsonResponse(
+        response,
+        200,
+        await scanCapabilityCatalog(HOME_DIRECTORY, { force }),
+        origin,
+      );
+      return;
+    }
+    if (
+      request.method === "GET" &&
+      requestUrl.pathname === "/api/capability-files"
+    ) {
+      const capabilityIdValue = requestUrl.searchParams.get("capabilityId");
+      const capability = await resolveCapability(capabilityIdValue);
+      if (!capability) throw new Error("找不到这个专家或 Agent 配置。");
+      jsonResponse(
+        response,
+        200,
+        {
+          ...(await listCapabilityFiles(capability)),
+          capability: publicCapability(capability),
+        },
+        origin,
+      );
+      return;
+    }
+    if (
+      request.method === "GET" &&
+      requestUrl.pathname === "/api/capability-file"
+    ) {
+      const capabilityIdValue = requestUrl.searchParams.get("capabilityId");
+      const requestedPath = requestUrl.searchParams.get("path");
+      const capability = await resolveCapability(capabilityIdValue);
+      if (!capability) throw new Error("找不到这个专家或 Agent 配置。");
+      jsonResponse(
+        response,
+        200,
+        await readCapabilityFile(capability, requestedPath),
+        origin,
+      );
+      return;
+    }
+    if (
+      request.method === "GET" &&
+      requestUrl.pathname === "/api/capability-asset"
+    ) {
+      const capabilityIdValue = requestUrl.searchParams.get("capabilityId");
+      const requestedPath = requestUrl.searchParams.get("path");
+      const capability = await resolveCapability(capabilityIdValue);
+      if (!capability) throw new Error("找不到这个专家或 Agent 配置。");
+      if (
+        isSensitiveCapabilityPath(requestedPath) ||
+        (capability.allowedFiles &&
+          !capability.allowedFiles.has(String(requestedPath || "")))
+      ) {
+        throw new Error("这个 Agent 配置文件未开放预览。");
+      }
+      const asset = await readSkillImageAsset(
+        capability.rootPath,
+        requestedPath,
+      );
+      binaryResponse(
+        response,
+        200,
+        asset.buffer,
+        {
+          "content-type": asset.mimeType,
+          "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(asset.filename)}`,
+          "cache-control": "private, max-age=300",
+          "content-security-policy":
+            "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
+          "cross-origin-resource-policy": "same-site",
+        },
+        origin,
+      );
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/api/skill-diff") {
+      const leftInstanceId = requestUrl.searchParams.get("leftInstanceId");
+      const rightInstanceId = requestUrl.searchParams.get("rightInstanceId");
+      const scan = await getScan();
+      const leftResolved = resolveInstance(scan, leftInstanceId);
+      const rightResolved = resolveInstance(scan, rightInstanceId);
+      if (!leftResolved || !rightResolved) {
+        throw new Error("找不到需要比较的技能版本。");
+      }
+      if (leftResolved.skill.id !== rightResolved.skill.id) {
+        throw new Error("只能比较同一个技能的不同安装版本。");
+      }
+      const comparison = await compareSkillDirectories(
+        leftResolved.instance.absolutePath,
+        rightResolved.instance.absolutePath,
+      );
+      const publicInstance = (instance) => ({
+        id: instance.id,
+        agentId: instance.agentId,
+        agentName: instance.agentName,
+        shortHash: instance.shortHash,
+        modifiedAt: instance.modifiedAt,
+        fileCount: instance.fileCount,
+        byteCount: instance.byteCount,
+      });
+      jsonResponse(
+        response,
+        200,
+        {
+          ...comparison,
+          skillId: leftResolved.skill.id,
+          skillName: leftResolved.skill.name,
+          left: publicInstance(leftResolved.instance),
+          right: publicInstance(rightResolved.instance),
+        },
+        origin,
+      );
+      return;
+    }
+    if (
+      request.method === "GET" &&
+      requestUrl.pathname === "/api/skill-diff-file"
+    ) {
+      const leftInstanceId = requestUrl.searchParams.get("leftInstanceId");
+      const rightInstanceId = requestUrl.searchParams.get("rightInstanceId");
+      const requestedPath = requestUrl.searchParams.get("path");
+      const scan = await getScan();
+      const leftResolved = resolveInstance(scan, leftInstanceId);
+      const rightResolved = resolveInstance(scan, rightInstanceId);
+      if (!leftResolved || !rightResolved) {
+        throw new Error("找不到需要比较的技能版本。");
+      }
+      if (leftResolved.skill.id !== rightResolved.skill.id) {
+        throw new Error("只能比较同一个技能的不同安装版本。");
+      }
+      jsonResponse(
+        response,
+        200,
+        await readSkillDirectoryDiffFile(
+          leftResolved.instance.absolutePath,
+          rightResolved.instance.absolutePath,
+          requestedPath,
+        ),
+        origin,
+      );
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname === "/api/skill-files") {
       const instanceId = requestUrl.searchParams.get("instanceId");
       const scan = await getScan();
@@ -1693,18 +3230,53 @@ export async function handleRequest(request, response) {
       );
       return;
     }
+    if (
+      request.method === "GET" &&
+      requestUrl.pathname === "/api/skill-asset"
+    ) {
+      const instanceId = requestUrl.searchParams.get("instanceId");
+      const requestedPath = requestUrl.searchParams.get("path");
+      const scan = await getScan();
+      const resolved = resolveInstance(scan, instanceId);
+      if (!resolved) throw new Error("找不到这个技能目录。");
+      const asset = await readSkillImageAsset(
+        resolved.instance.absolutePath,
+        requestedPath,
+      );
+      binaryResponse(
+        response,
+        200,
+        asset.buffer,
+        {
+          "content-type": asset.mimeType,
+          "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(asset.filename)}`,
+          "cache-control": "private, max-age=300",
+          "content-security-policy":
+            "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
+          "cross-origin-resource-policy": "same-site",
+        },
+        origin,
+      );
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname === "/api/export-skill") {
       const instanceId = requestUrl.searchParams.get("instanceId");
+      const requestedFormat = requestUrl.searchParams.get("format") || "skill";
+      if (!["skill", "zip"].includes(requestedFormat)) {
+        throw new Error("不支持的导出格式。");
+      }
       const scan = await getScan();
       const resolved = resolveInstance(scan, instanceId);
       if (!resolved) throw new Error("找不到要打包的技能目录。");
       const archive = await createSkillArchive(
         resolved.instance.absolutePath,
         resolved.instance.directoryName,
+        requestedFormat,
       );
+      const extension = requestedFormat === "zip" ? "zip" : "skill";
       const filename = `${sanitizeSkillDirectoryName(
         resolved.instance.directoryName,
-      )}.skill`;
+      )}.${extension}`;
       binaryResponse(
         response,
         200,
@@ -1747,6 +3319,33 @@ export async function handleRequest(request, response) {
           imported.rootPath,
           requestUrl.searchParams.get("path"),
         ),
+        origin,
+      );
+      return;
+    }
+    if (
+      request.method === "GET" &&
+      requestUrl.pathname === "/api/import-asset"
+    ) {
+      const imported = resolveImportedSkill(
+        requestUrl.searchParams.get("importId"),
+      );
+      const asset = await readSkillImageAsset(
+        imported.rootPath,
+        requestUrl.searchParams.get("path"),
+      );
+      binaryResponse(
+        response,
+        200,
+        asset.buffer,
+        {
+          "content-type": asset.mimeType,
+          "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(asset.filename)}`,
+          "cache-control": "private, max-age=300",
+          "content-security-policy":
+            "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
+          "cross-origin-resource-policy": "same-site",
+        },
         origin,
       );
       return;

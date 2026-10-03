@@ -1,6 +1,6 @@
 # 隐私说明 / Privacy Notice
 
-最后更新：2026-07-26
+最后更新：2026-09-10
 
 Skill Control 是本地优先的软件。本说明描述项目当前 `v0.1.x` 代码会访问哪些数据，
 数据保存在何处，以及用户如何删除这些数据。
@@ -24,13 +24,30 @@ maintainers.
 | --- | --- | --- |
 | 配置的 Agent 名称和 Skill 目录 | 扫描和展示数据源 | `~/.agent-skill-manager/config.json` |
 | `SKILL.md` 和 Skill 内文件的元数据/内容 | 生成名称、介绍、指纹和详情预览 | 原 Skill 目录；不会因为扫描而复制 |
+| WorkBuddy 专家插件清单、成员 Markdown 与包内资源 | 展示已安装专家、成员分工和配置详情 | `~/.workbuddy/`；只读，不复制 |
+| Hermes `SOUL.md`、Profile 元数据与非敏感配置项 | 展示 Agent 身份、模型和委派方式 | `~/.hermes/`；只读，不复制 |
+| 订单来了技能、插件清单、MCP 配置 | 识别已启用技能和连接器摘要 | `~/.smartorder/` 中的技能/已启用插件目录及 `config.toml`；只读 |
+| Skill 路径、文件元数据和内容指纹缓存 | 避免每次扫描重复读取全部文件内容 | `~/.agent-skill-manager/fingerprint-cache.json` |
 | 同步与导入摘要 | 展示最近操作 | `~/.agent-skill-manager/history.jsonl` |
 | 被替换的旧 Skill | 出错时保留恢复副本 | `~/.agent-skill-manager/backups/` |
 | 导入的 `.skill` 解压内容 | 安装前预览 | `~/.agent-skill-manager/imports/` |
 
 The application reads configured Skill directories to calculate metadata and
-show previews. It stores configuration, operation summaries, backups, and
-staged imports under `~/.agent-skill-manager/`.
+show previews. It stores configuration, a local fingerprint cache, operation
+summaries, backups, and staged imports under `~/.agent-skill-manager/`.
+Expert discovery also reads installed WorkBuddy expert packages and Hermes
+profiles locally. It excludes `.env`, credentials, tokens, authentication,
+session data, and non-allowlisted Hermes configuration fields from previews.
+
+订单来了配置只在本机解析。连接器 API 使用字段白名单，不返回原始 TOML、启动
+命令/参数、环境变量值、认证头或 Token；URL 仅保留协议、域名和端口。不会读取
+订单来了的会话、日志、数据库或浏览器状态，也不会执行命令或请求连接器服务。
+
+SmartOrder configuration is parsed locally. Connector responses contain only
+allowlisted metadata, without raw TOML, commands, arguments, environment values,
+authentication headers or tokens. URLs expose only their origin. The adapter
+does not read sessions, logs, databases or browser state, and does not execute
+or contact connector services.
 
 ## 何时会写入 / When files are written
 
@@ -78,13 +95,14 @@ when needed, and restricts the manager's allowed origin to the active local UI.
 ```
 
 这会删除 Skill Control 的配置、历史、导入预览和备份，但不会删除各 Agent
-目录中已经安装的 Skills。若只想清除部分数据，可以单独删除 `history.jsonl`、
-`imports/` 或 `backups/`。
+目录中已经安装的 Skills。若只想清除部分数据，可以单独删除
+`fingerprint-cache.json`、`history.jsonl`、`imports/` 或 `backups/`。指纹缓存
+删除后会在下次扫描时重新生成。
 
 The project currently applies no automatic retention period. After closing
 Skill Control, deleting `~/.agent-skill-manager/` removes its configuration,
-history, staged imports, and backups. It does not remove Skills already
-installed in Agent directories.
+fingerprint cache, history, staged imports, and backups. It does not remove
+Skills already installed in Agent directories.
 
 ## 分享诊断信息 / Sharing diagnostics
 

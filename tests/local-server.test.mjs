@@ -15,6 +15,7 @@ import path from "node:path";
 import test from "node:test";
 import { zipSync } from "fflate";
 import {
+  compareSkillDirectories,
   createSkillArchive,
   handleRequest,
   inspectSkillArchive,
@@ -22,6 +23,8 @@ import {
   materializeSkillDirectory,
   parseFrontmatter,
   readSkillFileContent,
+  readSkillDirectoryDiffFile,
+  readSkillImageAsset,
   scanAll,
 } from "../server/local-server.mjs";
 
@@ -136,6 +139,17 @@ test("groups identical skills across agent directories", async (context) => {
     await mkdir(skillDirectory, { recursive: true });
     await writeFile(path.join(skillDirectory, "SKILL.md"), manifest, "utf8");
   }
+  const backupSkillDirectory = path.join(
+    codexRoot,
+    ".backup",
+    "portable-skill-older",
+  );
+  await mkdir(backupSkillDirectory, { recursive: true });
+  await writeFile(
+    path.join(backupSkillDirectory, "SKILL.md"),
+    manifest.replace("Same content in two tools", "Archived content"),
+    "utf8",
+  );
   await mkdir(workbuddyRoot, { recursive: true });
 
   const result = await scanAll({
@@ -168,9 +182,13 @@ test("groups identical skills across agent directories", async (context) => {
   assert.equal(result.skills.length, 1);
   assert.equal(result.skills[0].status, "partial");
   assert.equal(result.skills[0].displayName, "可移植技能");
+  assert.equal(result.skills[0].instances.length, 2);
   assert.deepEqual(result.skills[0].installedAgentIds, ["codex", "claude"]);
   assert.equal(result.skills[0].hashes.length, 1);
   assert.deepEqual(result.skills[0].missingAgentIds, ["workbuddy"]);
+  assert.equal("excerpt" in result.skills[0], false);
+  assert.equal("excerpt" in result.skills[0].instances[0], false);
+  assert.equal("description" in result.skills[0].instances[0], false);
 
   const defaultView = await scanAll({
     agents: [
@@ -288,6 +306,161 @@ test("lists and reads files inside a skill without allowing path traversal", asy
 
   await assert.rejects(
     readSkillFileContent(skillDirectory, "../outside.md"),
+    /文件路径无效|Skill 目录之外/,
+  );
+});
+
+test("compares skill versions at file and line level", async (context) => {
+  const temporaryRoot = await mkdtemp(path.join(tmpdir(), "skill-diff-"));
+  context.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const candidateDirectory = path.join(temporaryRoot, "candidate");
+  const comparisonDirectory = path.join(temporaryRoot, "comparison");
+  await Promise.all([
+    mkdir(path.join(candidateDirectory, "assets"), { recursive: true }),
+    mkdir(path.join(candidateDirectory, ".venv"), { recursive: true }),
+    mkdir(comparisonDirectory, { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(
+      path.join(candidateDirectory, "SKILL.md"),
+      "# 示例\n\n相同行\n候选版本",
+      "utf8",
+    ),
+    writeFile(
+      path.join(comparisonDirectory, "SKILL.md"),
+      "# 示例\n\n相同行\n对比版本",
+      "utf8",
+    ),
+    writeFile(path.join(candidateDirectory, "same.txt"), "same", "utf8"),
+    writeFile(path.join(comparisonDirectory, "same.txt"), "same", "utf8"),
+    writeFile(
+      path.join(candidateDirectory, "assets", "candidate.png"),
+      Buffer.from([0x89, 0x50, 0x4e, 0x47]),
+    ),
+    writeFile(
+      path.join(comparisonDirectory, "comparison.json"),
+      '{"version":1}',
+      "utf8",
+    ),
+    writeFile(
+      path.join(candidateDirectory, ".venv", "generated.py"),
+      "not part of the skill",
+      "utf8",
+    ),
+  ]);
+
+  const comparison = await compareSkillDirectories(
+    candidateDirectory,
+    comparisonDirectory,
+  );
+  assert.deepEqual(comparison.summary, {
+    modified: 1,
+    leftOnly: 1,
+    rightOnly: 1,
+    typeChanged: 0,
+    unchanged: 1,
+    total: 4,
+  });
+  assert.deepEqual(
+    comparison.entries.map((entry) => [entry.path, entry.change]),
+    [
+      ["SKILL.md", "modified"],
+      ["assets/candidate.png", "left-only"],
+      ["comparison.json", "right-only"],
+    ],
+  );
+
+  const textDiff = await readSkillDirectoryDiffFile(
+    candidateDirectory,
+    comparisonDirectory,
+    "SKILL.md",
+  );
+  assert.equal(textDiff.previewKind, "text");
+  assert.ok(
+    textDiff.lines.some(
+      (line) => line.kind === "removed" && line.text === "对比版本",
+    ),
+  );
+  assert.ok(
+    textDiff.lines.some(
+      (line) => line.kind === "added" && line.text === "候选版本",
+    ),
+  );
+
+  const imageDiff = await readSkillDirectoryDiffFile(
+    candidateDirectory,
+    comparisonDirectory,
+    "assets/candidate.png",
+  );
+  assert.equal(imageDiff.previewKind, "image");
+  assert.equal(imageDiff.left?.mimeType, "image/png");
+  assert.equal(imageDiff.right, null);
+});
+
+test("previews raster images and safe SVG files without allowing active SVG content", async (context) => {
+  const temporaryRoot = await mkdtemp(path.join(tmpdir(), "skill-media-"));
+  context.after(() => rm(temporaryRoot, { recursive: true, force: true }));
+  const skillDirectory = path.join(temporaryRoot, "visual-skill");
+  await mkdir(path.join(skillDirectory, "assets"), { recursive: true });
+  await writeFile(path.join(skillDirectory, "SKILL.md"), "# Visual skill", "utf8");
+  const pixelPng = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+  );
+  await writeFile(path.join(skillDirectory, "assets", "pixel.png"), pixelPng);
+  const safeSvg = [
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">',
+    "<defs><linearGradient id=\"g\"><stop stop-color=\"#d7f56d\"/></linearGradient></defs>",
+    '<rect width="20" height="20" fill="url(#g)"/>',
+    "</svg>",
+  ].join("");
+  await writeFile(
+    path.join(skillDirectory, "assets", "mark.svg"),
+    safeSvg,
+    "utf8",
+  );
+  await writeFile(
+    path.join(skillDirectory, "assets", "unsafe.svg"),
+    '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+    "utf8",
+  );
+
+  const rasterMetadata = await readSkillFileContent(
+    skillDirectory,
+    "assets/pixel.png",
+  );
+  assert.equal(rasterMetadata.previewable, true);
+  assert.equal(rasterMetadata.previewKind, "image");
+  assert.equal(rasterMetadata.mimeType, "image/png");
+  assert.equal(rasterMetadata.content, null);
+
+  const svgMetadata = await readSkillFileContent(
+    skillDirectory,
+    "assets/mark.svg",
+  );
+  assert.equal(svgMetadata.previewKind, "image");
+  assert.equal(svgMetadata.mimeType, "image/svg+xml");
+  assert.match(svgMetadata.content, /linearGradient/);
+
+  const rasterAsset = await readSkillImageAsset(
+    skillDirectory,
+    "assets/pixel.png",
+  );
+  assert.equal(rasterAsset.mimeType, "image/png");
+  assert.deepEqual(rasterAsset.buffer, pixelPng);
+  const svgAsset = await readSkillImageAsset(
+    skillDirectory,
+    "assets/mark.svg",
+  );
+  assert.equal(svgAsset.mimeType, "image/svg+xml");
+  assert.equal(svgAsset.buffer.toString("utf8"), safeSvg);
+
+  await assert.rejects(
+    readSkillImageAsset(skillDirectory, "assets/unsafe.svg"),
+    /不安全内容/,
+  );
+  await assert.rejects(
+    readSkillImageAsset(skillDirectory, "../outside.png"),
     /文件路径无效|Skill 目录之外/,
   );
 });

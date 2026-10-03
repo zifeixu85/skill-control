@@ -9,7 +9,33 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Added
+
+- SmartOrder (订单来了) local and enabled-plugin skill discovery, with disabled
+  entries excluded and managed plugin/system skills protected from overwrite.
+- Read-only connector configuration view under Other, with MCP summaries from
+  SmartOrder and its enabled plugins. Credentials and command arguments are
+  omitted; scanning does not contact or run connector services.
+- WorkBuddy expert and expert-team discovery, plus Hermes default and named
+  Agent Profile inspection with localized metadata and safe configuration
+  summaries.
+- Image preview for common raster formats and security-filtered SVG, including
+  installed Skills, imported archives, expert packages, and visual comparison.
+- Full conflict-version inspection with file-level changes, line-level text
+  differences, and side-by-side image comparison.
+- Portable ZIP export alongside the `.skill` archive format.
+
+### Changed
+
+- Skill discovery and fingerprinting can run in a background worker and reuse a
+  bounded on-disk fingerprint cache to reduce repeated scanning work.
+- TypeScript checking is now an explicit local, CI, and release quality gate.
+
+### Security
+
+- WorkBuddy expert members now reject sensitive paths and files whose resolved
+  targets escape the expert package, instead of exposing their contents in
+  capability metadata.
 
 ## [0.1.0] - 2026-07-26
 

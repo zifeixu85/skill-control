@@ -34,15 +34,16 @@ npm run dev
 
 ```bash
 npm run lint
+npm run typecheck
 npm test
 ```
 
 `npm test` 会先构建应用，再运行 Node 测试。涉及 UI 的改动还需要在浏览器中验证
 主要交互和至少一个窄屏尺寸。
 
-Before submitting, run both `npm run lint` and `npm test`. UI changes should
-also be checked interactively at a normal desktop size and at least one narrow
-viewport.
+Before submitting, run `npm run lint`, `npm run typecheck`, and `npm test`. UI
+changes should also be checked interactively at a normal desktop size and at
+least one narrow viewport.
 
 ## 分支与提交 / Branches and commits
 
@@ -121,6 +122,7 @@ depend on a contributor's real Agent directories.
 
 - [ ] 改动范围清晰，没有混入无关格式化；
 - [ ] `npm run lint` 通过；
+- [ ] `npm run typecheck` 通过；
 - [ ] `npm test` 通过；
 - [ ] 新行为有相应测试，或 PR 说明了无法自动测试的原因；
 - [ ] 没有真实路径、Skill 内容、凭据或个人数据；

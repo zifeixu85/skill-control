@@ -26,15 +26,15 @@ function useModalFocus<T extends HTMLElement>() {
   const dialogRef = useRef<T>(null);
 
   useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
+    const activeDialog = dialogRef.current;
+    if (!activeDialog) return;
 
     const previouslyFocused =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
     const getFocusableElements = () =>
-      [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter(
+      [...activeDialog.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)].filter(
         (element) =>
           !element.hasAttribute("disabled") &&
           element.getAttribute("aria-hidden") !== "true" &&
@@ -42,22 +42,22 @@ function useModalFocus<T extends HTMLElement>() {
           window.getComputedStyle(element).visibility !== "hidden",
       );
     const focusFrame = window.requestAnimationFrame(() => {
-      (getFocusableElements()[0] || dialog).focus();
+      (getFocusableElements()[0] || activeDialog).focus();
     });
 
-    function keepFocusInside(event: KeyboardEvent) {
+    const keepFocusInside = (event: KeyboardEvent) => {
       if (event.key !== "Tab") return;
       const focusable = getFocusableElements();
       if (!focusable.length) {
         event.preventDefault();
-        dialog.focus();
+        activeDialog.focus();
         return;
       }
 
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       const active = document.activeElement;
-      if (!dialog.contains(active)) {
+      if (!activeDialog.contains(active)) {
         event.preventDefault();
         (event.shiftKey ? last : first).focus();
       } else if (event.shiftKey && active === first) {
@@ -67,7 +67,7 @@ function useModalFocus<T extends HTMLElement>() {
         event.preventDefault();
         first.focus();
       }
-    }
+    };
 
     document.addEventListener("keydown", keepFocusInside, true);
     return () => {
@@ -81,7 +81,7 @@ function useModalFocus<T extends HTMLElement>() {
 }
 
 type SkillStatus = "synced" | "partial" | "single" | "conflict";
-type ViewName = "skills" | "sync" | "sources";
+type ViewName = "skills" | "sync" | "capabilities" | "sources" | "connectors";
 
 type AgentRoot = {
   configuredPath: string;
@@ -112,17 +112,14 @@ type SkillInstance = {
   directoryName: string;
   name: string;
   displayName: string;
-  description: string;
-  tags: string[];
-  excerpt: string;
   hash: string;
   shortHash: string;
   fileCount: number;
   byteCount: number;
   modifiedAt: string | null;
   isSymlink: boolean;
-  linkTarget: string | null;
-  truncated: boolean;
+  readOnly?: boolean;
+  sourceLabel?: string;
 };
 
 type Skill = {
@@ -131,7 +128,6 @@ type Skill = {
   displayName: string;
   description: string;
   tags: string[];
-  excerpt: string;
   status: SkillStatus;
   conflict: boolean;
   coverage: number;
@@ -173,6 +169,8 @@ type SkillFileContent = {
   size: number;
   modifiedAt: string;
   language: string;
+  mimeType: string | null;
+  previewKind: "text" | "image" | "unavailable";
   content: string | null;
   previewable: boolean;
   reason: string | null;
@@ -203,6 +201,79 @@ type ScanData = {
   scannedAt: string;
 };
 
+type CapabilityMember = {
+  id: string;
+  name: string;
+  displayName: string;
+  profession: string;
+  description: string;
+  maxTurns: number | null;
+  filePath: string;
+};
+
+type Capability = {
+  id: string;
+  productId: "workbuddy" | "hermes";
+  productName: string;
+  productShortName: string;
+  productColor: string;
+  kind: "expert" | "expert-team" | "agent-profile";
+  kindLabel: string;
+  name: string;
+  displayName: string;
+  description: string;
+  profession: string;
+  version: string;
+  tags: string[];
+  members: CapabilityMember[];
+  memberCount: number;
+  fileCount: number;
+  connectorCount: number;
+  skillCount: number;
+  model: string;
+  maxTurns?: number | null;
+  delegation?: {
+    enabled: boolean;
+    maxConcurrentChildren: number | null;
+    maxSpawnDepth: number | null;
+  };
+  sourcePath: string;
+  primaryFilePath: string;
+  modifiedAt: string;
+};
+
+type CapabilityProduct = {
+  id: "workbuddy" | "hermes";
+  name: string;
+  shortName: string;
+  color: string;
+  kindLabel: string;
+  sourcePath: string;
+  available: boolean;
+  catalogCount: number;
+  itemCount: number;
+  memberCount: number;
+  items: Capability[];
+};
+
+type CapabilityCatalog = {
+  products: CapabilityProduct[];
+  totals: {
+    products: number;
+    profiles: number;
+    members: number;
+  };
+  scannedAt: string;
+};
+
+type CapabilityFileListing = {
+  entries: SkillFileEntry[];
+  fileCount: number;
+  directoryCount: number;
+  truncated: boolean;
+  capability: Capability;
+};
+
 type AgentConfig = {
   id: string;
   name: string;
@@ -216,6 +287,7 @@ type ManagerConfig = {
   syncMode: "copy" | "symlink";
   agents: AgentConfig[];
   visibleAgentIds: string[];
+  dismissedAgentIds: string[];
 };
 
 type SyncAction = {
@@ -239,6 +311,76 @@ type SyncPlan = {
   sourceAgentId: string;
   mode: "copy" | "symlink";
   actions: SyncAction[];
+};
+
+type SkillDiffChange =
+  | "modified"
+  | "left-only"
+  | "right-only"
+  | "type-changed";
+
+type SkillDiffEntrySide = {
+  type: "file" | "symlink";
+  size: number;
+  modifiedAt: string;
+  language: string | null;
+  mimeType: string | null;
+  linkTarget: string | null;
+};
+
+type SkillDiffEntry = {
+  path: string;
+  name: string;
+  change: SkillDiffChange;
+  left: SkillDiffEntrySide | null;
+  right: SkillDiffEntrySide | null;
+};
+
+type SkillDiffInstance = {
+  id: string;
+  agentId: string;
+  agentName: string;
+  shortHash: string;
+  modifiedAt: string | null;
+  fileCount: number;
+  byteCount: number;
+};
+
+type SkillDiffSummary = {
+  skillId: string;
+  skillName: string;
+  left: SkillDiffInstance;
+  right: SkillDiffInstance;
+  summary: {
+    modified: number;
+    leftOnly: number;
+    rightOnly: number;
+    typeChanged: number;
+    unchanged: number;
+    total: number;
+  };
+  entries: SkillDiffEntry[];
+  truncated: boolean;
+};
+
+type SkillDiffLine = {
+  kind: "context" | "added" | "removed" | "skip";
+  text: string;
+  leftNumber: number | null;
+  rightNumber: number | null;
+};
+
+type SkillDiffFile = {
+  path: string;
+  name: string;
+  previewKind: "text" | "image" | "unavailable";
+  left: SkillFileContent | null;
+  right: SkillFileContent | null;
+  leftLinkTarget: string | null;
+  rightLinkTarget: string | null;
+  lines: SkillDiffLine[];
+  truncated: boolean;
+  reason: string | null;
 };
 
 type ImportedSkill = {
@@ -271,6 +413,16 @@ const STATUS_COPY: Record<
   partial: { label: "待补齐", detail: "部分工具未安装", symbol: "◐" },
   single: { label: "单端", detail: "仅一个工具安装", symbol: "◔" },
   conflict: { label: "有冲突", detail: "同名内容不一致", symbol: "!" },
+};
+
+const DIFF_CHANGE_COPY: Record<
+  SkillDiffChange,
+  { label: string; symbol: string }
+> = {
+  modified: { label: "已修改", symbol: "±" },
+  "left-only": { label: "仅候选版本", symbol: "+" },
+  "right-only": { label: "仅对比版本", symbol: "−" },
+  "type-changed": { label: "类型变化", symbol: "↻" },
 };
 
 async function requestJson<T>(
@@ -325,6 +477,16 @@ function isMarkdownPath(pathname: string) {
   return /\.(md|markdown)$/i.test(pathname);
 }
 
+function isImagePath(pathname: string) {
+  return /\.(avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i.test(pathname);
+}
+
+function defaultPreviewMode(pathname: string) {
+  return isMarkdownPath(pathname) || isImagePath(pathname)
+    ? "rendered"
+    : "source";
+}
+
 function markdownDocumentBody(content: string) {
   return content.replace(
     /^---\s*\r?\n[\s\S]*?\r?\n(?:---|\.\.\.)\s*(?:\r?\n|$)/,
@@ -360,6 +522,104 @@ function MarkdownDocument({ content }: { content: string }) {
   );
 }
 
+function SkillImagePreview({
+  source,
+  name,
+}: {
+  source: string;
+  name: string;
+}) {
+  const [preview, setPreview] = useState<{
+    source: string;
+    objectUrl: string;
+    error: string;
+  }>({ source: "", objectUrl: "", error: "" });
+  const [dimensions, setDimensions] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl = "";
+
+    async function loadImage() {
+      try {
+        const response = await fetch(source);
+        if (!response.ok) {
+          const payload = await response.json().catch(() => null);
+          throw new Error(payload?.error || `图片读取失败（${response.status}）`);
+        }
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        if (cancelled) {
+          URL.revokeObjectURL(objectUrl);
+          return;
+        }
+        setPreview({ source, objectUrl, error: "" });
+      } catch (error) {
+        if (cancelled) return;
+        setPreview({
+          source,
+          objectUrl: "",
+          error: error instanceof Error ? error.message : "图片读取失败。",
+        });
+      }
+    }
+
+    void loadImage();
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [source]);
+
+  const currentPreview = preview.source === source ? preview : null;
+
+  if (currentPreview?.error) {
+    return (
+      <div className="browser-empty-state">
+        <strong>无法渲染这张图片</strong>
+        <p>{currentPreview.error}</p>
+      </div>
+    );
+  }
+
+  if (!currentPreview?.objectUrl) {
+    return (
+      <div className="browser-loading browser-loading-content">
+        正在加载图片预览…
+      </div>
+    );
+  }
+
+  return (
+    <figure className="skill-image-preview">
+      <div className="skill-image-stage">
+        {/* Local user-selected assets need their original bytes and dynamic loopback URL. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={currentPreview.objectUrl}
+          alt={`${name} 预览`}
+          draggable={false}
+          onLoad={(event) => {
+            const image = event.currentTarget;
+            setDimensions(`${image.naturalWidth} × ${image.naturalHeight} px`);
+          }}
+          onError={() =>
+            setPreview({
+              source,
+              objectUrl: "",
+              error: "浏览器无法解码这张图片，文件格式可能不完整。",
+            })
+          }
+        />
+      </div>
+      <figcaption>
+        <span>图片预览</span>
+        {dimensions && <code>{dimensions}</code>}
+      </figcaption>
+    </figure>
+  );
+}
+
 function missingAgentCount(skill: Skill, agents: Agent[]) {
   const availableIds = new Set(agents.map((agent) => agent.id));
   return skill.missingAgentIds.filter((agentId) => availableIds.has(agentId))
@@ -380,11 +640,13 @@ function AgentMark({
   return (
     <span
       className={`agent-mark ${active ? "is-active" : ""} ${
-        conflict && active ? "is-conflict" : ""
-      } ${compact ? "is-compact" : ""}`}
+        compact ? "is-compact" : ""
+      }`}
       style={{ "--agent-color": agent.color } as React.CSSProperties}
       title={`${agent.name}：${active ? (conflict ? "内容有差异" : "已安装") : "未安装"}`}
-      aria-label={`${agent.name}${active ? "已安装" : "未安装"}`}
+      aria-label={`${agent.name}${
+        active ? (conflict ? "已安装，内容有差异" : "已安装") : "未安装"
+      }`}
     >
       {active ? agent.shortName : "—"}
     </span>
@@ -521,7 +783,7 @@ function SkillTable({
             >
               <td>
                 <div className="skill-identity">
-                  <span className={`skill-index ${statusTone(skill.status)}`}>
+                  <span className="skill-index">
                     {String(index + 1).padStart(2, "0")}
                   </span>
                   <div>
@@ -616,6 +878,8 @@ function SkillTable({
 function DetailPanel({
   skill,
   agents,
+  initialInstanceId,
+  reviewMode = false,
   onClose,
   onSync,
   onReveal,
@@ -623,23 +887,32 @@ function DetailPanel({
 }: {
   skill: Skill;
   agents: Agent[];
+  initialInstanceId?: string;
+  reviewMode?: boolean;
   onClose: () => void;
-  onSync: () => void;
+  onSync: (instanceId: string) => void;
   onReveal: (instanceId: string) => void;
-  onExport: (instanceId: string) => void;
+  onExport: (
+    instanceId: string,
+    format: "skill" | "zip",
+  ) => Promise<void>;
 }) {
   const dialogRef = useModalFocus<HTMLElement>();
+  const exportMenuRef = useRef<HTMLDivElement>(null);
   const instancesByAgent = new Map(
     skill.instances.map((instance) => [instance.agentId, instance]),
   );
+  const initialInstance =
+    skill.instances.find((instance) => instance.id === initialInstanceId) ||
+    skill.instances[0];
   const [activeInstanceId, setActiveInstanceId] = useState(
-    skill.instances[0]?.id || "",
+    initialInstance?.id || "",
   );
   const [fileListing, setFileListing] = useState<SkillFileListing | null>(null);
   const [selectedFilePath, setSelectedFilePath] = useState("");
   const [fileContent, setFileContent] = useState<SkillFileContent | null>(null);
   const [listingLoading, setListingLoading] = useState(
-    Boolean(skill.instances[0]),
+    Boolean(initialInstance),
   );
   const [contentLoading, setContentLoading] = useState(false);
   const [browserError, setBrowserError] = useState("");
@@ -651,6 +924,13 @@ function DetailPanel({
   );
   const [collapsedDirectories, setCollapsedDirectories] = useState<Set<string>>(
     new Set(),
+  );
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState<
+    "skill" | "zip" | null
+  >(null);
+  const activeInstance = skill.instances.find(
+    (instance) => instance.id === activeInstanceId,
   );
 
   const visibleFileEntries = useMemo(() => {
@@ -665,6 +945,31 @@ function DetailPanel({
       });
     });
   }, [collapsedDirectories, fileListing]);
+
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    function closeExportMenu(event: PointerEvent) {
+      if (
+        exportMenuRef.current &&
+        !exportMenuRef.current.contains(event.target as Node)
+      ) {
+        setExportMenuOpen(false);
+      }
+    }
+    document.addEventListener("pointerdown", closeExportMenu);
+    return () => document.removeEventListener("pointerdown", closeExportMenu);
+  }, [exportMenuOpen]);
+
+  async function exportActiveInstance(format: "skill" | "zip") {
+    if (!activeInstanceId || exportingFormat) return;
+    setExportingFormat(format);
+    try {
+      await onExport(activeInstanceId, format);
+      setExportMenuOpen(false);
+    } finally {
+      setExportingFormat(null);
+    }
+  }
 
   useEffect(() => {
     if (!activeInstanceId) return;
@@ -686,7 +991,7 @@ function DetailPanel({
           readableEntries[0]?.path ||
           "";
         setSelectedFilePath(defaultPath);
-        setPreviewMode(isMarkdownPath(defaultPath) ? "rendered" : "source");
+        setPreviewMode(defaultPreviewMode(defaultPath));
         setCollapsedDirectories(
           new Set(
             listing.entries
@@ -730,6 +1035,16 @@ function DetailPanel({
     };
   }, [activeInstanceId, selectedFilePath]);
 
+  const imagePreviewSource =
+    fileContent?.previewKind === "image" && activeInstanceId
+      ? `${API_BASE}/api/skill-asset?instanceId=${encodeURIComponent(activeInstanceId)}&path=${encodeURIComponent(fileContent.path)}`
+      : "";
+  const supportsSourceToggle = Boolean(
+    fileContent?.previewable &&
+      (isMarkdownPath(fileContent.path) ||
+        (fileContent.mimeType === "image/svg+xml" && fileContent.content)),
+  );
+
   function selectInstance(instanceId: string) {
     if (instanceId === activeInstanceId) return;
     setActiveInstanceId(instanceId);
@@ -749,7 +1064,7 @@ function DetailPanel({
     setFileContent(null);
     setBrowserError("");
     setContentLoading(true);
-    setPreviewMode(isMarkdownPath(filePath) ? "rendered" : "source");
+    setPreviewMode(defaultPreviewMode(filePath));
   }
 
   function toggleDirectory(directoryPath: string) {
@@ -776,8 +1091,16 @@ function DetailPanel({
         tabIndex={-1}
       >
         <div className="panel-topline">
-          <span>技能详情</span>
-          <button className="icon-button" onClick={onClose} aria-label="关闭详情">
+          <span>
+            {reviewMode
+              ? `版本预览 · ${activeInstance?.agentName || "当前版本"}`
+              : "技能详情"}
+          </span>
+          <button
+            className="icon-button"
+            onClick={onClose}
+            aria-label={reviewMode ? "返回冲突处理" : "关闭详情"}
+          >
             ×
           </button>
         </div>
@@ -912,7 +1235,11 @@ function DetailPanel({
                             title={entry.path}
                           >
                             <span aria-hidden>
-                              {entry.type === "symlink" ? "↗" : "·"}
+                              {entry.type === "symlink"
+                                ? "↗"
+                                : isImagePath(entry.path)
+                                  ? "▧"
+                                  : "·"}
                             </span>
                             <strong>{entry.name}</strong>
                             <small>{entry.language || "文件"}</small>
@@ -935,18 +1262,17 @@ function DetailPanel({
                       </strong>
                       {fileContent && (
                         <span>
-                          {fileContent.language} ·{" "}
+                          {fileContent.mimeType || fileContent.language} ·{" "}
                           {formatBytes(fileContent.size)} ·{" "}
                           {formatRelativeDate(fileContent.modifiedAt)}
                         </span>
                       )}
                     </div>
                     <div className="file-preview-tools">
-                      {fileContent?.previewable &&
-                      isMarkdownPath(fileContent.path) ? (
+                      {supportsSourceToggle ? (
                         <div
                           className="file-view-toggle"
-                          aria-label="Markdown 显示方式"
+                          aria-label="文件显示方式"
                         >
                           <button
                             type="button"
@@ -979,6 +1305,8 @@ function DetailPanel({
                   <div
                     className={`skill-file-body ${
                       previewMode === "rendered" ? "is-rendered" : "is-source"
+                    } ${
+                      fileContent?.previewKind === "image" ? "is-media" : ""
                     }`}
                   >
                     {contentLoading ? (
@@ -991,8 +1319,16 @@ function DetailPanel({
                         <p>{browserError}</p>
                       </div>
                     ) : fileContent?.previewable ? (
-                      isMarkdownPath(fileContent.path) &&
-                      previewMode === "rendered" ? (
+                      fileContent.previewKind === "image" &&
+                      previewMode === "rendered" &&
+                      imagePreviewSource ? (
+                        <SkillImagePreview
+                          key={imagePreviewSource}
+                          source={imagePreviewSource}
+                          name={fileContent.name}
+                        />
+                      ) : isMarkdownPath(fileContent.path) &&
+                        previewMode === "rendered" ? (
                         <article className="markdown-preview">
                           <MarkdownDocument content={fileContent.content || ""} />
                         </article>
@@ -1091,6 +1427,7 @@ function DetailPanel({
                             </span>
                             <code>{instance.shortHash}</code>
                             {instance.isSymlink && <em>软链接</em>}
+                            {instance.sourceLabel && <em>{instance.sourceLabel}{instance.readOnly ? " · 只读" : ""}</em>}
                           </div>
                         </>
                       ) : (
@@ -1106,18 +1443,81 @@ function DetailPanel({
 
         <div className="panel-sticky-actions">
           <button className="button button-ghost" onClick={onClose}>
-            关闭
+            {reviewMode ? "返回冲突处理" : "关闭"}
           </button>
+          <div className="export-format-control" ref={exportMenuRef}>
+            {exportMenuOpen && (
+              <div
+                className="export-format-menu"
+                role="menu"
+                aria-label="选择 Skill 导出格式"
+              >
+                <div className="export-format-heading">
+                  <strong>选择导出格式</strong>
+                  <span>文件内容与目录结构保持一致</span>
+                </div>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => void exportActiveInstance("skill")}
+                  disabled={Boolean(exportingFormat)}
+                >
+                  <span className="export-format-mark">SKILL</span>
+                  <span>
+                    <strong>.skill 技能包</strong>
+                    <small>适合支持 .skill 导入的工具</small>
+                  </span>
+                  <b>{exportingFormat === "skill" ? "…" : "→"}</b>
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => void exportActiveInstance("zip")}
+                  disabled={Boolean(exportingFormat)}
+                >
+                  <span className="export-format-mark is-zip">ZIP</span>
+                  <span>
+                    <strong>.zip 通用压缩包</strong>
+                    <small>解压后可手动安装到任意 Agent</small>
+                  </span>
+                  <b>{exportingFormat === "zip" ? "…" : "→"}</b>
+                </button>
+              </div>
+            )}
+            <button
+              type="button"
+              className={`button button-ghost export-format-trigger ${
+                exportMenuOpen ? "is-open" : ""
+              }`}
+              onClick={() => setExportMenuOpen((current) => !current)}
+              disabled={!activeInstanceId || Boolean(exportingFormat)}
+              aria-expanded={exportMenuOpen}
+              aria-haspopup="menu"
+            >
+              {exportingFormat ? "导出中…" : "导出"}
+              <svg
+                className="export-format-chevron"
+                viewBox="0 0 12 12"
+                aria-hidden="true"
+              >
+                <path
+                  d={
+                    exportMenuOpen
+                      ? "M2.5 4.25 6 7.75l3.5-3.5"
+                      : "M2.5 7.75 6 4.25l3.5 3.5"
+                  }
+                />
+              </svg>
+            </button>
+          </div>
           <button
-            className="button button-ghost"
-            onClick={() => onExport(activeInstanceId)}
-            disabled={!activeInstanceId}
+            className="button button-acid"
+            onClick={() => onSync(activeInstanceId)}
           >
-            导出 .skill
-          </button>
-          <button className="button button-acid" onClick={onSync}>
-            {skill.conflict
-              ? "选择权威版本"
+            {reviewMode
+              ? "采用此版本"
+              : skill.conflict
+                ? "选择权威版本"
               : missingAgentCount(skill, agents)
                 ? "同步到其他工具"
                 : "管理同步"}{" "}
@@ -1129,30 +1529,421 @@ function DetailPanel({
   );
 }
 
+function SkillDiffView({
+  skill,
+  agents,
+  leftInstanceId,
+  initialRightInstanceId,
+  onBack,
+  onChooseSource,
+}: {
+  skill: Skill;
+  agents: Agent[];
+  leftInstanceId: string;
+  initialRightInstanceId: string;
+  onBack: () => void;
+  onChooseSource: (instanceId: string) => void;
+}) {
+  const [rightInstanceId, setRightInstanceId] = useState(
+    initialRightInstanceId,
+  );
+  const [summary, setSummary] = useState<SkillDiffSummary | null>(null);
+  const [selectedPath, setSelectedPath] = useState("");
+  const [fileDiff, setFileDiff] = useState<SkillDiffFile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [fileLoading, setFileLoading] = useState(false);
+  const [error, setError] = useState("");
+  const leftInstance = skill.instances.find(
+    (instance) => instance.id === leftInstanceId,
+  );
+  const rightInstance = skill.instances.find(
+    (instance) => instance.id === rightInstanceId,
+  );
+  const leftAgent = agents.find(
+    (agent) => agent.id === leftInstance?.agentId,
+  );
+  const rightAgent = agents.find(
+    (agent) => agent.id === rightInstance?.agentId,
+  );
+  const comparisonInstances = skill.instances.filter(
+    (instance) => instance.id !== leftInstanceId,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadComparison() {
+      try {
+        const nextSummary = await requestJson<SkillDiffSummary>(
+          `/api/skill-diff?leftInstanceId=${encodeURIComponent(leftInstanceId)}&rightInstanceId=${encodeURIComponent(rightInstanceId)}`,
+        );
+        if (cancelled) return;
+        setSummary(nextSummary);
+        setError("");
+        const preferredEntry =
+          nextSummary.entries.find(
+            (entry) => entry.path.toLowerCase() === "skill.md",
+          ) || nextSummary.entries[0];
+        if (!preferredEntry) {
+          setSelectedPath("");
+          setFileDiff(null);
+          setLoading(false);
+          return;
+        }
+        setSelectedPath(preferredEntry.path);
+        const nextFileDiff = await requestJson<SkillDiffFile>(
+          `/api/skill-diff-file?leftInstanceId=${encodeURIComponent(leftInstanceId)}&rightInstanceId=${encodeURIComponent(rightInstanceId)}&path=${encodeURIComponent(preferredEntry.path)}`,
+        );
+        if (cancelled) return;
+        setFileDiff(nextFileDiff);
+        setLoading(false);
+      } catch (requestError) {
+        if (cancelled) return;
+        setError(
+          requestError instanceof Error
+            ? requestError.message
+            : "无法读取版本差异。",
+        );
+        setLoading(false);
+      }
+    }
+
+    void loadComparison();
+    return () => {
+      cancelled = true;
+    };
+  }, [leftInstanceId, rightInstanceId]);
+
+  async function selectFile(entryPath: string) {
+    setSelectedPath(entryPath);
+    setFileLoading(true);
+    setError("");
+    try {
+      const nextFileDiff = await requestJson<SkillDiffFile>(
+        `/api/skill-diff-file?leftInstanceId=${encodeURIComponent(leftInstanceId)}&rightInstanceId=${encodeURIComponent(rightInstanceId)}&path=${encodeURIComponent(entryPath)}`,
+      );
+      setFileDiff(nextFileDiff);
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "无法读取文件差异。",
+      );
+    } finally {
+      setFileLoading(false);
+    }
+  }
+
+  function changeComparison(nextInstanceId: string) {
+    setRightInstanceId(nextInstanceId);
+    setSummary(null);
+    setSelectedPath("");
+    setFileDiff(null);
+    setLoading(true);
+    setFileLoading(false);
+    setError("");
+  }
+
+  const changedCount = summary
+    ? summary.summary.modified +
+      summary.summary.leftOnly +
+      summary.summary.rightOnly +
+      summary.summary.typeChanged
+    : 0;
+  const diffAssetUrl = (instanceId: string) =>
+    `${API_BASE}/api/skill-asset?instanceId=${encodeURIComponent(instanceId)}&path=${encodeURIComponent(fileDiff?.path || "")}`;
+
+  return (
+    <div className="skill-diff-view">
+      <header className="skill-diff-heading">
+        <button className="diff-back-button" onClick={onBack}>
+          ← 返回同步设置
+        </button>
+        <div>
+          <p className="eyebrow">内容级比较</p>
+          <h2>{displaySkillName(skill)}</h2>
+          <p>绿色“+”属于候选权威版本，红色“−”属于对比版本。</p>
+        </div>
+      </header>
+
+      <div className="diff-version-bar">
+        <div className="diff-version-card is-candidate">
+          <small>候选权威版本</small>
+          {leftAgent && <AgentMark agent={leftAgent} active compact />}
+          <span>
+            <strong>{leftAgent?.name || leftInstance?.agentName}</strong>
+            <code>{leftInstance?.shortHash}</code>
+          </span>
+        </div>
+        <span className="diff-versus" aria-hidden>
+          对比
+        </span>
+        <label className="diff-version-picker">
+          <span>比较对象</span>
+          <select
+            value={rightInstanceId}
+            onChange={(event) => changeComparison(event.target.value)}
+          >
+            {comparisonInstances.map((instance) => (
+              <option value={instance.id} key={instance.id}>
+                {instance.agentName} · {instance.shortHash}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div className="diff-summary-strip" aria-label="差异概览">
+        <div>
+          <strong>{loading ? "…" : changedCount}</strong>
+          <span>差异文件</span>
+        </div>
+        <div>
+          <strong>{loading ? "…" : summary?.summary.modified || 0}</strong>
+          <span>内容修改</span>
+        </div>
+        <div>
+          <strong>{loading ? "…" : summary?.summary.leftOnly || 0}</strong>
+          <span>仅候选版本</span>
+        </div>
+        <div>
+          <strong>{loading ? "…" : summary?.summary.rightOnly || 0}</strong>
+          <span>仅对比版本</span>
+        </div>
+        <div>
+          <strong>{loading ? "…" : summary?.summary.unchanged || 0}</strong>
+          <span>内容一致</span>
+        </div>
+      </div>
+
+      <div className="skill-diff-workspace">
+        <aside className="diff-file-list" aria-label="差异文件">
+          <div className="diff-pane-label">
+            <span>差异文件</span>
+            <b>{summary?.entries.length || 0}</b>
+          </div>
+          {loading ? (
+            <p className="diff-loading">正在逐个核对文件内容…</p>
+          ) : summary?.entries.length ? (
+            summary.entries.map((entry) => (
+              <button
+                className={`diff-file-item change-${entry.change} ${
+                  selectedPath === entry.path ? "is-active" : ""
+                }`}
+                key={entry.path}
+                onClick={() => selectFile(entry.path)}
+                aria-pressed={selectedPath === entry.path}
+              >
+                <span>{DIFF_CHANGE_COPY[entry.change].symbol}</span>
+                <span>
+                  <strong>{entry.name}</strong>
+                  <small>{entry.path}</small>
+                </span>
+                <em>{DIFF_CHANGE_COPY[entry.change].label}</em>
+              </button>
+            ))
+          ) : (
+            <div className="diff-empty">
+              <strong>文件内容一致</strong>
+              <p>没有发现新增、删除或修改的文件。</p>
+            </div>
+          )}
+          {summary?.truncated && (
+            <p className="diff-limit-note">目录较大，列表按安全上限截断。</p>
+          )}
+        </aside>
+
+        <section className="diff-file-viewer" aria-live="polite">
+          {error ? (
+            <div className="diff-empty is-error">
+              <strong>无法显示差异</strong>
+              <p>{error}</p>
+            </div>
+          ) : fileLoading || (loading && !fileDiff) ? (
+            <div className="diff-empty">
+              <strong>正在分析文件</strong>
+              <p>比较文本行、文件大小与媒体类型…</p>
+            </div>
+          ) : fileDiff ? (
+            <>
+              <div className="diff-file-toolbar">
+                <span>
+                  <strong>{fileDiff.name}</strong>
+                  <code>{fileDiff.path}</code>
+                </span>
+                <small>
+                  {fileDiff.previewKind === "text"
+                    ? "逐行差异"
+                    : fileDiff.previewKind === "image"
+                      ? "并排预览"
+                      : "文件信息"}
+                </small>
+              </div>
+              {fileDiff.previewKind === "text" ? (
+                <div className="text-diff">
+                  <div className="text-diff-legend">
+                    <span>
+                      <b>−</b> {rightAgent?.name || rightInstance?.agentName}
+                    </span>
+                    <span>
+                      <b>+</b> {leftAgent?.name || leftInstance?.agentName}
+                    </span>
+                  </div>
+                  <div className="text-diff-lines">
+                    {fileDiff.lines.map((line, index) => (
+                      <div
+                        className={`text-diff-line is-${line.kind}`}
+                        key={`${line.kind}-${line.leftNumber}-${line.rightNumber}-${index}`}
+                      >
+                        <span>{line.leftNumber ?? ""}</span>
+                        <span>{line.rightNumber ?? ""}</span>
+                        <b>
+                          {line.kind === "added"
+                            ? "+"
+                            : line.kind === "removed"
+                              ? "−"
+                              : line.kind === "skip"
+                                ? "⋯"
+                                : ""}
+                        </b>
+                        <code>{line.text || " "}</code>
+                      </div>
+                    ))}
+                  </div>
+                  {fileDiff.truncated && (
+                    <p className="diff-limit-note">
+                      文件较长，当前展示前 2,000 行的差异。
+                    </p>
+                  )}
+                </div>
+              ) : fileDiff.previewKind === "image" ? (
+                <div className="image-diff-grid">
+                  <article>
+                    <header>
+                      <span>候选权威版本</span>
+                      <strong>{leftAgent?.name}</strong>
+                    </header>
+                    {fileDiff.left ? (
+                      <SkillImagePreview
+                        source={diffAssetUrl(leftInstanceId)}
+                        name={`${fileDiff.name} · ${leftAgent?.name}`}
+                      />
+                    ) : (
+                      <div className="diff-media-missing">此版本没有该图片</div>
+                    )}
+                  </article>
+                  <article>
+                    <header>
+                      <span>对比版本</span>
+                      <strong>{rightAgent?.name}</strong>
+                    </header>
+                    {fileDiff.right ? (
+                      <SkillImagePreview
+                        source={diffAssetUrl(rightInstanceId)}
+                        name={`${fileDiff.name} · ${rightAgent?.name}`}
+                      />
+                    ) : (
+                      <div className="diff-media-missing">此版本没有该图片</div>
+                    )}
+                  </article>
+                </div>
+              ) : (
+                <div className="binary-diff">
+                  <strong>暂不支持内容级预览</strong>
+                  <p>{fileDiff.reason}</p>
+                  <div>
+                    <span>
+                      <b>{leftAgent?.name}</b>
+                      <small>
+                        {fileDiff.left
+                          ? formatBytes(fileDiff.left.size)
+                          : fileDiff.leftLinkTarget || "不存在"}
+                      </small>
+                    </span>
+                    <span>
+                      <b>{rightAgent?.name}</b>
+                      <small>
+                        {fileDiff.right
+                          ? formatBytes(fileDiff.right.size)
+                          : fileDiff.rightLinkTarget || "不存在"}
+                      </small>
+                    </span>
+                  </div>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="diff-empty">
+              <strong>选择一个文件</strong>
+              <p>这里会显示具体修改内容。</p>
+            </div>
+          )}
+        </section>
+      </div>
+
+      <footer className="diff-actions">
+        <p>根据实际内容决定哪个版本作为后续同步来源。</p>
+        <button className="button button-ghost" onClick={onBack}>
+          暂不决定
+        </button>
+        <button
+          className="button diff-source-button"
+          style={
+            {
+              "--agent-color": rightAgent?.color || "#c8cac1",
+            } as React.CSSProperties
+          }
+          onClick={() => onChooseSource(rightInstanceId)}
+        >
+          采用 {rightAgent?.name || "对比版本"}
+        </button>
+        <button
+          className="button diff-source-button"
+          style={
+            {
+              "--agent-color": leftAgent?.color || "#c8cac1",
+            } as React.CSSProperties
+          }
+          onClick={() => onChooseSource(leftInstanceId)}
+        >
+          采用 {leftAgent?.name || "候选版本"} →
+        </button>
+      </footer>
+    </div>
+  );
+}
+
 function SyncDialog({
   skill,
   agents,
   defaultMode,
+  initialSourceId,
   onClose,
+  onReviewInstance,
   onComplete,
 }: {
   skill: Skill;
   agents: Agent[];
   defaultMode: "copy" | "symlink";
+  initialSourceId?: string;
   onClose: () => void;
+  onReviewInstance: (instanceId: string, sourceInstanceId: string) => void;
   onComplete: () => Promise<void>;
 }) {
   const dialogRef = useModalFocus<HTMLElement>();
   const newestInstance = skill.instances[0];
+  const initialSource =
+    skill.instances.find((instance) => instance.id === initialSourceId) ||
+    newestInstance;
   const visibleMissingAgentIds = skill.missingAgentIds.filter((agentId) =>
     agents.some((agent) => agent.id === agentId),
   );
-  const [sourceId, setSourceId] = useState(newestInstance?.id || "");
+  const [sourceId, setSourceId] = useState(initialSource?.id || "");
   const [targetIds, setTargetIds] = useState<string[]>(
     visibleMissingAgentIds.length
       ? visibleMissingAgentIds
       : agents
-          .filter((agent) => agent.id !== newestInstance?.agentId)
+          .filter((agent) => agent.id !== initialSource?.agentId)
           .map((agent) => agent.id),
   );
   const [mode, setMode] = useState<"copy" | "symlink">(defaultMode);
@@ -1160,8 +1951,43 @@ function SyncDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [completed, setCompleted] = useState(false);
+  const [diffPair, setDiffPair] = useState<{
+    leftInstanceId: string;
+    rightInstanceId: string;
+  } | null>(null);
 
   const source = skill.instances.find((instance) => instance.id === sourceId);
+  const comparisonInstance =
+    skill.instances.find(
+      (instance) =>
+        instance.id !== sourceId && instance.hash !== source?.hash,
+    ) || skill.instances.find((instance) => instance.id !== sourceId);
+
+  function selectSource(nextSourceId: string) {
+    const nextSource = skill.instances.find(
+      (instance) => instance.id === nextSourceId,
+    );
+    const previousSource = skill.instances.find(
+      (instance) => instance.id === sourceId,
+    );
+    if (!nextSource) return;
+    setSourceId(nextSourceId);
+    setTargetIds((current) => {
+      const nextTargets = current.filter(
+        (agentId) => agentId !== nextSource.agentId,
+      );
+      if (
+        previousSource &&
+        previousSource.agentId !== nextSource.agentId &&
+        agents.some((agent) => agent.id === previousSource.agentId) &&
+        !nextTargets.includes(previousSource.agentId)
+      ) {
+        nextTargets.push(previousSource.agentId);
+      }
+      return nextTargets;
+    });
+    setPlan(null);
+  }
 
   function toggleTarget(agentId: string) {
     setPlan(null);
@@ -1225,7 +2051,7 @@ function SyncDialog({
     <div className="overlay modal-overlay" onMouseDown={onClose}>
       <section
         ref={dialogRef}
-        className="sync-dialog"
+        className={`sync-dialog ${diffPair ? "is-diff-view" : ""}`}
         onMouseDown={(event) => event.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -1251,6 +2077,19 @@ function SyncDialog({
               返回技能列表
             </button>
           </div>
+        ) : diffPair ? (
+          <SkillDiffView
+            key={`${diffPair.leftInstanceId}:${diffPair.rightInstanceId}`}
+            skill={skill}
+            agents={agents}
+            leftInstanceId={diffPair.leftInstanceId}
+            initialRightInstanceId={diffPair.rightInstanceId}
+            onBack={() => setDiffPair(null)}
+            onChooseSource={(instanceId) => {
+              selectSource(instanceId);
+              setDiffPair(null);
+            }}
+          />
         ) : (
           <>
             <div className="sync-title">
@@ -1275,35 +2114,61 @@ function SyncDialog({
                     );
                     if (!agent) return null;
                     return (
-                      <label
-                        className={`source-option ${
-                          sourceId === instance.id ? "is-selected" : ""
-                        }`}
-                        key={instance.id}
-                      >
-                        <input
-                          type="radio"
-                          name="source"
-                          value={instance.id}
-                          checked={sourceId === instance.id}
-                          onChange={() => {
-                            setSourceId(instance.id);
-                            setPlan(null);
-                          }}
-                        />
-                        <AgentMark agent={agent} active />
-                        <span>
-                          <strong>{agent.name}</strong>
-                          <small>
-                            {instance.shortHash} ·{" "}
-                            {formatRelativeDate(instance.modifiedAt)}
-                          </small>
-                        </span>
-                        <b>●</b>
-                      </label>
+                      <div className="source-option-row" key={instance.id}>
+                        <label
+                          className={`source-option ${
+                            sourceId === instance.id ? "is-selected" : ""
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="source"
+                            value={instance.id}
+                            checked={sourceId === instance.id}
+                            onChange={() => selectSource(instance.id)}
+                          />
+                          <AgentMark agent={agent} active />
+                          <span>
+                            <strong>{agent.name}</strong>
+                            <small>
+                              {instance.shortHash} ·{" "}
+                              {formatRelativeDate(instance.modifiedAt)}
+                            </small>
+                          </span>
+                          <b>●</b>
+                        </label>
+                        <button
+                          className="source-review-button"
+                          onClick={() =>
+                            onReviewInstance(instance.id, sourceId)
+                          }
+                        >
+                          查看版本
+                        </button>
+                      </div>
                     );
                   })}
                 </div>
+                {comparisonInstance && source && (
+                  <button
+                    className="diff-launch-button"
+                    onClick={() =>
+                      setDiffPair({
+                        leftInstanceId: source.id,
+                        rightInstanceId: comparisonInstance.id,
+                      })
+                    }
+                  >
+                    <span aria-hidden>≠</span>
+                    <span>
+                      <strong>高级比较</strong>
+                      <small>
+                        需要时查看文件增删和文本逐行变化
+                      </small>
+                    </span>
+                    <b>→</b>
+                  </button>
+                )}
               </section>
 
               <section>
@@ -1615,7 +2480,7 @@ function ImportSkillDialog({
   const [fileContent, setFileContent] = useState<SkillFileContent | null>(null);
   const [contentLoading, setContentLoading] = useState(Boolean(firstFilePath));
   const [previewMode, setPreviewMode] = useState<"rendered" | "source">(
-    isMarkdownPath(firstFilePath) ? "rendered" : "source",
+    defaultPreviewMode(firstFilePath),
   );
   const [collapsedDirectories, setCollapsedDirectories] = useState<Set<string>>(
     () =>
@@ -1671,13 +2536,23 @@ function ImportSkillDialog({
     };
   }, [imported.importId, selectedFilePath]);
 
+  const imagePreviewSource =
+    fileContent?.previewKind === "image"
+      ? `${API_BASE}/api/import-asset?importId=${encodeURIComponent(imported.importId)}&path=${encodeURIComponent(fileContent.path)}`
+      : "";
+  const supportsSourceToggle = Boolean(
+    fileContent?.previewable &&
+      (isMarkdownPath(fileContent.path) ||
+        (fileContent.mimeType === "image/svg+xml" && fileContent.content)),
+  );
+
   function selectFile(filePath: string) {
     if (filePath === selectedFilePath) return;
     setSelectedFilePath(filePath);
     setFileContent(null);
     setError("");
     setContentLoading(true);
-    setPreviewMode(isMarkdownPath(filePath) ? "rendered" : "source");
+    setPreviewMode(defaultPreviewMode(filePath));
   }
 
   function toggleDirectory(directoryPath: string) {
@@ -1846,7 +2721,9 @@ function ImportSkillDialog({
                         }
                         onClick={() => selectFile(entry.path)}
                       >
-                        <span aria-hidden>·</span>
+                        <span aria-hidden>
+                          {isImagePath(entry.path) ? "▧" : "·"}
+                        </span>
                         <strong>{entry.name}</strong>
                         <small>{entry.language || "文件"}</small>
                       </button>
@@ -1860,15 +2737,15 @@ function ImportSkillDialog({
                     <strong>{fileContent?.path || selectedFilePath}</strong>
                     {fileContent && (
                       <span>
-                        {fileContent.language} · {formatBytes(fileContent.size)}
+                        {fileContent.mimeType || fileContent.language} ·{" "}
+                        {formatBytes(fileContent.size)}
                       </span>
                     )}
                   </div>
-                  {fileContent?.previewable &&
-                  isMarkdownPath(fileContent.path) ? (
+                  {supportsSourceToggle ? (
                     <div
                       className="file-view-toggle"
-                      aria-label="Markdown 显示方式"
+                      aria-label="文件显示方式"
                     >
                       <button
                         type="button"
@@ -1896,8 +2773,18 @@ function ImportSkillDialog({
                     正在读取文件…
                   </div>
                 ) : fileContent?.previewable ? (
-                  isMarkdownPath(fileContent.path) &&
-                  previewMode === "rendered" ? (
+                  fileContent.previewKind === "image" &&
+                  previewMode === "rendered" &&
+                  imagePreviewSource ? (
+                    <div className="skill-file-body is-media">
+                      <SkillImagePreview
+                        key={imagePreviewSource}
+                        source={imagePreviewSource}
+                        name={fileContent.name}
+                      />
+                    </div>
+                  ) : isMarkdownPath(fileContent.path) &&
+                    previewMode === "rendered" ? (
                     <div className="skill-file-body is-rendered">
                       <article className="markdown-preview">
                         <MarkdownDocument content={fileContent.content || ""} />
@@ -2017,7 +2904,17 @@ function SettingsDialog({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [isAddingAgent, setIsAddingAgent] = useState(false);
+  const [addAgentError, setAddAgentError] = useState("");
+  const [pendingRemovalId, setPendingRemovalId] = useState<string | null>(null);
+  const [newAgent, setNewAgent] = useState({
+    name: "",
+    shortName: "",
+    color: "#78d4c7",
+    paths: "",
+  });
   const agentListRef = useRef<HTMLDivElement>(null);
+  const addAgentNameRef = useRef<HTMLInputElement>(null);
 
   function updateAgent(
     index: number,
@@ -2031,27 +2928,108 @@ function SettingsDialog({
     }));
   }
 
+  function openAddAgent() {
+    setIsAddingAgent(true);
+    setAddAgentError("");
+    window.requestAnimationFrame(() => {
+      agentListRef.current?.scrollTo({
+        top: agentListRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+      addAgentNameRef.current?.focus();
+    });
+  }
+
+  function cancelAddAgent() {
+    setIsAddingAgent(false);
+    setAddAgentError("");
+    setNewAgent({
+      name: "",
+      shortName: "",
+      color: "#78d4c7",
+      paths: "",
+    });
+  }
+
   function addAgent() {
-    const index = draft.agents.length + 1;
+    const name = newAgent.name.trim();
+    const paths = newAgent.paths
+      .split("\n")
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    if (!name) {
+      setAddAgentError("请填写工具名称。");
+      addAgentNameRef.current?.focus();
+      return;
+    }
+    if (paths.length === 0) {
+      setAddAgentError("请至少填写一个技能目录。");
+      return;
+    }
+
+    const slug = name
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 24);
+    const usedIds = new Set(draft.agents.map((agent) => agent.id));
+    const baseId = slug || "custom-agent";
+    let id = baseId;
+    let suffix = 2;
+    while (usedIds.has(id)) id = `${baseId}-${suffix++}`;
+
+    const compactName = name.replace(/\s+/g, "");
+    const shortName =
+      newAgent.shortName.trim().slice(0, 3).toUpperCase() ||
+      compactName.slice(0, 2).toUpperCase() ||
+      "AG";
+
     setDraft((current) => ({
       ...current,
       agents: [
         ...current.agents,
         {
-          id: `agent-${index}`,
-          name: `智能工具 ${index}`,
-          shortName: `A${index}`,
-          color: "#f6ca45",
-          paths: [`~/.agent-${index}/skills`],
+          id,
+          name,
+          shortName,
+          color: newAgent.color,
+          paths,
         },
       ],
+      visibleAgentIds: [...new Set([...current.visibleAgentIds, id])],
+      dismissedAgentIds: (current.dismissedAgentIds || []).filter(
+        (agentId) => agentId !== id,
+      ),
     }));
+    cancelAddAgent();
     window.requestAnimationFrame(() => {
       agentListRef.current?.scrollTo({
         top: agentListRef.current.scrollHeight,
-        behavior: "auto",
+        behavior: "smooth",
       });
     });
+  }
+
+  function removeAgent(agentId: string) {
+    setDraft((current) => {
+      const agents = current.agents.filter((agent) => agent.id !== agentId);
+      const remainingVisibleIds = current.visibleAgentIds.filter(
+        (id) => id !== agentId,
+      );
+      return {
+        ...current,
+        agents,
+        visibleAgentIds:
+          remainingVisibleIds.length > 0
+            ? remainingVisibleIds
+            : agents.slice(0, 1).map((agent) => agent.id),
+        dismissedAgentIds: [
+          ...new Set([...(current.dismissedAgentIds || []), agentId]),
+        ],
+      };
+    });
+    setPendingRemovalId(null);
   }
 
   function toggleAgentVisibility(agentId: string) {
@@ -2063,6 +3041,27 @@ function SettingsDialog({
         visibleAgentIds: isVisible
           ? current.visibleAgentIds.filter((id) => id !== agentId)
           : [...current.visibleAgentIds, agentId],
+      };
+    });
+  }
+
+  function setAgentVisibilityPreset(preset: "default" | "all") {
+    setDraft((current) => {
+      if (preset === "all") {
+        return {
+          ...current,
+          visibleAgentIds: current.agents.map((agent) => agent.id),
+        };
+      }
+      const preferredIds = ["codex", "claude"].filter((id) =>
+        current.agents.some((agent) => agent.id === id),
+      );
+      return {
+        ...current,
+        visibleAgentIds:
+          preferredIds.length > 0
+            ? preferredIds
+            : current.agents.slice(0, 1).map((agent) => agent.id),
       };
     });
   }
@@ -2092,13 +3091,13 @@ function SettingsDialog({
         tabIndex={-1}
       >
         <div className="panel-topline">
-          <span>工具数据源</span>
+          <span>产品与目录</span>
           <button className="icon-button" onClick={onClose} aria-label="关闭设置">
             ×
           </button>
         </div>
         <div className="settings-heading">
-          <p className="eyebrow">本地数据源</p>
+          <p className="eyebrow">Skills 数据源</p>
           <h2>工具与技能目录</h2>
           <p>每行一个目录。支持以 ~/ 开头的用户目录，也支持绝对路径。</p>
           <div className="default-sync-mode" aria-label="默认同步方式">
@@ -2124,30 +3123,93 @@ function SettingsDialog({
               软链接
             </button>
           </div>
+          <div className="agent-visibility-guide">
+            <div className="agent-visibility-guide-copy">
+              <span aria-hidden="true">◉</span>
+              <div>
+                <strong>
+                  已显示 {draft.visibleAgentIds.length} / {draft.agents.length} 个工具
+                </strong>
+                <p>
+                  隐藏只收起技能列表与安装入口，仍会扫描本地目录，也不会删除文件。
+                </p>
+              </div>
+            </div>
+            <div className="agent-visibility-presets" aria-label="快捷设置工具显示范围">
+              <button
+                type="button"
+                onClick={() => setAgentVisibilityPreset("default")}
+                disabled={
+                  draft.visibleAgentIds.length ===
+                    ["codex", "claude"].filter((id) =>
+                      draft.agents.some((agent) => agent.id === id),
+                    ).length &&
+                  draft.visibleAgentIds.every((id) =>
+                    ["codex", "claude"].includes(id),
+                  )
+                }
+              >
+                仅 Codex + Claude
+              </button>
+              <button
+                type="button"
+                onClick={() => setAgentVisibilityPreset("all")}
+                disabled={
+                  draft.visibleAgentIds.length === draft.agents.length
+                }
+              >
+                全部显示
+              </button>
+            </div>
+          </div>
         </div>
         <div className="agent-config-list" ref={agentListRef}>
-          {draft.agents.map((agent, index) => (
-            <article
-              className="agent-config-card"
-              key={`${agent.id}-${index}`}
-              style={{ "--agent-color": agent.color } as React.CSSProperties}
-            >
-              <div className="config-accent" />
-              <div className="agent-config-toolbar">
-                <span>{agent.id}</span>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={draft.visibleAgentIds.includes(agent.id)}
-                    onChange={() => toggleAgentVisibility(agent.id)}
-                    disabled={
-                      draft.visibleAgentIds.includes(agent.id) &&
-                      draft.visibleAgentIds.length === 1
+          {draft.agents.map((agent, index) => {
+            const isVisible = draft.visibleAgentIds.includes(agent.id);
+            const isOnlyVisibleAgent =
+              isVisible && draft.visibleAgentIds.length === 1;
+            return (
+              <article
+                className={`agent-config-card ${
+                  pendingRemovalId === agent.id ? "is-pending-removal" : ""
+                } ${isVisible ? "is-visible" : "is-hidden"}`}
+                key={`${agent.id}-${index}`}
+                style={{ "--agent-color": agent.color } as React.CSSProperties}
+              >
+                <div className="config-accent" />
+                <div className="agent-config-toolbar">
+                  <span>{agent.id}</span>
+                  <button
+                    type="button"
+                    className={`agent-visibility-toggle ${
+                      isVisible ? "is-on" : "is-off"
+                    }`}
+                    role="switch"
+                    aria-checked={isVisible}
+                    aria-label={`${isVisible ? "隐藏" : "显示"} ${agent.name}`}
+                    onClick={() => toggleAgentVisibility(agent.id)}
+                    disabled={isOnlyVisibleAgent}
+                    title={
+                      isOnlyVisibleAgent
+                        ? "至少保留一个显示中的工具"
+                        : isVisible
+                          ? "点击后从技能列表与安装目标中隐藏"
+                          : "点击后在技能列表与安装目标中显示"
                     }
-                  />
-                  <span>在列表与安装目标中展示</span>
-                </label>
-              </div>
+                  >
+                    <span className="visibility-switch-track" aria-hidden="true">
+                      <i />
+                    </span>
+                    <span className="visibility-switch-copy">
+                      <strong>{isVisible ? "已显示" : "已隐藏"}</strong>
+                      <small>
+                        {isVisible
+                          ? "列表与安装目标可见"
+                          : "仍会扫描本地目录"}
+                      </small>
+                    </span>
+                  </button>
+                </div>
               <div className="config-fields config-fields-title">
                 <label>
                   <span>工具名称</span>
@@ -2171,7 +3233,7 @@ function SettingsDialog({
                   />
                 </label>
                 <label className="color-field">
-                  <span>颜色</span>
+                  <span title="只用于区分工具，不表示运行状态">身份色</span>
                   <input
                     type="color"
                     value={agent.color}
@@ -2181,19 +3243,19 @@ function SettingsDialog({
                   />
                 </label>
                 <button
+                  type="button"
                   className="remove-agent"
-                  onClick={() =>
-                    setDraft((current) => ({
-                      ...current,
-                      agents: current.agents.filter(
-                        (_, agentIndex) => agentIndex !== index,
-                      ),
-                    }))
-                  }
+                  onClick={() => setPendingRemovalId(agent.id)}
                   disabled={draft.agents.length <= 1}
                   aria-label={`移除 ${agent.name}`}
+                  title={
+                    draft.agents.length <= 1
+                      ? "至少保留一个工具"
+                      : `移除 ${agent.name}`
+                  }
                 >
-                  ×
+                  <span aria-hidden="true">−</span>
+                  移除
                 </button>
               </div>
               <label className="paths-field">
@@ -2211,12 +3273,148 @@ function SettingsDialog({
                   rows={Math.max(2, agent.paths.length)}
                 />
               </label>
-            </article>
-          ))}
+              {pendingRemovalId === agent.id && (
+                <div className="remove-agent-confirm" role="alert">
+                  <div>
+                    <strong>从管理器中移除 {agent.name}？</strong>
+                    <p>
+                      只移除工具配置，不会删除
+                      {agent.paths.length === 1
+                        ? ` ${agent.paths[0]}`
+                        : "这些目录中"}
+                      的 Skill 文件。
+                    </p>
+                  </div>
+                  <div className="remove-agent-confirm-actions">
+                    <button
+                      type="button"
+                      className="button button-ghost"
+                      onClick={() => setPendingRemovalId(null)}
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      className="button button-danger"
+                      onClick={() => removeAgent(agent.id)}
+                    >
+                      确认移除
+                    </button>
+                  </div>
+                </div>
+              )}
+              </article>
+            );
+          })}
+          {isAddingAgent && (
+            <section className="agent-add-composer" aria-label="添加自定义工具">
+              <div className="agent-add-heading">
+                <div className="agent-add-mark" aria-hidden="true">
+                  +
+                </div>
+                <div>
+                  <strong>添加自定义工具</strong>
+                  <p>填写名称和技能目录，确认后才会加入管理器。</p>
+                </div>
+              </div>
+              <div className="agent-add-fields">
+                <label>
+                  <span>工具名称</span>
+                  <input
+                    ref={addAgentNameRef}
+                    value={newAgent.name}
+                    placeholder="例如 Trae"
+                    onChange={(event) => {
+                      setNewAgent((current) => ({
+                        ...current,
+                        name: event.target.value,
+                      }));
+                      setAddAgentError("");
+                    }}
+                  />
+                </label>
+                <label>
+                  <span>标识</span>
+                  <input
+                    value={newAgent.shortName}
+                    maxLength={3}
+                    placeholder="TR"
+                    onChange={(event) =>
+                      setNewAgent((current) => ({
+                        ...current,
+                        shortName: event.target.value.toUpperCase(),
+                      }))
+                    }
+                  />
+                </label>
+                <label className="color-field">
+                  <span title="只用于区分工具，不表示运行状态">身份色</span>
+                  <input
+                    type="color"
+                    value={newAgent.color}
+                    onChange={(event) =>
+                      setNewAgent((current) => ({
+                        ...current,
+                        color: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+              <label className="paths-field agent-add-paths">
+                <span>技能目录</span>
+                <textarea
+                  value={newAgent.paths}
+                  placeholder={"~/.trae/skills\n每行填写一个目录"}
+                  rows={2}
+                  onChange={(event) => {
+                    setNewAgent((current) => ({
+                      ...current,
+                      paths: event.target.value,
+                    }));
+                    setAddAgentError("");
+                  }}
+                />
+              </label>
+              <div className="agent-add-actions">
+                {addAgentError ? (
+                  <p className="agent-add-error">{addAgentError}</p>
+                ) : (
+                  <p>添加后默认在技能列表和安装目标中展示。</p>
+                )}
+                <button
+                  type="button"
+                  className="button button-ghost"
+                  onClick={cancelAddAgent}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  className="button button-acid"
+                  onClick={addAgent}
+                >
+                  确认添加
+                </button>
+              </div>
+            </section>
+          )}
         </div>
-        <button className="add-agent-button" onClick={addAgent}>
-          ＋ 添加其他智能工具
-        </button>
+        {!isAddingAgent && (
+          <button
+            type="button"
+            className="add-agent-button"
+            onClick={openAddAgent}
+          >
+            <span className="add-agent-button-mark" aria-hidden="true">
+              +
+            </span>
+            <span>
+              <strong>添加自定义工具</strong>
+              <small>配置其他 Agent 的本地技能目录</small>
+            </span>
+          </button>
+        )}
         {error && <p className="inline-error">{error}</p>}
         <div className="dialog-actions">
           <span className="settings-note">
@@ -2403,6 +3601,752 @@ function SyncCenter({
   );
 }
 
+function CapabilityProductMark({
+  capability,
+}: {
+  capability: Pick<
+    Capability,
+    "productName" | "productShortName" | "productColor"
+  >;
+}) {
+  return (
+    <span
+      className="capability-product-mark"
+      style={
+        {
+          "--capability-color": capability.productColor,
+        } as React.CSSProperties
+      }
+      aria-label={capability.productName}
+    >
+      {capability.productShortName}
+    </span>
+  );
+}
+
+type ConnectorCatalog = {
+  available: boolean;
+  productName: string;
+  connectors: {
+    id: string; name: string; enabled: boolean; transport: string; endpoint: string;
+    source: string; toolsRestricted: boolean; enabledTools: string[]; disabledTools: string[];
+    approvalMode: string; timeoutSeconds: number | null; hasCredentials: boolean;
+  }[];
+  plugins: {
+    name: string; displayName?: string; marketplace: string; version: string;
+    enabled: boolean; status: "available" | "disabled" | "missing" | "ambiguous";
+  }[];
+  warnings: string[];
+  scannedAt: string;
+};
+
+function ConnectorsView({ onSettings }: { onSettings: () => void }) {
+  const [catalog, setCatalog] = useState<ConnectorCatalog | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
+  const reload = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setCatalog(await requestJson<ConnectorCatalog>("/api/connectors"));
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "读取连接器失败，请重试。");
+    } finally { setLoading(false); }
+  }, []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => void reload(), 0);
+    return () => window.clearTimeout(timer);
+  }, [reload]);
+  const connectors = (catalog?.connectors || []).filter((item) =>
+    `${item.name} ${item.source} ${item.endpoint}`.toLowerCase().includes(query.toLowerCase()));
+  const pluginStatuses = { available: "已启用 · 本地可读", disabled: "未启用", missing: "本地文件缺失", ambiguous: "版本待确认" };
+  return (
+    <section className="connectors-view page-enter" aria-labelledby="connectors-title">
+      <header className="connectors-heading">
+        <div><p className="eyebrow">其他 / 连接器</p><h1 id="connectors-title">订单来了 · 连接器</h1>
+          <p>查看本机的服务连接配置和插件来源。启用状态来自配置，未检测服务连接或登录状态。</p></div>
+        <button className="scan-button" onClick={() => void reload()} disabled={loading}>{loading ? "读取中…" : "重新读取"}</button>
+      </header>
+      <div className="connector-notice">只读展示 · 不调用外部服务 · 凭据、启动参数和完整服务地址不会展示</div>
+      {error && <p className="capability-message is-error" role="alert">{error}</p>}
+      {loading && <p role="status">正在读取本地配置…</p>}
+      {!loading && catalog && !catalog.available && <EmptyState title="尚未检测到订单来了" description="安装并启动订单来了后，重新读取。Windows 与 Mac 均从当前用户目录下的 .smartorder 识别。" />}
+      {catalog?.available && <>
+        <div className="connector-toolbar">
+          <h2>服务连接 <span>{catalog.connectors.length}</span></h2>
+          <label><span className="sr-only">搜索连接器</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索连接器、来源或服务域名" /></label>
+        </div>
+        <div className="connector-list">
+          {connectors.map((connector) => <details className="connector-card" key={connector.id}>
+            <summary>
+              <span className="connector-mark" aria-hidden="true">订</span>
+              <span className="connector-title"><strong>{connector.name}</strong><small>{connector.source} · {connector.transport}</small></span>
+              <span className="connector-status">{connector.enabled ? "配置已启用" : "配置已停用"}</span>
+              <span className="connector-expand" aria-hidden="true">⌄</span>
+            </summary>
+            <div className="connector-details">
+              <dl>
+                <div><dt>服务域名</dt><dd>{connector.endpoint || (connector.transport === "stdio" ? "本地进程（启动命令已隐藏）" : "未声明可展示的地址")}</dd></div>
+                <div><dt>认证信息</dt><dd>{connector.hasCredentials ? "已声明认证或环境配置，内容已隐藏" : "未声明认证配置"}</dd></div>
+                <div><dt>工具执行确认</dt><dd>{{ auto: "自动", prompt: "询问", approve: "允许", deny: "拒绝" }[connector.approvalMode] || "使用客户端默认设置"}</dd></div>
+                <div><dt>工具超时</dt><dd>{connector.timeoutSeconds === null ? "使用客户端默认设置" : `${connector.timeoutSeconds} 秒`}</dd></div>
+              </dl>
+              <div className="connector-tools"><strong>配置允许的工具</strong><p>{connector.enabledTools.length ? connector.enabledTools.join("、") : connector.toolsRestricted ? "清单为空，未开放任何工具" : "未配置限定清单；可用工具由服务决定"}</p></div>
+              {!!connector.disabledTools.length && <div className="connector-tools"><strong>配置禁用的工具</strong><p>{connector.disabledTools.join("、")}</p></div>}
+              <p className="connector-hint">此处为配置摘要；连接器登录、启停和权限修改请在订单来了客户端完成。</p>
+            </div>
+          </details>)}
+          {!connectors.length && <p className="connector-empty">{query ? "没有匹配的连接器。" : "没有发现已配置的连接器。"}</p>}
+        </div>
+        <section className="connector-plugins" aria-labelledby="connector-plugins-title">
+          <div className="connector-toolbar"><h2 id="connector-plugins-title">技能插件 <span>{catalog.plugins.length}</span></h2><button className="scan-button" onClick={onSettings}>设置技能列表显示</button></div>
+          <p>仅识别配置中登记的插件。已启用且本地版本明确的插件技能可在 Skills 页面预览；市场目录和历史缓存不计入。</p>
+          <ul>{catalog.plugins.map((plugin) => <li key={`${plugin.name}@${plugin.marketplace}`}>
+            <div><strong>{plugin.displayName || plugin.name}</strong><small>{plugin.marketplace} · {plugin.version || "版本未知"}</small></div><span>{pluginStatuses[plugin.status]}</span>
+          </li>)}</ul>
+          {!catalog.plugins.length && <p>没有发现已登记的技能插件。</p>}
+        </section>
+        {!!catalog.warnings.length && <div className="connector-notice" role="status">{catalog.warnings.map((warning, index) => <p key={index}>{warning}</p>)}</div>}
+      </>}
+    </section>
+  );
+}
+
+function CapabilitiesView({
+  catalog,
+  loading,
+  error,
+  onRefresh,
+  onSelect,
+}: {
+  catalog: CapabilityCatalog | null;
+  loading: boolean;
+  error: string;
+  onRefresh: () => void;
+  onSelect: (capability: Capability) => void;
+}) {
+  const [activeProductId, setActiveProductId] = useState("all");
+  const [activeExpertType, setActiveExpertType] = useState<
+    "all" | "expert" | "team"
+  >("all");
+  const [capabilityQuery, setCapabilityQuery] = useState("");
+  const normalizedQuery = capabilityQuery.trim().toLocaleLowerCase();
+  const allCapabilities = (catalog?.products || []).flatMap(
+    (product) => product.items,
+  );
+  const expertCount = allCapabilities.filter(
+    (capability) => capability.kind !== "expert-team",
+  ).length;
+  const teamCount = allCapabilities.filter(
+    (capability) => capability.kind === "expert-team",
+  ).length;
+  const visibleProducts = (catalog?.products || [])
+    .filter(
+      (product) =>
+        activeProductId === "all" || product.id === activeProductId,
+    )
+    .map((product) => ({
+      ...product,
+      items: product.items.filter((capability) => {
+        const matchesType =
+          activeExpertType === "all" ||
+          (activeExpertType === "team"
+            ? capability.kind === "expert-team"
+            : capability.kind !== "expert-team");
+        const matchesQuery = normalizedQuery
+          ? [
+              capability.displayName,
+              capability.name,
+              capability.description,
+              capability.profession,
+              capability.tags.join(" "),
+              capability.members
+                .map(
+                  (member) =>
+                    `${member.displayName} ${member.name} ${member.profession}`,
+                )
+                .join(" "),
+            ]
+              .join(" ")
+              .toLocaleLowerCase()
+              .includes(normalizedQuery)
+          : true;
+        return matchesType && matchesQuery;
+      }),
+    }))
+    .filter(
+      (product) =>
+        product.items.length ||
+        (!normalizedQuery && activeExpertType === "all"),
+    );
+
+  return (
+    <div className="capabilities-view page-enter">
+      <section className="capability-hero">
+        <div>
+          <p className="eyebrow">专家中心</p>
+          <h1>
+            专家与专家团，
+            <br />
+            分工一目了然<span>。</span>
+          </h1>
+          <p>
+            自动识别本机产品中的单专家、专家团与兼容 Agent Profile，集中查看角色定位、成员分工、模型和委派方式。
+          </p>
+        </div>
+        <div className="capability-hero-note">
+          <span>只读扫描</span>
+          <strong>敏感配置自动省略</strong>
+          <small>不会展示 API Key、Token、认证与会话数据</small>
+        </div>
+      </section>
+
+      <section className="capability-overview" aria-label="专家能力概览">
+        <div>
+          <span>已识别产品</span>
+          <strong>{catalog?.totals.products || 0}</strong>
+          <small>支持 WorkBuddy、Hermes Agent</small>
+        </div>
+        <div>
+          <span>专家与专家团</span>
+          <strong>{catalog?.totals.profiles || 0}</strong>
+          <small>按本机实际配置展示</small>
+        </div>
+        <div>
+          <span>专家团成员</span>
+          <strong>{catalog?.totals.members || 0}</strong>
+          <small>可查看每位成员的角色提示词</small>
+        </div>
+      </section>
+
+      <section className="capability-inventory">
+        <div className="capability-primary-tabs" aria-label="专家类型">
+          {(
+            [
+              ["all", "全部", catalog?.totals.profiles || 0],
+              ["expert", "专家", expertCount],
+              ["team", "专家团", teamCount],
+            ] as const
+          ).map(([type, label, count]) => (
+            <button
+              key={type}
+              className={activeExpertType === type ? "is-active" : ""}
+              aria-pressed={activeExpertType === type}
+              onClick={() => setActiveExpertType(type)}
+            >
+              <span>{label}</span>
+              <b>{count}</b>
+              <small>
+                {type === "expert"
+                  ? "单角色与 Agent Profile"
+                  : type === "team"
+                    ? "多角色协作配置"
+                    : "全部本地专家配置"}
+              </small>
+            </button>
+          ))}
+        </div>
+        <div className="capability-toolbar">
+          <div
+            className="capability-product-tabs"
+            aria-label="按专家产品筛选"
+          >
+            <button
+              className={activeProductId === "all" ? "is-active" : ""}
+              aria-pressed={activeProductId === "all"}
+              onClick={() => setActiveProductId("all")}
+            >
+              全部产品
+              <span>{catalog?.totals.profiles || 0}</span>
+            </button>
+            {(catalog?.products || []).map((product) => (
+              <button
+                key={product.id}
+                className={activeProductId === product.id ? "is-active" : ""}
+                aria-pressed={activeProductId === product.id}
+                onClick={() => setActiveProductId(product.id)}
+              >
+                <i style={{ background: product.color }} />
+                {product.name}
+                <span>{product.itemCount}</span>
+              </button>
+            ))}
+          </div>
+          <label className="capability-search">
+            <span>⌕</span>
+            <input
+              value={capabilityQuery}
+              onChange={(event) => setCapabilityQuery(event.target.value)}
+              placeholder="搜索专家、成员或职责…"
+              aria-label="搜索专家能力"
+            />
+          </label>
+          <button
+            className="capability-refresh"
+            onClick={onRefresh}
+            disabled={loading}
+          >
+            <span className={loading ? "is-spinning" : ""}>↻</span>
+            {loading ? "识别中" : "重新识别"}
+          </button>
+        </div>
+
+        {error ? (
+          <div className="capability-message is-error">
+            <strong>专家配置读取失败</strong>
+            <p>{error}</p>
+            <button onClick={onRefresh}>重试</button>
+          </div>
+        ) : loading && !catalog ? (
+          <div className="capability-message" role="status">
+            <strong>正在识别本机专家配置…</strong>
+            <p>读取 WorkBuddy 专家插件与 Hermes Agent Profile。</p>
+          </div>
+        ) : !visibleProducts.length ? (
+          <EmptyState
+            title={
+              normalizedQuery
+                ? "没有匹配的专家"
+                : activeExpertType === "team"
+                  ? "没有识别到专家团"
+                  : "没有识别到专家"
+            }
+            description={
+              normalizedQuery
+                ? "试试清空搜索词，或切换到其他产品。"
+                : "安装或配置支持的 Agent 产品后，再重新识别。"
+            }
+          />
+        ) : (
+          visibleProducts.map((product) => (
+            <div className="capability-product-section" key={product.id}>
+              <header>
+                <div>
+                  <span
+                    className="capability-product-logo"
+                    style={{ background: product.color }}
+                  >
+                    {product.shortName}
+                  </span>
+                  <div>
+                    <h2>{product.name}</h2>
+                    <p>
+                      {product.id === "workbuddy"
+                        ? `${product.itemCount} 个本地专家配置 · 专家市场收录 ${product.catalogCount} 个`
+                        : `${product.itemCount} 个本地 Agent Profile · 以 SOUL.md 定义身份`}
+                    </p>
+                  </div>
+                </div>
+                <code>{product.sourcePath}</code>
+              </header>
+              {product.items.length ? (
+                <div className="capability-card-grid">
+                  {product.items.map((capability) => (
+                    <button
+                      className="capability-card"
+                      key={capability.id}
+                      onClick={() => onSelect(capability)}
+                    >
+                      <div className="capability-card-top">
+                        <CapabilityProductMark capability={capability} />
+                        <span className="capability-kind">
+                          {capability.kindLabel}
+                        </span>
+                        <span className="capability-open">查看配置 →</span>
+                      </div>
+                      <div className="capability-card-copy">
+                        <h3>{capability.displayName || capability.name}</h3>
+                        {capability.displayName !== capability.name && (
+                          <code>{capability.name}</code>
+                        )}
+                        <p>{capability.description}</p>
+                      </div>
+                      <div className="capability-card-stats">
+                        {capability.memberCount > 0 && (
+                          <span>
+                            <b>{capability.memberCount}</b> 位成员
+                          </span>
+                        )}
+                        {capability.model && (
+                          <span title={capability.model}>
+                            <b>模型</b> {capability.model}
+                          </span>
+                        )}
+                        {capability.skillCount > 0 && (
+                          <span>
+                            <b>{capability.skillCount}</b> 个技能
+                          </span>
+                        )}
+                        <span>
+                          <b>{capability.fileCount}</b> 个配置文件
+                        </span>
+                      </div>
+                      {!!capability.tags.length && (
+                        <div className="capability-tags">
+                          {capability.tags.slice(0, 4).map((tag) => (
+                            <span key={tag}>{tag}</span>
+                          ))}
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="capability-product-empty">没有匹配的配置。</p>
+              )}
+            </div>
+          ))
+        )}
+      </section>
+    </div>
+  );
+}
+
+function CapabilityDetailPanel({
+  capability,
+  onClose,
+}: {
+  capability: Capability;
+  onClose: () => void;
+}) {
+  const dialogRef = useModalFocus<HTMLElement>();
+  const [listing, setListing] = useState<CapabilityFileListing | null>(null);
+  const [selectedPath, setSelectedPath] = useState(
+    capability.primaryFilePath,
+  );
+  const [fileContent, setFileContent] = useState<SkillFileContent | null>(null);
+  const [loadingFiles, setLoadingFiles] = useState(true);
+  const [loadingContent, setLoadingContent] = useState(true);
+  const [detailError, setDetailError] = useState("");
+  const [previewMode, setPreviewMode] = useState<"rendered" | "source">(
+    defaultPreviewMode(capability.primaryFilePath),
+  );
+  const fileRequestRef = useRef(0);
+
+  const openFile = useCallback(
+    async (filePath: string) => {
+      const requestId = fileRequestRef.current + 1;
+      fileRequestRef.current = requestId;
+      setSelectedPath(filePath);
+      setPreviewMode(defaultPreviewMode(filePath));
+      setLoadingContent(true);
+      setDetailError("");
+      try {
+        const content = await requestJson<SkillFileContent>(
+          `/api/capability-file?capabilityId=${encodeURIComponent(
+            capability.id,
+          )}&path=${encodeURIComponent(filePath)}`,
+        );
+        if (fileRequestRef.current === requestId) setFileContent(content);
+      } catch (error) {
+        if (fileRequestRef.current === requestId) {
+          setFileContent(null);
+          setDetailError(
+            error instanceof Error ? error.message : "无法读取配置文件。",
+          );
+        }
+      } finally {
+        if (fileRequestRef.current === requestId) setLoadingContent(false);
+      }
+    },
+    [capability.id],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadFiles() {
+      setLoadingFiles(true);
+      try {
+        const nextListing = await requestJson<CapabilityFileListing>(
+          `/api/capability-files?capabilityId=${encodeURIComponent(
+            capability.id,
+          )}`,
+        );
+        if (cancelled) return;
+        setListing(nextListing);
+        const firstPath =
+          nextListing.entries.find(
+            (entry) =>
+              entry.type === "file" &&
+              entry.path === capability.primaryFilePath,
+          )?.path ||
+          nextListing.entries.find((entry) => entry.type === "file")?.path ||
+          "";
+        if (firstPath) void openFile(firstPath);
+        else setLoadingContent(false);
+      } catch (error) {
+        if (cancelled) return;
+        setDetailError(
+          error instanceof Error ? error.message : "无法读取专家配置。",
+        );
+        setLoadingContent(false);
+      } finally {
+        if (!cancelled) setLoadingFiles(false);
+      }
+    }
+    void loadFiles();
+    return () => {
+      cancelled = true;
+      fileRequestRef.current += 1;
+    };
+  }, [capability.id, capability.primaryFilePath, openFile]);
+
+  const files = useMemo(
+    () => listing?.entries.filter((entry) => entry.type === "file") || [],
+    [listing],
+  );
+  const rootFiles = files.filter((entry) => !entry.path.includes("/"));
+  const fileGroups = useMemo(() => {
+    const groups = new Map<string, SkillFileEntry[]>();
+    for (const entry of files) {
+      if (!entry.path.includes("/")) continue;
+      const folder = entry.path.split("/")[0];
+      const existing = groups.get(folder) || [];
+      existing.push(entry);
+      groups.set(folder, existing);
+    }
+    return [...groups.entries()].sort(([left], [right]) =>
+      left.localeCompare(right),
+    );
+  }, [files]);
+  const selectedEntry = files.find((entry) => entry.path === selectedPath);
+
+  function fileButton(entry: SkillFileEntry) {
+    return (
+      <button
+        key={entry.path}
+        className={selectedPath === entry.path ? "is-active" : ""}
+        onClick={() => void openFile(entry.path)}
+        title={entry.path}
+      >
+        <span>{isImagePath(entry.path) ? "▧" : isMarkdownPath(entry.path) ? "M↓" : "{}"}</span>
+        <span>{entry.name}</span>
+        <small>{formatBytes(entry.size)}</small>
+      </button>
+    );
+  }
+
+  return (
+    <div
+      className="capability-detail-overlay"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <aside
+        className="capability-detail-panel"
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="capability-detail-title"
+        tabIndex={-1}
+      >
+        <header className="capability-detail-header">
+          <div className="capability-detail-product">
+            <CapabilityProductMark capability={capability} />
+            <div>
+              <span>
+                {capability.productName} / {capability.kindLabel}
+              </span>
+              <code>{capability.sourcePath}</code>
+            </div>
+          </div>
+          <button
+            className="capability-detail-close"
+            onClick={onClose}
+            aria-label="关闭专家详情"
+          >
+            ×
+          </button>
+        </header>
+
+        <section className="capability-detail-identity">
+          <div>
+            <p className="eyebrow">配置详情</p>
+            <h2 id="capability-detail-title">
+              {capability.displayName || capability.name}
+            </h2>
+            {capability.displayName !== capability.name && (
+              <code>{capability.name}</code>
+            )}
+            <p>{capability.description}</p>
+          </div>
+          <div className="capability-facts">
+            {capability.memberCount > 0 && (
+              <span>
+                <small>角色成员</small>
+                <strong>{capability.memberCount} 位</strong>
+              </span>
+            )}
+            {capability.model && (
+              <span>
+                <small>默认模型</small>
+                <strong>{capability.model}</strong>
+              </span>
+            )}
+            {capability.delegation && (
+              <span>
+                <small>任务委派</small>
+                <strong>
+                  {capability.delegation.enabled ? "已启用" : "未启用"}
+                </strong>
+              </span>
+            )}
+            <span>
+              <small>可查看文件</small>
+              <strong>{listing?.fileCount ?? capability.fileCount} 个</strong>
+            </span>
+          </div>
+        </section>
+
+        <div className="capability-detail-workspace">
+          <aside className="capability-config-map">
+            {!!capability.members.length && (
+              <section>
+                <header>
+                  <strong>角色组成</strong>
+                  <span>{capability.members.length}</span>
+                </header>
+                <div className="capability-member-list">
+                  {capability.members.map((member, index) => (
+                    <button
+                      key={member.id}
+                      className={
+                        selectedPath === member.filePath ? "is-active" : ""
+                      }
+                      onClick={() => void openFile(member.filePath)}
+                    >
+                      <span>{String(index + 1).padStart(2, "0")}</span>
+                      <span>
+                        <strong>{member.displayName || member.name}</strong>
+                        <small>
+                          {member.profession ||
+                            member.description ||
+                            "专家团成员"}
+                        </small>
+                      </span>
+                      {member.maxTurns && <b>{member.maxTurns} 轮</b>}
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            <section className="capability-file-map">
+              <header>
+                <strong>配置文件</strong>
+                <span>{files.length}</span>
+              </header>
+              {loadingFiles ? (
+                <p>正在读取文件…</p>
+              ) : (
+                <div>
+                  {rootFiles.map(fileButton)}
+                  {fileGroups.map(([folder, entries]) => (
+                    <details key={folder}>
+                      <summary>
+                        <span>›</span>
+                        <strong>{folder}</strong>
+                        <small>{entries.length}</small>
+                      </summary>
+                      <div>{entries.map(fileButton)}</div>
+                    </details>
+                  ))}
+                </div>
+              )}
+            </section>
+          </aside>
+
+          <section className="capability-config-preview">
+            <header>
+              <div>
+                <strong>{selectedEntry?.name || selectedPath || "配置预览"}</strong>
+                {selectedEntry && (
+                  <span>
+                    {selectedEntry.path} · {formatBytes(selectedEntry.size)}
+                  </span>
+                )}
+              </div>
+              {fileContent && isMarkdownPath(fileContent.path) && (
+                <div className="preview-mode-switch" aria-label="预览模式">
+                  <button
+                    className={previewMode === "rendered" ? "is-active" : ""}
+                    onClick={() => setPreviewMode("rendered")}
+                  >
+                    阅读
+                  </button>
+                  <button
+                    className={previewMode === "source" ? "is-active" : ""}
+                    onClick={() => setPreviewMode("source")}
+                  >
+                    原文
+                  </button>
+                </div>
+              )}
+            </header>
+            <div className="capability-config-content">
+              {loadingContent ? (
+                <div className="browser-loading browser-loading-content">
+                  正在读取配置…
+                </div>
+              ) : detailError ? (
+                <div className="browser-empty-state">
+                  <strong>无法显示这个配置</strong>
+                  <p>{detailError}</p>
+                </div>
+              ) : fileContent?.previewKind === "image" ? (
+                <SkillImagePreview
+                  name={fileContent.name}
+                  source={`${API_BASE}/api/capability-asset?capabilityId=${encodeURIComponent(
+                    capability.id,
+                  )}&path=${encodeURIComponent(fileContent.path)}`}
+                />
+              ) : fileContent?.previewKind === "text" &&
+                fileContent.content !== null ? (
+                isMarkdownPath(fileContent.path) &&
+                previewMode === "rendered" ? (
+                  <article className="markdown-preview capability-markdown">
+                    <MarkdownDocument content={fileContent.content} />
+                  </article>
+                ) : (
+                  <pre className="capability-source">
+                    <code>{fileContent.content}</code>
+                  </pre>
+                )
+              ) : (
+                <div className="browser-empty-state">
+                  <strong>暂不支持预览</strong>
+                  <p>
+                    {fileContent?.reason || "请选择左侧的配置文件查看内容。"}
+                  </p>
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+
+        <footer className="capability-detail-footer">
+          <p>
+            <span>●</span>
+            只读预览 · 敏感认证、Token 与会话配置已自动省略
+          </p>
+          {capability.delegation?.enabled && (
+            <p>
+              可并行委派 {capability.delegation.maxConcurrentChildren || "—"}{" "}
+              个子 Agent · 最大深度{" "}
+              {capability.delegation.maxSpawnDepth ?? "—"}
+            </p>
+          )}
+          <button className="button" onClick={onClose}>
+            关闭
+          </button>
+        </footer>
+      </aside>
+    </div>
+  );
+}
+
 function SourcesView({
   data,
   onSettings,
@@ -2414,7 +4358,7 @@ function SourcesView({
     <div className="sources-view page-enter">
       <div className="view-intro">
         <div>
-          <p className="eyebrow">工具数据源</p>
+          <p className="eyebrow">产品与目录</p>
           <h1>一张本地技能网络。</h1>
         </div>
         <button className="button button-acid" onClick={onSettings}>
@@ -2493,12 +4437,26 @@ function SourcesView({
 export default function Home() {
   const [data, setData] = useState<ScanData | null>(null);
   const [config, setConfig] = useState<ManagerConfig | null>(null);
+  const [capabilityData, setCapabilityData] =
+    useState<CapabilityCatalog | null>(null);
+  const [capabilityLoading, setCapabilityLoading] = useState(false);
+  const [capabilityError, setCapabilityError] = useState("");
   const [view, setView] = useState<ViewName>("skills");
   const [activeAgentId, setActiveAgentId] = useState("all");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<SkillStatus | "all">("all");
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
+  const [selectedCapabilityId, setSelectedCapabilityId] = useState<
+    string | null
+  >(null);
   const [syncSkillId, setSyncSkillId] = useState<string | null>(null);
+  const [detailInitialInstanceId, setDetailInitialInstanceId] = useState<
+    string | null
+  >(null);
+  const [resumeSyncSkillId, setResumeSyncSkillId] = useState<string | null>(
+    null,
+  );
+  const [syncSourceId, setSyncSourceId] = useState<string | null>(null);
   const [importedSkill, setImportedSkill] = useState<ImportedSkill | null>(null);
   const [importPickerOpen, setImportPickerOpen] = useState(false);
   const [importDragActive, setImportDragActive] = useState(false);
@@ -2512,13 +4470,18 @@ export default function Home() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const modalOpen = Boolean(
     selectedSkillId ||
+      selectedCapabilityId ||
       syncSkillId ||
       importedSkill ||
       importPickerOpen ||
       settingsOpen,
   );
   const blocksGlobalDrop = Boolean(
-    selectedSkillId || syncSkillId || importedSkill || settingsOpen,
+    selectedSkillId ||
+      selectedCapabilityId ||
+      syncSkillId ||
+      importedSkill ||
+      settingsOpen,
   );
 
   const loadData = useCallback(async (force = false) => {
@@ -2543,10 +4506,45 @@ export default function Home() {
     }
   }, []);
 
+  const loadCapabilities = useCallback(async (force = false) => {
+    setCapabilityLoading(true);
+    try {
+      const catalog =
+        await requestJson<CapabilityCatalog>(
+          `/api/capabilities${force ? "?force=1" : ""}`,
+        );
+      setCapabilityData(catalog);
+      setCapabilityError("");
+    } catch (loadError) {
+      setCapabilityError(
+        loadError instanceof Error
+          ? loadError.message
+          : "无法读取本机专家配置。",
+      );
+    } finally {
+      setCapabilityLoading(false);
+    }
+  }, []);
+
+  const closeDetail = useCallback(() => {
+    setSelectedSkillId(null);
+    setDetailInitialInstanceId(null);
+    if (resumeSyncSkillId) {
+      setSyncSkillId(resumeSyncSkillId);
+      setResumeSyncSkillId(null);
+    }
+  }, [resumeSyncSkillId]);
+
   useEffect(() => {
     const timer = window.setTimeout(() => void loadData(), 0);
     return () => window.clearTimeout(timer);
   }, [loadData]);
+
+  useEffect(() => {
+    if (view !== "capabilities" || capabilityData || capabilityLoading) return;
+    const timer = window.setTimeout(() => void loadCapabilities(), 0);
+    return () => window.clearTimeout(timer);
+  }, [capabilityData, capabilityLoading, loadCapabilities, view]);
 
   useEffect(() => {
     if (!toast) return;
@@ -2571,8 +4569,12 @@ export default function Home() {
           setImportPickerOpen(false);
           setImportDragActive(false);
           dragDepthRef.current = 0;
-        } else if (syncSkillId) setSyncSkillId(null);
-        else if (selectedSkillId) setSelectedSkillId(null);
+        } else if (selectedSkillId) closeDetail();
+        else if (selectedCapabilityId) setSelectedCapabilityId(null);
+        else if (syncSkillId) {
+          setSyncSkillId(null);
+          setSyncSourceId(null);
+        }
         else if (settingsOpen) setSettingsOpen(false);
         return;
       }
@@ -2584,6 +4586,7 @@ export default function Home() {
         !importPickerOpen &&
         !syncSkillId &&
         !selectedSkillId &&
+        !selectedCapabilityId &&
         !settingsOpen
       ) {
         event.preventDefault();
@@ -2603,7 +4606,9 @@ export default function Home() {
   }, [
     importPickerOpen,
     importedSkill,
+    closeDetail,
     selectedSkillId,
+    selectedCapabilityId,
     settingsOpen,
     syncSkillId,
   ]);
@@ -2662,6 +4667,10 @@ export default function Home() {
     data?.skills.find((skill) => skill.id === selectedSkillId) || null;
   const syncSkill =
     data?.skills.find((skill) => skill.id === syncSkillId) || null;
+  const selectedCapability =
+    capabilityData?.products
+      .flatMap((product) => product.items)
+      .find((capability) => capability.id === selectedCapabilityId) || null;
 
   async function reveal(instanceId: string) {
     try {
@@ -2765,7 +4774,10 @@ export default function Home() {
     }
   }
 
-  async function exportSkill(instanceId: string) {
+  async function exportSkill(
+    instanceId: string,
+    format: "skill" | "zip",
+  ) {
     const instance = data?.skills
       .flatMap((skill) => skill.instances)
       .find((item) => item.id === instanceId);
@@ -2775,7 +4787,7 @@ export default function Home() {
     }
     try {
       const response = await fetch(
-        `${API_BASE}/api/export-skill?instanceId=${encodeURIComponent(instanceId)}`,
+        `${API_BASE}/api/export-skill?instanceId=${encodeURIComponent(instanceId)}&format=${format}`,
       );
       if (!response.ok) {
         const payload = await response.json();
@@ -2784,30 +4796,62 @@ export default function Home() {
       const objectUrl = URL.createObjectURL(await response.blob());
       const anchor = document.createElement("a");
       anchor.href = objectUrl;
-      anchor.download = `${instance.directoryName}.skill`;
+      anchor.download = `${instance.directoryName}.${format}`;
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(objectUrl);
-      setToast(`${instance.displayName || instance.name} 已打包`);
+      setToast(
+        `${instance.displayName || instance.name} 已导出为 ${
+          format === "zip" ? "ZIP 压缩包" : ".skill 技能包"
+        }`,
+      );
     } catch (exportError) {
       setToast(
-        exportError instanceof Error ? exportError.message : "打包失败。",
+        exportError instanceof Error ? exportError.message : "导出失败。",
       );
     }
   }
 
-  const navItems: { id: ViewName; label: string; code: string; badge?: number }[] =
-    [
-      { id: "skills", label: "技能总览", code: "01" },
-      {
-        id: "sync",
-        label: "同步中心",
-        code: "02",
-        badge: data ? data.totals.conflicts + data.totals.incomplete : undefined,
-      },
-      { id: "sources", label: "工具数据源", code: "03" },
-    ];
+  const navSections: {
+    id: string;
+    label: string;
+    items: {
+      id: ViewName;
+      label: string;
+      code: string;
+      badge?: number;
+    }[];
+  }[] = [
+    {
+      id: "core",
+      label: "核心功能",
+      items: [
+        { id: "skills", label: "Skills", code: "01" },
+        { id: "capabilities", label: "专家", code: "02" },
+      ],
+    },
+    {
+      id: "management",
+      label: "管理",
+      items: [
+        {
+          id: "sync",
+          label: "同步与版本",
+          code: "03",
+          badge: data
+            ? data.totals.conflicts + data.totals.incomplete
+            : undefined,
+        },
+        { id: "sources", label: "产品与目录", code: "04" },
+      ],
+    },
+    {
+      id: "other",
+      label: "其他",
+      items: [{ id: "connectors", label: "连接器", code: "05" }],
+    },
+  ];
 
   return (
     <div
@@ -2831,25 +4875,30 @@ export default function Home() {
         </div>
 
         <nav aria-label="主要导航">
-          {navItems.map((item) => (
-            <button
-              key={item.id}
-              className={view === item.id ? "is-active" : ""}
-              aria-current={view === item.id ? "page" : undefined}
-              onClick={() => {
-                setView(item.id);
-                if (item.id !== "skills") setActiveAgentId("all");
-              }}
-            >
-              <span>{item.code}</span>
-              <strong>{item.label}</strong>
-              {item.badge ? <b>{item.badge}</b> : <em>↗</em>}
-            </button>
+          {navSections.map((section) => (
+            <div className="sidebar-nav-section" key={section.id}>
+              <p>{section.label}</p>
+              {section.items.map((item) => (
+                <button
+                  key={item.id}
+                  className={view === item.id ? "is-active" : ""}
+                  aria-current={view === item.id ? "page" : undefined}
+                  onClick={() => {
+                    setView(item.id);
+                    if (item.id !== "skills") setActiveAgentId("all");
+                  }}
+                >
+                  <span>{item.code}</span>
+                  <strong>{item.label}</strong>
+                  {item.badge ? <b>{item.badge}</b> : <em>↗</em>}
+                </button>
+              ))}
+            </div>
           ))}
         </nav>
 
         <div className="sidebar-agents">
-          <p>本地工具 / 点击切换</p>
+          <p>Skills 安装端 / 点击查看</p>
           <button
             className={activeAgentId === "all" ? "is-active" : ""}
             aria-pressed={activeAgentId === "all"}
@@ -2904,7 +4953,14 @@ export default function Home() {
         <header className="topbar">
           <div className="mobile-brand">技能管理器</div>
           <div className="scan-indicator">
-            <span className={serviceError ? "is-error" : ""} />
+            <span
+              className={[
+                serviceError ? "is-error" : "",
+                loading || refreshing ? "is-scanning" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+            />
             <p>
               <strong>{serviceError ? "本地服务未连接" : "本地扫描已就绪"}</strong>
               <small>
@@ -2948,8 +5004,10 @@ export default function Home() {
         <nav className="mobile-nav" aria-label="移动端主要导航">
           {[
             ["skills", "技能", "01"],
-            ["sync", "待处理", "02"],
-            ["sources", "数据源", "03"],
+            ["capabilities", "专家", "02"],
+            ["sync", "待处理", "03"],
+            ["sources", "数据源", "04"],
+            ["connectors", "连接器", "05"],
           ].map(([itemView, label, code]) => (
             <button
               type="button"
@@ -3002,22 +5060,24 @@ export default function Home() {
           </div>
         ) : data ? (
           <>
-            <AgentDock
-              agents={availableAgents}
-              activeAgentId={activeAgentId}
-              totalSkills={data.totals.uniqueSkills}
-              onChange={(agentId) => {
-                setActiveAgentId(agentId);
-                setView("skills");
-                setQuery("");
-                setStatus("all");
-              }}
-              onManage={() => {
-                setActiveAgentId("all");
-                setView("sources");
-                setSettingsOpen(true);
-              }}
-            />
+            {view === "skills" && (
+              <AgentDock
+                agents={availableAgents}
+                activeAgentId={activeAgentId}
+                totalSkills={data.totals.uniqueSkills}
+                onChange={(agentId) => {
+                  setActiveAgentId(agentId);
+                  setView("skills");
+                  setQuery("");
+                  setStatus("all");
+                }}
+                onManage={() => {
+                  setActiveAgentId("all");
+                  setView("sources");
+                  setSettingsOpen(true);
+                }}
+              />
+            )}
             {view === "skills" && (
               <div className="skills-view page-enter">
                 <section
@@ -3177,8 +5237,15 @@ export default function Home() {
                     key={`${activeAgentId}:${query}:${status}:${data.scannedAt}`}
                     skills={filteredSkills}
                     agents={availableAgents}
-                    onSelect={(skill) => setSelectedSkillId(skill.id)}
-                    onSync={(skill) => setSyncSkillId(skill.id)}
+                    onSelect={(skill) => {
+                      setDetailInitialInstanceId(null);
+                      setResumeSyncSkillId(null);
+                      setSelectedSkillId(skill.id);
+                    }}
+                    onSync={(skill) => {
+                      setSyncSourceId(null);
+                      setSyncSkillId(skill.id);
+                    }}
                   />
                 </section>
               </div>
@@ -3187,8 +5254,27 @@ export default function Home() {
             {view === "sync" && (
               <SyncCenter
                 data={data}
-                onSync={(skill) => setSyncSkillId(skill.id)}
-                onSelect={(skill) => setSelectedSkillId(skill.id)}
+                onSync={(skill) => {
+                  setSyncSourceId(null);
+                  setSyncSkillId(skill.id);
+                }}
+                onSelect={(skill) => {
+                  setDetailInitialInstanceId(null);
+                  setResumeSyncSkillId(null);
+                  setSelectedSkillId(skill.id);
+                }}
+              />
+            )}
+
+            {view === "capabilities" && (
+              <CapabilitiesView
+                catalog={capabilityData}
+                loading={capabilityLoading}
+                error={capabilityError}
+                onRefresh={() => void loadCapabilities(true)}
+                onSelect={(capability) =>
+                  setSelectedCapabilityId(capability.id)
+                }
               />
             )}
 
@@ -3198,6 +5284,7 @@ export default function Home() {
                 onSettings={() => setSettingsOpen(true)}
               />
             )}
+            {view === "connectors" && <ConnectorsView onSettings={() => setSettingsOpen(true)} />}
           </>
         ) : (
           <EmptyState
@@ -3209,16 +5296,30 @@ export default function Home() {
 
       {selectedSkill && data && (
         <DetailPanel
-          key={selectedSkill.id}
+          key={`${selectedSkill.id}:${detailInitialInstanceId || "default"}`}
           skill={selectedSkill}
           agents={availableAgents}
-          onClose={() => setSelectedSkillId(null)}
-          onSync={() => {
+          initialInstanceId={detailInitialInstanceId || undefined}
+          reviewMode={Boolean(resumeSyncSkillId)}
+          onClose={closeDetail}
+          onSync={(instanceId) => {
+            const nextSyncSkillId = resumeSyncSkillId || selectedSkill.id;
             setSelectedSkillId(null);
-            setSyncSkillId(selectedSkill.id);
+            setDetailInitialInstanceId(null);
+            setResumeSyncSkillId(null);
+            setSyncSourceId(instanceId);
+            setSyncSkillId(nextSyncSkillId);
           }}
           onReveal={(instanceId) => void reveal(instanceId)}
-          onExport={(instanceId) => void exportSkill(instanceId)}
+          onExport={(instanceId, format) => exportSkill(instanceId, format)}
+        />
+      )}
+
+      {selectedCapability && (
+        <CapabilityDetailPanel
+          key={selectedCapability.id}
+          capability={selectedCapability}
+          onClose={() => setSelectedCapabilityId(null)}
         />
       )}
 
@@ -3227,7 +5328,18 @@ export default function Home() {
           skill={syncSkill}
           agents={availableAgents}
           defaultMode={config?.syncMode || "copy"}
-          onClose={() => setSyncSkillId(null)}
+          initialSourceId={syncSourceId || undefined}
+          onClose={() => {
+            setSyncSkillId(null);
+            setSyncSourceId(null);
+          }}
+          onReviewInstance={(instanceId, sourceInstanceId) => {
+            setSyncSourceId(sourceInstanceId);
+            setResumeSyncSkillId(syncSkill.id);
+            setSyncSkillId(null);
+            setDetailInitialInstanceId(instanceId);
+            setSelectedSkillId(syncSkill.id);
+          }}
           onComplete={async () => {
             await loadData(true);
             setToast(`${displaySkillName(syncSkill)} 已同步`);

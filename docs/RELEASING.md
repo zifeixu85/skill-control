@@ -31,6 +31,7 @@ credentials to open a Pull Request.
 npm ci
 npm audit --omit=dev --audit-level=high
 npm run lint
+npm run typecheck
 npm test
 ```
 
@@ -61,8 +62,10 @@ npm test
 - [ ] 空状态、目录缺失和本地端口占用时给出可理解的错误；
 - [ ] Skill 详情默认选择 `SKILL.md`，文件夹可展开/折叠；
 - [ ] Markdown 预览与原始内容切换正常；
+- [ ] 常见图片可以预览，SVG 可切换渲染效果与原始内容；
 - [ ] “在文件管理器中定位”会调用当前平台的文件管理器；
-- [ ] `.skill` 可以拖入、预览、生成安装计划；
+- [ ] `.skill` 可以拖入、预览文本与图片、生成安装计划；
+- [ ] 冲突版本可分别打开完整详情，高级比较正常，并可切换权威来源；
 - [ ] 复制同步在确认前不写入，确认后能新增目标；
 - [ ] 替换操作创建了可用备份；
 - [ ] 软链接模式的行为和说明一致；

@@ -4,12 +4,12 @@
 
 本地优先的 Agent Skill 可视化管理器。Skill Control 扫描你电脑上的
 `SKILL.md` 技能目录，在一个界面中完成检索、详情预览、差异检查、跨工具同步，
-以及 `.skill` 技能包的导入和导出。
+以及 `.skill` 技能包的导入、`.skill` 与通用 ZIP 压缩包的导出。
 
 ![Skill Control 技能总览](./docs/images/overview.png)
 
-> 当前版本：`v0.1.0` 首个公开版。源码和已经通过各目标平台冒烟测试的桌面产物
-> 见 [Releases](../../releases)。
+> 已发布版本：`v0.1.0`。当前 `main` 源码包含尚未发布的后续功能与修复；
+> 可下载桌面产物和真实平台验证状态以 [Releases](../../releases) 为准。
 
 ## 为什么需要 Skill Control
 
@@ -42,16 +42,33 @@
   默认折叠；
 - 默认选择 `SKILL.md`；
 - Markdown 文件支持渲染预览和原始内容切换；
-- 文本文件可直接预览，二进制文件只显示元数据；
+- PNG、JPEG、GIF、WebP、AVIF、BMP、ICO 和 SVG 图片可直接预览；
+- SVG 同时支持渲染效果与安全过滤后的原始内容切换；
+- 其他文本文件可直接预览，暂不支持的二进制文件只显示元数据；
 - 从详情中使用系统文件管理器定位 Skill 目录；
-- 把本地 Skill 导出为可移植的 `.skill` 文件；
+- 把本地 Skill 导出为可移植的 `.skill` 文件或通用 `.zip` 压缩包；
 - 拖放或选择 `.skill` 文件，先检查包结构和内容，再选择安装目标；
-- `.skill` 导入预览同样支持文件夹折叠、Markdown 渲染和原文切换。
+- `.skill` 导入预览同样支持文件夹折叠、Markdown、图片和 SVG 预览。
 
 ![Skill Control Skill 详情与 Markdown 预览](./docs/images/skill-detail.png)
 
+### 识别专家与 Agent 配置
+
+- 识别 WorkBuddy 已安装的专家与专家团，显示中文名称、职责、版本、标签和成员分工；
+- 展开专家团成员，查看每个成员的角色说明、最大执行轮次和 Markdown 配置；
+- 识别 Hermes Agent 的默认 Agent 与本地 Profiles，展示 `SOUL.md`、模型、技能数量
+  和任务委派参数；
+- 以文件浏览器查看专家包内的规则、技能、参考资料、图片和插件清单；
+- 专家配置只读展示；`.env`、API Key、Token、认证、凭据和会话文件不会开放预览。
+
+当前专家配置识别支持 WorkBuddy 与 Hermes Agent。普通 Skill 目录支持的工具范围
+仍以“支持的 Agent 工具”表格为准，两个能力范围彼此独立。
+
 ### 安全地同步
 
+- 冲突界面可分别打开每个 Agent 的完整 Skill 版本查看文件和内容；
+- 文件级变化、文本逐行差异和图片并排比较收纳在“高级比较”中；
+- 查看差异后可以直接选择任一 Agent 版本作为权威来源；
 - 同步前生成新增、替换和跳过计划；
 - 支持独立副本的“复制”模式；
 - 支持一处修改、多端生效的“软链接”模式；
@@ -65,13 +82,14 @@ Windows 创建目录软链接时可能需要启用“开发人员模式”或使
 ## 支持的 Agent 工具
 
 内置目录规则如下。应用只会把本机检测到或由你手动配置的工具加入数据源。
-默认技能列表仅展示 Codex 和 Claude Code，可以在“工具数据源”中修改。
+默认技能列表仅展示 Codex 和 Claude Code，可以在“产品与目录”中修改。
 
 | 工具 | 默认扫描目录 |
 | --- | --- |
 | Codex | `~/.codex/skills`、`~/.agents/skills`、`~/.codex/vendor_imports/skills` |
 | Claude Code | `~/.claude/skills` |
 | WorkBuddy | `~/.workbuddy/skills`、`~/.workbuddy/connectors/skills` |
+| 订单来了（SmartOrder） | `~/.smartorder/skills`，以及配置中已启用插件的技能目录 |
 | Cursor | `~/.cursor/skills` |
 | Gemini CLI | `~/.gemini/skills` |
 | Kiro | `~/.kiro/skills` |
@@ -85,6 +103,21 @@ Windows 创建目录软链接时可能需要启用“开发人员模式”或使
 | GitHub Copilot | `~/.copilot/skills`、`~/.github/copilot/skills` |
 
 不在表中的工具也可以通过名称、简称、颜色和一个或多个 Skill 目录手动添加。
+从管理器中移除工具只会删除这项配置，不会删除对应目录里的 Skill 文件；
+已移除的自动检测工具会保持忽略，直到你再次手动添加。
+
+### 订单来了：技能与连接器
+
+自动检测当前用户目录下的 `.smartorder`，Windows 与 Mac 使用相同相对目录规则。
+在“产品与目录”中显示“订单来了”后，可在 Skills 中查看本地技能、内置技能和
+已启用插件内的技能。遵循 `skills.config` 的停用项；市场清单、未登记缓存和历史
+版本不会混入已安装列表。多个缓存版本且配置未指明当前版本时，会提示版本待确认。
+插件与系统内置技能只读，不允许通过普通安装或同步覆盖。
+
+“其他 → 连接器”展示 `config.toml` 的 MCP 配置，以及已启用插件的 `.mcp.json`
+摘要：名称、配置启停、连接方式、服务域名、工具清单和超时。不会访问远程服务、
+执行连接器命令、检测登录状态，也不会展示凭据、环境变量值、启动参数或 URL 的
+路径/查询部分。连接器修改和认证请在订单来了客户端完成。
 
 ## 获取与运行
 
@@ -137,10 +170,13 @@ npm run desktop:dev
 这个命令会启动 Electron 开发窗口，并连接本机的开发界面和管理服务。桌面打包命令
 列在 `package.json` 中；发布维护者应只在对应平台构建并验证产物。
 
-## `.skill` 文件
+## `.skill` 与 ZIP 导出
 
 Skill Control 使用 ZIP 容器作为 `.skill` 格式，包内必须包含一个
 `SKILL.md`。Skill 可以位于压缩包根目录，也可以位于单一顶层文件夹中。
+导出时可以保留 `.skill` 扩展名，也可以选择通用 `.zip`；两者内容结构一致。
+对于不支持 `.skill` 导入的 Agent，可以解压 ZIP 后把其中的技能文件夹复制到
+该 Agent 的技能目录。
 
 导入时会进行以下限制：
 
@@ -161,6 +197,7 @@ Skill Control 使用 ZIP 容器作为 `.skill` 格式，包内必须包含一个
 ```text
 ~/.agent-skill-manager/
 ├── config.json
+├── fingerprint-cache.json
 ├── history.jsonl
 ├── imports/
 └── backups/
@@ -180,6 +217,7 @@ npm start        # 运行构建产物 + 本地管理服务
 npm run desktop:dev # Electron 开发窗口
 npm test         # 构建并运行 Node 测试
 npm run lint     # ESLint
+npm run typecheck # TypeScript 类型检查
 ```
 
 当前主要目录：
