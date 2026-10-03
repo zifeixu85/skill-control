@@ -127,6 +127,7 @@ type Skill = {
   name: string;
   displayName: string;
   description: string;
+  descriptionZh?: string | null;
   tags: string[];
   status: SkillStatus;
   conflict: boolean;
@@ -287,6 +288,7 @@ type ManagerConfig = {
   syncMode: "copy" | "symlink";
   agents: AgentConfig[];
   visibleAgentIds: string[];
+  primaryAgentIds?: string[] | null;
   dismissedAgentIds: string[];
 };
 
@@ -791,7 +793,7 @@ function SkillTable({
                     {skill.displayName !== skill.name && (
                       <code className="technical-name">{skill.name}</code>
                     )}
-                    <p>{skill.description}</p>
+                    <p>{skill.descriptionZh || skill.description}</p>
                   </div>
                 </div>
               </td>
@@ -1362,7 +1364,7 @@ function DetailPanel({
                   <span>技能概览</span>
                   <span>{STATUS_COPY[skill.status].label}</span>
                 </div>
-                <p>{skill.description}</p>
+                <p>{skill.descriptionZh || skill.description}</p>
                 <div className="detail-install-metrics">
                   <div>
                     <span>工具覆盖</span>
@@ -4655,7 +4657,7 @@ export default function Home() {
     return scopedSkills.filter((skill) => {
       const matchesQuery =
         !normalizedQuery ||
-        `${skill.name} ${skill.displayName} ${skill.description} ${skill.tags.join(" ")}`
+        `${skill.name} ${skill.displayName} ${skill.description} ${skill.descriptionZh || ""} ${skill.tags.join(" ")}`
           .toLocaleLowerCase()
           .includes(normalizedQuery);
       const matchesStatus = status === "all" || skill.status === status;

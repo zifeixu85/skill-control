@@ -7,8 +7,9 @@ if (!parentPort) {
 
 try {
   const scan = await scanAll(workerData.config, {
-    persistentCache: true,
+    persistentCache: workerData.persistentCache !== false,
     forceFingerprints: workerData.forceFingerprints === true,
+    homeDirectory: workerData.homeDirectory || undefined,
   });
   parentPort.postMessage({ ok: true, scan });
 } catch (error) {

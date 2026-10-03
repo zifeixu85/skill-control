@@ -11,6 +11,23 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ### Added
 
+- Primary agents ("常用 Agent"): `primaryAgentIds` in the configuration, a
+  stat-only session activity scan (`GET /api/agents/activity`) that suggests up
+  to two primary agents by recent session bytes, and a primary-scoped status
+  model on every skill (`primaryStatus`, `newest`, `behind`, `diverged`,
+  `installedPrimary`, `missingPrimary`, `managed`, `duplicates`) plus a scan
+  `summary`. Existing `status` fields are unchanged.
+- Shared-directory awareness: roots and skills are resolved to real paths,
+  `sharedRoots` reports roots that point at the same directory (for example a
+  Mirasim-managed `~/.mirasim/skills`), and one physical skill is counted once
+  per agent.
+- Read-only Agent integrations: Codex plugins and connected apps, Claude Code
+  plugins, and an MCP server inventory across Codex, Claude Code, Cursor and
+  Gemini, via `GET /api/integrations`, `/api/plugins`, `/api/mcp`,
+  `/api/plugin-asset` and a `codex` section in `/api/connectors`.
+- Codex bundled system skills (`~/.codex/skills/.system`) and Mirasim-synced
+  skills are recognized as managed copies, so they no longer show up as
+  differing versions or duplicates.
 - SmartOrder (订单来了) local and enabled-plugin skill discovery, with disabled
   entries excluded and managed plugin/system skills protected from overwrite.
 - Read-only connector configuration view under Other, with MCP summaries from
@@ -27,6 +44,23 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ### Changed
 
+- Skill display names now come from explicit frontmatter display keys, else the
+  first H1 that precedes any deeper heading (≤ 40 characters, never inside code
+  fences), else the technical name. `description` stays the frontmatter text;
+  a Chinese first paragraph is exposed separately as `descriptionZh`.
+- Sync and import plans never write twice into the same real directory: shared
+  targets become `noop` with a reason, and each action reports
+  `realDestination` and the other agents that will see the write.
+- Agent `installationCount` and `totals.installations` count distinct physical
+  skill directories.
+- Sync and import write through a symlinked destination to its real directory
+  (which must lie inside a configured Agent root) instead of replacing the
+  link, so Agents that share a skill stay in sync; the backup holds the real
+  content.
+- Duplicate detection ignores managed copies, reports whether copies are
+  identical, and the summary counts primary agents only.
+- Integration and activity scans are cached with single-flight loading and a
+  forced-refresh debounce; one failing scanner no longer fails the request.
 - Skill discovery and fingerprinting can run in a background worker and reuse a
   bounded on-disk fingerprint cache to reduce repeated scanning work.
 - TypeScript checking is now an explicit local, CI, and release quality gate.
@@ -36,6 +70,30 @@ on Keep a Changelog and the project follows Semantic Versioning.
 - WorkBuddy expert members now reject sensitive paths and files whose resolved
   targets escape the expert package, instead of exposing their contents in
   capability metadata.
+- Integration scanners read bounded files only, refuse plugin directories and
+  assets that resolve outside their roots, and never return MCP commands,
+  arguments, header/env values or full URLs — only the names of fields that
+  hold literal secrets.
+- A symlink-mode sync whose target is the same physical directory as its
+  source is now planned as a no-op instead of replacing the directory with a
+  link to itself.
+- Copy-mode sync no longer dereferences every symlink: links whose real target
+  is outside the source skill (for example `notes -> ~/.ssh/id_rsa`), dangling
+  links and loops are skipped and reported instead of being copied into every
+  target.
+- Requests whose `Host` header is not a loopback address with the service port
+  are rejected, closing a DNS-rebinding bypass of the Origin check.
+- Markdown metadata parsing and MCP secret detection use clamped inputs and
+  bounded patterns (ReDoS), and background scans are stopped by a 60 second
+  watchdog.
+- MCP `secretFields` now also covers every literal header/env value, credential
+  value shapes, arguments, URL userinfo and token-like path segments, while
+  still returning field locations only; `likelySecretFields` marks the subset
+  that looks like a credential.
+- Error messages no longer include the home directory, configuration files are
+  opened non-blocking (FIFO-safe), outbound strings drop bidi/zero-width
+  characters, and SVG previews additionally reject namespaced scripts,
+  `<set>`/`<animate>`, `image-set()` and escaped CSS.
 
 ## [0.1.0] - 2026-07-26
 

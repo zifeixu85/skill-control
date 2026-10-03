@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, realpathSync } from "node:fs";
 import {
   appendFile,
   cp,
@@ -23,8 +23,41 @@ import { spawn } from "node:child_process";
 import { Worker } from "node:worker_threads";
 import { unzipSync, zipSync } from "fflate";
 import { scanSmartOrder, scanSmartOrderConnectors } from "./smartorder.mjs";
+import {
+  chineseIntroduction,
+  containsChinese,
+  firstHeadingTitle,
+} from "./skill-metadata.mjs";
+import { scanAgentActivity } from "./agents-activity.mjs";
+import {
+  compactHomePath,
+  homeVariants,
+  isWithin,
+  text as outboundText,
+} from "./fs-safe.mjs";
+import {
+  buildSharedRoots,
+  classifyInstanceSource,
+  dedupeAgentInstances,
+  duplicatesFor,
+  markSharedInstances,
+  primaryStatusFor,
+} from "./skill-status.mjs";
+import { emptyCodexConnectors, scanIntegrations } from "./integrations.mjs";
+import { createCachedLoader } from "./cached-loader.mjs";
+import { planTargetWrites, publicAction, publicPlan } from "./sync-targets.mjs";
+import { copySkillTree } from "./skill-copy.mjs";
+
+export { compareVersions } from "./skill-status.mjs";
 
 const HOME_DIRECTORY = homedir();
+const REAL_HOME_DIRECTORY = (() => {
+  try {
+    return realpathSync(HOME_DIRECTORY);
+  } catch {
+    return HOME_DIRECTORY;
+  }
+})();
 const STATE_DIRECTORY = path.join(HOME_DIRECTORY, ".agent-skill-manager");
 const CONFIG_FILE = path.join(STATE_DIRECTORY, "config.json");
 const HISTORY_FILE = path.join(STATE_DIRECTORY, "history.jsonl");
@@ -53,6 +86,16 @@ const SERVER_PORT = Number(process.env.SKILL_MANAGER_PORT || 43110);
 const SERVER_HOST = process.env.SKILL_MANAGER_HOST || "127.0.0.1";
 const SCAN_CACHE_TTL = 5 * 60_000;
 const CAPABILITY_CACHE_TTL = 2 * 60_000;
+const INTEGRATIONS_CACHE_TTL = 60_000;
+const ACTIVITY_CACHE_TTL = 10 * 60_000;
+const PRIMARY_AGENT_LIMIT = 4;
+const PLUGIN_ASSET_LIMIT = 2_000_000;
+const PLUGIN_ASSET_TYPES = new Map([
+  [".jpeg", "image/jpeg"],
+  [".jpg", "image/jpeg"],
+  [".png", "image/png"],
+  [".svg", "image/svg+xml"],
+]);
 const FINGERPRINT_CACHE_LIMIT = 4_000;
 const SKILL_ENTRY_LIMIT = 1_500;
 const SKILL_CONTENT_LIMIT = 2_000_000;
@@ -306,106 +349,97 @@ function readYamlScalar(block, key) {
   return "";
 }
 
-function containsChinese(value = "") {
-  return /[\u3400-\u9fff]/u.test(value);
-}
-
-function cleanMarkdownText(value = "") {
-  return value
-    .replace(/!\[[^\]]*\]\([^)]+\)/g, "")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+function cleanMarkdownText(value = "", limit = 4_000) {
+  // Clamped input and bounded quantifiers keep untrusted Markdown from causing ReDoS.
+  return String(value)
+    .slice(0, limit)
+    .replace(/!\[[^\]\n]{0,200}\]\([^)\n]{1,300}\)/g, "")
+    .replace(/\[([^\]\n]{1,200})\]\([^)\n]{1,300}\)/g, "$1")
     .replace(/[`*_~>#|]/g, "")
-    .replace(/^\s*[-+\d.)]+\s*/gm, "")
+    .replace(/^[ \t]*[-+\d.)]+[ \t]*/gm, "")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function firstChineseScalar(block, keys) {
+function firstScalar(block, keys, predicate = Boolean) {
   for (const key of keys) {
     const value = readYamlScalar(block, key);
-    if (containsChinese(value)) return value;
+    if (predicate(value)) return value;
   }
   return "";
 }
 
-function findChineseHeading(body) {
-  const headings = body.match(/^#\s+(.+)$/gm) || [];
-  for (const heading of headings) {
-    const value = cleanMarkdownText(heading.replace(/^#\s+/, ""));
-    if (containsChinese(value) && value.length <= 64) return value;
-  }
-  return "";
-}
+const DISPLAY_NAME_KEYS = [
+  "display_name",
+  "displayName",
+  "name_zh",
+  "name-zh",
+  "title",
+  "display_name_zh",
+  "displayNameZh",
+  "title_zh",
+  "name_cn",
+  "中文名称",
+];
+const LOCALIZED_DESCRIPTION_KEYS = [
+  "description_zh",
+  "description-zh",
+  "description_cn",
+  "summary_zh",
+  "intro_zh",
+  "中文描述",
+  "中文介绍",
+];
 
-function findChineseIntroduction(body, displayName) {
-  const withoutCode = body.replace(/```[\s\S]*?```/g, "");
-  const blocks = withoutCode.split(/\n\s*\n/);
-  for (const block of blocks) {
-    if (/^\s*#/m.test(block)) continue;
-    const value = cleanMarkdownText(block);
-    const chineseCount = (value.match(/[\u3400-\u9fff]/gu) || []).length;
-    if (
-      chineseCount >= 5 &&
-      value !== displayName &&
-      value.length >= 12 &&
-      value.length <= 320
-    ) {
-      return value;
-    }
-  }
-  return "";
-}
-
+/**
+ * Display name: explicit frontmatter display keys, else the first H1 that precedes any
+ * deeper heading (≤ 40 chars, outside code fences), else the technical name.
+ * `description` stays the frontmatter description; a Chinese first paragraph is only
+ * offered separately as `descriptionZh` when that description is not Chinese.
+ */
 export function parseFrontmatter(source, fallbackName) {
   const normalized = source.replace(/\r\n/g, "\n");
   const match = normalized.match(/^---\n([\s\S]*?)\n---(?:\n|$)/);
   const block = match?.[1] ?? "";
   const body = match ? normalized.slice(match[0].length).trim() : normalized.trim();
-  const tagsMatch = block.match(/^tags:\s*\[([^\]]*)\]/m);
-  const name = readYamlScalar(block, "name") || fallbackName;
-  const localizedName = firstChineseScalar(block, [
-    "name_zh",
-    "name_cn",
-    "display_name_zh",
-    "displayNameZh",
-    "title_zh",
-    "display_name",
-    "title",
-    "中文名称",
-  ]);
+  const tagsMatch = block.match(/^tags:[ \t]*\[([^\]\n]{0,500})\]/m);
+  const name =
+    outboundText(readYamlScalar(block, "name"), 128) ||
+    outboundText(fallbackName, 128) ||
+    "unnamed-skill";
   const displayName =
-    (containsChinese(name) && name) ||
-    localizedName ||
-    findChineseHeading(body) ||
+    outboundText(firstScalar(block, DISPLAY_NAME_KEYS), 80) ||
+    firstHeadingTitle(body) ||
     name;
-  const rawDescription = readYamlScalar(block, "description");
-  const localizedDescription = firstChineseScalar(block, [
-    "description_zh",
-    "description_cn",
-    "summary_zh",
-    "intro_zh",
-    "中文描述",
-    "中文介绍",
-  ]);
+  const rawDescription = outboundText(readYamlScalar(block, "description"), 2_000);
   const description =
-    localizedDescription ||
-    (containsChinese(rawDescription) && rawDescription) ||
-    findChineseIntroduction(body, displayName) ||
     rawDescription ||
-    body
-      .replace(/^#+\s+/gm, "")
-      .replace(/\s+/g, " ")
-      .slice(0, 180) ||
+    outboundText(
+      body
+        .slice(0, 4_000)
+        .replace(/^#+[ \t]+/gm, "")
+        .replace(/\s+/g, " "),
+      180,
+    ) ||
     "暂无描述";
+  const descriptionZh =
+    outboundText(firstScalar(block, LOCALIZED_DESCRIPTION_KEYS, containsChinese), 2_000) ||
+    (!containsChinese(rawDescription) ? chineseIntroduction(body) : "") ||
+    null;
+  const version = outboundText(
+    readYamlScalar(block, "version") ||
+      readNestedYamlScalar(block, "metadata", "version"),
+    64,
+  );
   const tags = tagsMatch
     ? tagsMatch[1]
         .split(",")
-        .map(stripYamlValue)
+        .map((tag) => outboundText(stripYamlValue(tag), 48))
         .filter(Boolean)
         .slice(0, 6)
     : [];
 
-  return { name, displayName, description, tags, body };
+  return { name, displayName, description, descriptionZh, version, tags, body };
 }
 
 function localizedText(value, fallback = "") {
@@ -1036,7 +1070,7 @@ async function readJsonFile(filePath, fallback) {
   }
 }
 
-function sanitizeConfig(input) {
+export function sanitizeConfig(input) {
   const rawAgents = Array.isArray(input?.agents) ? input.agents.slice(0, 24) : [];
   const inputVersion = Number(input?.version) || 1;
   const catalogById = new Map(AGENT_CATALOG.map((agent) => [agent.id, agent]));
@@ -1107,12 +1141,27 @@ function sanitizeConfig(input) {
   const defaultVisibleIds = DEFAULT_CONFIG.visibleAgentIds.filter((id) =>
     configuredIds.has(id),
   );
-  const visibleAgentIds =
+  const baseVisibleIds =
     requestedVisibleIds.length > 0
       ? requestedVisibleIds
       : defaultVisibleIds.length > 0
         ? defaultVisibleIds
         : finalAgents.slice(0, 2).map((agent) => agent.id);
+  // null means the user has not chosen primary agents yet; unknown ids are dropped.
+  const requestedPrimaryIds = Array.isArray(input?.primaryAgentIds)
+    ? [
+        ...new Set(
+          input.primaryAgentIds
+            .filter((id) => typeof id === "string")
+            .filter((id) => configuredIds.has(id)),
+        ),
+      ].slice(0, PRIMARY_AGENT_LIMIT)
+    : [];
+  const primaryAgentIds = requestedPrimaryIds.length ? requestedPrimaryIds : null;
+  // Primary agents are always shown, so status and the visible list never disagree.
+  const visibleAgentIds = [
+    ...new Set([...baseVisibleIds, ...(primaryAgentIds || [])]),
+  ];
   const dismissedAgentIds = Array.isArray(input?.dismissedAgentIds)
     ? [
         ...new Set(
@@ -1134,8 +1183,25 @@ function sanitizeConfig(input) {
     syncMode: input?.syncMode === "symlink" ? "symlink" : "copy",
     agents: finalAgents,
     visibleAgentIds,
+    primaryAgentIds,
     dismissedAgentIds,
   };
+}
+
+function validateConfigInput(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new Error("配置格式无效。");
+  }
+  const primary = input.primaryAgentIds;
+  if (
+    primary !== undefined &&
+    primary !== null &&
+    (!Array.isArray(primary) ||
+      primary.length > 64 ||
+      primary.some((id) => typeof id !== "string"))
+  ) {
+    throw new Error("常用 Agent（primaryAgentIds）必须是 Agent ID 列表或 null。");
+  }
 }
 
 export async function loadConfig() {
@@ -1180,12 +1246,14 @@ export async function loadConfig() {
 }
 
 async function saveConfig(input) {
+  validateConfigInput(input);
   const config = sanitizeConfig(input);
   await mkdir(STATE_DIRECTORY, { recursive: true });
   const temporaryFile = `${CONFIG_FILE}.tmp-${process.pid}`;
   await writeFile(temporaryFile, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   await rename(temporaryFile, CONFIG_FILE);
   invalidateScanCache();
+  activityLoader.clear();
   return config;
 }
 
@@ -1447,6 +1515,8 @@ async function describeSkillDirectory(
     name: parsed.name,
     displayName: parsed.displayName,
     description: parsed.description,
+    descriptionZh: parsed.descriptionZh,
+    version: parsed.version,
     tags: parsed.tags,
     hash: fingerprint.hash,
     shortHash: fingerprint.hash.slice(0, 8),
@@ -1485,6 +1555,220 @@ async function readHistory(limit = 16, homeDirectory = HOME_DIRECTORY) {
   }
 }
 
+async function scanAgentRoot({
+  agent,
+  source,
+  smartOrder,
+  visible,
+  homes,
+  fingerprintOptions,
+}) {
+  const configuredPath = source.path;
+  const rootPath = expandHome(configuredPath);
+  const available = await pathExists(rootPath);
+  const realRoot = available ? await realpath(rootPath).catch(() => null) : null;
+  const skillDirectories = (available
+    ? await discoverSkillDirectories(rootPath, 4, agent.id === "smartorder")
+    : []).filter((skillPath) => !(smartOrder?.disabledSkillPaths || []).some((disabled) =>
+      disabled === skillPath || disabled === path.join(skillPath, "SKILL.md")));
+  const realSkillPaths = await Promise.all(
+    skillDirectories.map((skillPath) => realpath(skillPath).catch(() => skillPath)),
+  );
+  const instances = visible
+    ? (
+        await Promise.all(
+          skillDirectories.map(async (skillPath, index) => {
+            try {
+              const instance = await describeSkillDirectory(
+                skillPath,
+                agent,
+                rootPath,
+                fingerprintOptions,
+              );
+              const realSkillPath = realSkillPaths[index];
+              const origin = classifyInstanceSource([skillPath, realSkillPath], homes.scan);
+              instance.realPath = realSkillPath;
+              instance.source = origin.source;
+              instance.managed = origin.managed;
+              if (origin.readOnly) instance.readOnly = true;
+              if (agent.id === "smartorder") {
+                instance.readOnly = source.readOnly || path.relative(rootPath, skillPath).split(path.sep).includes(".system");
+                instance.sourceLabel = source.label || (instance.readOnly ? "客户端内置" : "本地技能");
+                instance.source = source.readOnly
+                  ? "smartorder-plugin"
+                  : instance.readOnly
+                    ? "smartorder-system"
+                    : "local";
+                instance.managed = instance.readOnly;
+              }
+              return instance;
+            } catch (error) {
+              return {
+                error: error?.message || "读取失败",
+                agentId: agent.id,
+                path: compactHome(skillPath),
+              };
+            }
+          }),
+        )
+      ).filter((instance) => !instance.error)
+    : [];
+  return {
+    root: {
+      configuredPath,
+      path: compactHome(rootPath),
+      realPath: realRoot ? compactHomePath(realRoot, homes.display) : null,
+      available,
+      skillCount: skillDirectories.length,
+      ...(source.readOnly ? { readOnly: true, sourceLabel: source.label } : {}),
+    },
+    realRoot,
+    instances,
+    realSkillPaths,
+    directoryNames: skillDirectories.map((skillPath) =>
+      path.basename(skillPath).trim().toLocaleLowerCase(),
+    ),
+  };
+}
+
+async function scanAgentSkills(agent, { visible, homeDirectory, homes, fingerprintOptions }) {
+  const smartOrder = agent.id === "smartorder" ? await scanSmartOrder(homeDirectory) : null;
+  const scanSources = [
+    ...agent.paths.map((sourcePath) => ({ path: sourcePath, readOnly: false, label: "" })),
+    ...(smartOrder?.skillSources || []),
+  ].filter((source, index, list) => list.findIndex((item) => expandHome(item.path) === expandHome(source.path)) === index);
+  const rootScans = await Promise.all(
+    scanSources.map((source) =>
+      scanAgentRoot({ agent, source, smartOrder, visible, homes, fingerprintOptions }),
+    ),
+  );
+  // One physical directory reached through several roots counts once per agent.
+  const instances = dedupeAgentInstances(
+    rootScans.flatMap((rootScan) => rootScan.instances),
+  );
+  const skillNames = visible
+    ? instances.map((instance) => instance.name.trim().toLocaleLowerCase())
+    : rootScans.flatMap((rootScan) => rootScan.directoryNames);
+  return {
+    agent: {
+      ...agent,
+      roots: rootScans.map((rootScan) => rootScan.root),
+      available: rootScans.some((rootScan) => rootScan.root.available),
+      visible,
+      ...(smartOrder ? { warnings: smartOrder.warnings } : {}),
+      installationCount: new Set(
+        rootScans.flatMap((rootScan) => rootScan.realSkillPaths),
+      ).size,
+      skillCount: new Set(skillNames).size,
+    },
+    rootRecords: rootScans.map((rootScan) => ({
+      agentId: agent.id,
+      path: rootScan.root.path,
+      realRoot: rootScan.realRoot,
+    })),
+    instances,
+  };
+}
+
+function publicSkillInstance(instance) {
+  const publicInstance = { ...instance };
+  for (const key of [
+    "absolutePath",
+    "realPath",
+    "description",
+    "descriptionZh",
+    "tags",
+    "linkTarget",
+    "truncated",
+  ]) {
+    delete publicInstance[key];
+  }
+  return publicInstance;
+}
+
+function aggregateSkill(key, instances, { visibleAgents, effectivePrimaryAgentIds }) {
+  const sortedInstances = [...instances].sort((a, b) =>
+    String(b.modifiedAt).localeCompare(String(a.modifiedAt)),
+  );
+  const hashes = new Set(instances.map((instance) => instance.hash));
+  const installedAgentIds = [
+    ...new Set(instances.map((instance) => instance.agentId)),
+  ];
+  const coverage = installedAgentIds.length / visibleAgents.length;
+  const conflict = hashes.size > 1;
+  const status = conflict
+    ? "conflict"
+    : coverage === 1
+      ? "synced"
+      : installedAgentIds.length === 1
+        ? "single"
+        : "partial";
+  const newest = sortedInstances[0];
+  const localizedName = sortedInstances.find((instance) =>
+    containsChinese(instance.displayName),
+  );
+  const localizedDescription = sortedInstances.find((instance) =>
+    containsChinese(instance.description),
+  );
+  return {
+    id: createHash("sha1").update(key).digest("hex").slice(0, 16),
+    name: newest.name,
+    displayName: localizedName?.displayName || newest.displayName || newest.name,
+    description: localizedDescription?.description || newest.description,
+    descriptionZh:
+      sortedInstances.find((instance) => instance.descriptionZh)?.descriptionZh || null,
+    tags: [...new Set(instances.flatMap((instance) => instance.tags))].slice(0, 6),
+    status,
+    conflict,
+    coverage,
+    installedAgentIds,
+    missingAgentIds: visibleAgents
+      .map((agent) => agent.id)
+      .filter((agentId) => !installedAgentIds.includes(agentId)),
+    hashes: [...hashes].map((hash) => hash.slice(0, 8)),
+    modifiedAt: newest.modifiedAt,
+    fileCount: Math.max(...instances.map((instance) => instance.fileCount)),
+    managed: [
+      ...new Set(
+        instances.filter((instance) => instance.managed).map((instance) => instance.agentId),
+      ),
+    ],
+    duplicates: duplicatesFor(instances),
+    ...primaryStatusFor(instances, effectivePrimaryAgentIds),
+    instances: sortedInstances.map(publicSkillInstance),
+  };
+}
+
+/** Skills with duplicate copies inside primary Agents, split by whether the copies match. */
+function summarizeDuplicates(skills, primaryAgentIds) {
+  const primary = new Set(primaryAgentIds);
+  let identical = 0;
+  let differing = 0;
+  for (const skill of skills) {
+    const entries = skill.duplicates.filter((entry) => primary.has(entry.agentId));
+    if (!entries.length) continue;
+    if (entries.every((entry) => entry.identical)) identical += 1;
+    else differing += 1;
+  }
+  return { total: identical + differing, identical, differing };
+}
+
+function resolvePrimaryAgents(config, activity) {
+  const configuredIds = new Set(config.agents.map((agent) => agent.id));
+  const suggestedPrimaryAgentIds = activity.suggestedPrimaryAgentIds.filter((id) =>
+    configuredIds.has(id),
+  );
+  const suggestedVisible = suggestedPrimaryAgentIds.filter((id) =>
+    config.visibleAgentIds.includes(id),
+  );
+  return {
+    suggestedPrimaryAgentIds,
+    effectivePrimaryAgentIds:
+      config.primaryAgentIds ||
+      (suggestedVisible.length ? suggestedVisible : config.visibleAgentIds),
+  };
+}
+
 export async function scanAll(
   configInput,
   { persistentCache = false, forceFingerprints = false, homeDirectory = HOME_DIRECTORY } = {},
@@ -1494,94 +1778,38 @@ export async function scanAll(
   const visibleAgents = config.agents.filter((agent) =>
     visibleAgentIds.has(agent.id),
   );
-  const agentScans = await Promise.all(
-    config.agents.map(async (agent) => {
-      const visible = visibleAgentIds.has(agent.id);
-      const smartOrder = agent.id === "smartorder" ? await scanSmartOrder(homeDirectory) : null;
-      const scanSources = [
-        ...agent.paths.map((sourcePath) => ({ path: sourcePath, readOnly: false, label: "" })),
-        ...(smartOrder?.skillSources || []),
-      ].filter((source, index, list) => list.findIndex((item) => expandHome(item.path) === expandHome(source.path)) === index);
-      const rootScans = await Promise.all(
-        scanSources.map(async (source) => {
-          const configuredPath = source.path;
-          const rootPath = expandHome(configuredPath);
-          const available = await pathExists(rootPath);
-          const skillDirectories = (available
-            ? await discoverSkillDirectories(rootPath, 4, agent.id === "smartorder")
-            : []).filter((skillPath) => !(smartOrder?.disabledSkillPaths || []).some((disabled) =>
-              disabled === skillPath || disabled === path.join(skillPath, "SKILL.md")));
-          const instances = visible
-            ? (
-                await Promise.all(
-                  skillDirectories.map(async (skillPath) => {
-                    try {
-                      const instance = await describeSkillDirectory(
-                        skillPath,
-                        agent,
-                        rootPath,
-                        {
-                          persistentCache,
-                          force: forceFingerprints,
-                        },
-                      );
-                      if (agent.id === "smartorder") {
-                        instance.readOnly = source.readOnly || path.relative(rootPath, skillPath).split(path.sep).includes(".system");
-                        instance.sourceLabel = source.label || (instance.readOnly ? "客户端内置" : "本地技能");
-                      }
-                      return instance;
-                    } catch (error) {
-                      return {
-                        error: error?.message || "读取失败",
-                        agentId: agent.id,
-                        path: compactHome(skillPath),
-                      };
-                    }
-                  }),
-                )
-              ).filter((instance) => !instance.error)
-            : [];
-          return {
-            root: {
-              configuredPath,
-              path: compactHome(rootPath),
-              available,
-              skillCount: skillDirectories.length,
-              ...(source.readOnly ? { readOnly: true, sourceLabel: source.label } : {}),
-            },
-            instances,
-            directoryNames: skillDirectories.map((skillPath) =>
-              path.basename(skillPath).trim().toLocaleLowerCase(),
-            ),
-          };
+  // `scan` locates vendor/managed roots for this scan; `display` compacts paths to "~".
+  const homes = {
+    scan: await homeVariants(homeDirectory),
+    display: await homeVariants(HOME_DIRECTORY),
+  };
+  const [agentScans, activity] = await Promise.all([
+    Promise.all(
+      config.agents.map((agent) =>
+        scanAgentSkills(agent, {
+          visible: visibleAgentIds.has(agent.id),
+          homeDirectory,
+          homes,
+          fingerprintOptions: { persistentCache, force: forceFingerprints },
         }),
-      );
-      const instances = rootScans.flatMap((rootScan) => rootScan.instances);
-      const skillNames = visible
-        ? instances.map((instance) =>
-            instance.name.trim().toLocaleLowerCase(),
-          )
-        : rootScans.flatMap((rootScan) => rootScan.directoryNames);
-      return {
-        agent: {
-          ...agent,
-          roots: rootScans.map((rootScan) => rootScan.root),
-          available: rootScans.some((rootScan) => rootScan.root.available),
-          visible,
-          ...(smartOrder ? { warnings: smartOrder.warnings } : {}),
-          installationCount: rootScans.reduce(
-            (total, rootScan) => total + rootScan.root.skillCount,
-            0,
-          ),
-          skillCount: new Set(skillNames).size,
-        },
-        instances,
-      };
+      ),
+    ),
+    scanAgentActivity(homeDirectory, {
+      agentIds: config.agents.map((agent) => agent.id),
     }),
-  );
+  ]);
   const agentResults = agentScans.map((agentScan) => agentScan.agent);
-  const allInstances = agentScans.flatMap((agentScan) => agentScan.instances);
+  const allInstances = markSharedInstances(
+    agentScans.flatMap((agentScan) => agentScan.instances),
+  );
   if (persistentCache) await persistFingerprintCache();
+  const sharedRoots = buildSharedRoots(
+    agentScans.flatMap((agentScan) => agentScan.rootRecords),
+    homes.scan,
+    (realRoot) => compactHomePath(realRoot, homes.display),
+  );
+  const { suggestedPrimaryAgentIds, effectivePrimaryAgentIds } =
+    resolvePrimaryAgents(config, activity);
 
   const groups = new Map();
   for (const instance of allInstances) {
@@ -1593,70 +1821,34 @@ export async function scanAll(
   }
 
   const skills = [...groups.entries()]
-    .map(([key, instances]) => {
-      const sortedInstances = [...instances].sort((a, b) =>
-        String(b.modifiedAt).localeCompare(String(a.modifiedAt)),
-      );
-      const hashes = new Set(instances.map((instance) => instance.hash));
-      const installedAgentIds = [
-        ...new Set(instances.map((instance) => instance.agentId)),
-      ];
-      const coverage = installedAgentIds.length / visibleAgents.length;
-      const conflict = hashes.size > 1;
-      const status = conflict
-        ? "conflict"
-        : coverage === 1
-          ? "synced"
-          : installedAgentIds.length === 1
-            ? "single"
-            : "partial";
-      const newest = sortedInstances[0];
-      const localized = sortedInstances.find(
-        (instance) =>
-          containsChinese(instance.displayName) ||
-          containsChinese(instance.description),
-      );
-      const id = createHash("sha1").update(key).digest("hex").slice(0, 16);
-      return {
-        id,
-        name: newest.name,
-        displayName: localized?.displayName || newest.displayName || newest.name,
-        description: localized?.description || newest.description,
-        tags: [...new Set(instances.flatMap((instance) => instance.tags))].slice(
-          0,
-          6,
-        ),
-        status,
-        conflict,
-        coverage,
-        installedAgentIds,
-        missingAgentIds: visibleAgents
-          .map((agent) => agent.id)
-          .filter((agentId) => !installedAgentIds.includes(agentId)),
-        hashes: [...hashes].map((hash) => hash.slice(0, 8)),
-        modifiedAt: newest.modifiedAt,
-        fileCount: Math.max(...instances.map((instance) => instance.fileCount)),
-        instances: sortedInstances.map((instance) => {
-          const publicInstance = { ...instance };
-          delete publicInstance.absolutePath;
-          delete publicInstance.description;
-          delete publicInstance.tags;
-          delete publicInstance.linkTarget;
-          delete publicInstance.truncated;
-          return publicInstance;
-        }),
-      };
-    })
+    .map(([key, instances]) =>
+      aggregateSkill(key, instances, { visibleAgents, effectivePrimaryAgentIds }),
+    )
     .sort((a, b) => a.name.localeCompare(b.name));
 
   return {
     agents: agentResults,
     skills,
+    primaryAgentIds: config.primaryAgentIds,
+    suggestedPrimaryAgentIds,
+    effectivePrimaryAgentIds,
+    agentActivity: activity,
+    sharedRoots,
+    summary: {
+      total: skills.length,
+      inPrimary: skills.filter((skill) => skill.inPrimary).length,
+      differs: skills.filter((skill) => skill.primaryStatus === "differs").length,
+      duplicates: summarizeDuplicates(skills, effectivePrimaryAgentIds),
+      sharedRoots: sharedRoots.length,
+    },
     totals: {
       uniqueSkills: skills.length,
-      installations: allInstances.filter((instance) =>
-        visibleAgentIds.has(instance.agentId),
-      ).length,
+      // A directory shared by several Agents is one installation on disk.
+      installations: new Set(
+        allInstances
+          .filter((instance) => visibleAgentIds.has(instance.agentId))
+          .map((instance) => instance.realPathId),
+      ).size,
       synced: skills.filter((skill) => skill.status === "synced").length,
       conflicts: skills.filter((skill) => skill.status === "conflict").length,
       incomplete: skills.filter((skill) =>
@@ -1671,18 +1863,39 @@ export async function scanAll(
   };
 }
 
-async function scanInWorker(config, forceFingerprints) {
+const SCAN_WORKER_TIMEOUT = 60_000;
+
+/**
+ * Runs scanAll() on a worker thread with a watchdog. A scan that exceeds the timeout
+ * (for example a pathological SKILL.md) is terminated and rejected with SCAN_TIMEOUT,
+ * so the main process stays responsive and a later scan can retry.
+ */
+export function runScanWorker({
+  config,
+  forceFingerprints = false,
+  persistentCache = true,
+  homeDirectory,
+  timeoutMs = SCAN_WORKER_TIMEOUT,
+}) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("./scan-worker.mjs", import.meta.url), {
-      workerData: { config, forceFingerprints },
+      workerData: { config, forceFingerprints, persistentCache, homeDirectory },
     });
     let settled = false;
     const finish = (callback, value) => {
       if (settled) return;
       settled = true;
+      clearTimeout(watchdog);
       callback(value);
       void worker.terminate();
     };
+    const watchdog = setTimeout(() => {
+      const error = new Error(
+        `扫描超过 ${Math.round(timeoutMs / 1000)} 秒仍未完成，已停止。请检查是否有异常巨大的技能文件后重试。`,
+      );
+      error.code = "SCAN_TIMEOUT";
+      finish(reject, error);
+    }, timeoutMs);
     worker.once("message", (message) => {
       if (message?.ok) {
         finish(resolve, message.scan);
@@ -1722,8 +1935,10 @@ async function getScan(force = false) {
     const config = await loadConfig();
     let scan;
     try {
-      scan = await scanInWorker(config, force);
+      scan = await runScanWorker({ config, forceFingerprints: force });
     } catch (workerError) {
+      // Re-running a timed-out scan in-process would block the service the same way.
+      if (workerError?.code === "SCAN_TIMEOUT") throw workerError;
       console.warn(
         `[skills] 后台扫描不可用，已回退到当前进程：${
           workerError?.message || workerError
@@ -1760,16 +1975,6 @@ function resolveInstance(scan, instanceId) {
     }
   }
   return null;
-}
-
-function isWithin(parentPath, childPath) {
-  const relative = path.relative(parentPath, childPath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function isStrictlyWithin(parentPath, childPath) {
-  const relative = path.relative(parentPath, childPath);
-  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
 function languageForFile(filePath) {
@@ -2013,6 +2218,25 @@ export async function readSkillFileContent(directoryPath, requestedPath) {
   };
 }
 
+/** CSS escapes (e.g. `\\75 rl(`) can hide url()/@import from the checks below. */
+function svgStyleHasEscapes(source) {
+  const lower = source.toLowerCase();
+  let cursor = 0;
+  for (;;) {
+    const start = lower.indexOf("<style", cursor);
+    if (start < 0) break;
+    const end = lower.indexOf("</style", start);
+    const block = source.slice(start, end < 0 ? source.length : end);
+    if (block.includes("\\")) return true;
+    if (end < 0) break;
+    cursor = end + 1;
+  }
+  for (const match of source.matchAll(/\bstyle\s{0,8}=\s{0,8}(["'])([^"']{0,20000})\1/gi)) {
+    if (match[2].includes("\\")) return true;
+  }
+  return false;
+}
+
 function validateSvgPreview(buffer) {
   if (!bufferLooksLikeText(buffer)) {
     throw new Error("SVG 文件不是有效的文本格式。");
@@ -2022,7 +2246,7 @@ function validateSvgPreview(buffer) {
     throw new Error("文件扩展名是 SVG，但没有找到 SVG 根元素。");
   }
   const unsafeMarkup =
-    /<\s*(?:script|foreignObject|iframe|object|embed|audio|video)\b/i;
+    /<\s*(?:[\w-]{1,64}:)?(?:script|foreignObject|iframe|object|embed|audio|video|set|animate\w{0,32})\b/i;
   const eventHandler = /\b(?:on[a-z]+)\s*=/i;
   const referenceValues = [
     ...source.matchAll(
@@ -2039,6 +2263,8 @@ function validateSvgPreview(buffer) {
     unsafeMarkup.test(source) ||
     eventHandler.test(source) ||
     /@import\b/i.test(source) ||
+    /image-set\s*\(/i.test(source) ||
+    svgStyleHasEscapes(source) ||
     hasExternalReference
   ) {
     throw new Error("SVG 包含脚本、外部资源或其他不安全内容，已阻止渲染。");
@@ -2599,74 +2825,65 @@ export async function createSkillArchive(
   return archive;
 }
 
-async function planImportInstall({ importId, targetAgentIds }) {
+/** Plans per-target actions with this service's paths; see server/sync-targets.mjs. */
+function planTargetActions(input) {
+  return planTargetWrites({
+    ...input,
+    expandPath: expandHome,
+    compactPath: compactHome,
+    displayHomeDirectory: HOME_DIRECTORY,
+    backupDirectory: BACKUP_DIRECTORY,
+    backupGroup: timestampLabel(),
+  });
+}
+
+async function executePlanActions(plan) {
+  const completed = [];
+  for (const action of plan.actions) {
+    if (action.action === "noop") {
+      completed.push({ ...publicAction(action), result: "skipped" });
+      continue;
+    }
+    const { skippedLinks } = await materializeSkillDirectory({
+      sourcePath: action.sourcePath,
+      destinationPath: action.writePath,
+      backupPath: action.backupPath,
+      mode: action.mode,
+    });
+    completed.push({ ...publicAction(action), skippedLinks, result: "completed" });
+  }
+  return completed;
+}
+
+async function buildImportPlan({ importId, targetAgentIds }) {
   const imported = resolveImportedSkill(importId);
   const config = await loadConfig();
   const scan = await getScan(true);
-  const targetIds = [
-    ...new Set(Array.isArray(targetAgentIds) ? targetAgentIds : []),
-  ].slice(0, 24);
   const existingSkill = scan.skills.find(
     (skill) => skill.name.toLocaleLowerCase() === imported.name.toLocaleLowerCase(),
   );
-  const backupGroup = timestampLabel();
-  const actions = [];
-
-  for (const targetAgentId of targetIds) {
-    const agent = config.agents.find((item) => item.id === targetAgentId);
-    if (!agent) continue;
-    const existing = existingSkill?.instances.find(
-      (instance) => instance.agentId === targetAgentId,
-    );
-    if (existing?.readOnly) throw new Error(`${agent.name} 的该技能由客户端或插件管理，请在原客户端更新，管理器仅提供读取。`);
-    const existingPath = existing ? expandHome(existing.path) : null;
-    const rootPath =
-      (existingPath
-        ? agent.paths
-            .map(expandHome)
-            .find((candidateRoot) => isWithin(candidateRoot, existingPath))
-        : null) || expandHome(agent.paths[0]);
-    const destinationPath = existing
-      ? existingPath
-      : path.join(rootPath, imported.directoryName);
-    if (!isStrictlyWithin(rootPath, destinationPath)) {
-      throw new Error(
-        `目标必须位于 ${agent.name} 的技能目录内，不能替换技能根目录本身。`,
-      );
-    }
-    const exists = await pathExists(destinationPath);
-    const identical = existing?.shortHash === imported.shortHash;
-    const action = identical ? "noop" : exists ? "replace" : "create";
-    const backupPath =
-      action === "replace"
-        ? path.join(
-            BACKUP_DIRECTORY,
-            backupGroup,
-            agent.id,
-            path.basename(destinationPath),
-          )
-        : null;
-    actions.push({
-      agentId: agent.id,
-      agentName: agent.name,
-      action,
-      mode: "copy",
-      source: compactHome(imported.rootPath),
-      destination: compactHome(destinationPath),
-      backup: backupPath ? compactHome(backupPath) : null,
-      sourceHash: imported.shortHash,
-      targetHash: existing?.shortHash || null,
-      identical,
-    });
-  }
-
+  const planned = await planTargetActions({
+    config,
+    targetAgentIds,
+    instances: existingSkill?.instances,
+    source: {
+      path: imported.rootPath,
+      agentId: null,
+      directoryName: imported.directoryName,
+      shortHash: imported.shortHash,
+    },
+    mode: "copy",
+  });
   return {
     importId,
     skillName: imported.name,
     displayName: imported.displayName,
-    actions,
-    backupGroup,
+    ...planned,
   };
+}
+
+async function planImportInstall(input) {
+  return publicPlan(await buildImportPlan(input || {}));
 }
 
 export async function materializeSkillDirectory({
@@ -2675,6 +2892,12 @@ export async function materializeSkillDirectory({
   backupPath = null,
   mode = "copy",
 }) {
+  // Plans resolve symlinked destinations to their real directory; writing over a link
+  // here would silently detach the Agents that share it.
+  const existing = await lstat(destinationPath).catch(() => null);
+  if (existing?.isSymbolicLink()) {
+    throw new Error("目标是软链接，请重新生成同步计划后再写入。");
+  }
   const parentPath = path.dirname(destinationPath);
   const suffix = randomUUID();
   const destinationName = path.basename(destinationPath);
@@ -2687,18 +2910,14 @@ export async function materializeSkillDirectory({
     `.${destinationName}.skill-control-old-${suffix}`,
   );
   let previousMoved = false;
+  let skippedLinks = [];
 
   await mkdir(parentPath, { recursive: true });
   try {
     if (mode === "symlink") {
       await symlink(sourcePath, preparedPath, "dir");
     } else {
-      await cp(sourcePath, preparedPath, {
-        recursive: true,
-        dereference: true,
-        preserveTimestamps: true,
-        errorOnExist: true,
-      });
+      ({ skippedLinks } = await copySkillTree(sourcePath, preparedPath));
     }
 
     if (backupPath) {
@@ -2733,30 +2952,15 @@ export async function materializeSkillDirectory({
       await rename(previousPath, destinationPath);
     }
   }
+  return { skippedLinks };
 }
 
 async function executeImportInstall(input) {
   if (input?.confirm !== true) {
     throw new Error("需要明确确认后才能安装到技能目录。");
   }
-  const plan = await planImportInstall(input);
-  const completed = [];
-  for (const action of plan.actions) {
-    if (action.action === "noop") {
-      completed.push({ ...action, result: "skipped" });
-      continue;
-    }
-    const sourcePath = expandHome(action.source);
-    const destinationPath = expandHome(action.destination);
-    const backupPath = action.backup ? expandHome(action.backup) : null;
-    await materializeSkillDirectory({
-      sourcePath,
-      destinationPath,
-      backupPath,
-      mode: "copy",
-    });
-    completed.push({ ...action, result: "completed" });
-  }
+  const plan = await buildImportPlan(input);
+  const completed = await executePlanActions(plan);
 
   const historyEntry = {
     id: createHash("sha1")
@@ -2775,115 +2979,60 @@ async function executeImportInstall(input) {
   await mkdir(STATE_DIRECTORY, { recursive: true });
   await appendFile(HISTORY_FILE, `${JSON.stringify(historyEntry)}\n`, "utf8");
   invalidateScanCache();
-  return { ...plan, actions: completed, historyEntry };
+  return { ...publicPlan(plan), actions: completed, historyEntry };
 }
 
 function timestampLabel() {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
-async function planSync({
-  sourceInstanceId,
-  targetAgentIds,
-  mode = "copy",
-}) {
-  const config = await loadConfig();
-  const scan = await getScan(true);
+/** Internal plan with absolute write paths; use planSync() for the public view. */
+export async function buildSyncPlan(
+  config,
+  scan,
+  { sourceInstanceId, targetAgentIds, mode = "copy" },
+) {
   const resolved = resolveInstance(scan, sourceInstanceId);
   if (!resolved) throw new Error("找不到同步来源，请重新扫描后再试。");
-  const targetIds = [
-    ...new Set(Array.isArray(targetAgentIds) ? targetAgentIds : []),
-  ].slice(0, 24);
-  const backupGroup = timestampLabel();
-  const actions = [];
-
-  for (const targetAgentId of targetIds) {
-    const agent = config.agents.find((item) => item.id === targetAgentId);
-    if (!agent) continue;
-    const existing = resolved.skill.instances.find(
-      (instance) => instance.agentId === targetAgentId,
-    );
-    if (existing?.readOnly) throw new Error(`${agent.name} 的该技能由客户端或插件管理，请在原客户端更新，管理器仅提供读取。`);
-    const existingPath = existing ? expandHome(existing.path) : null;
-    const rootPath =
-      (existingPath
-        ? agent.paths
-            .map(expandHome)
-            .find((candidateRoot) => isWithin(candidateRoot, existingPath))
-        : null) || expandHome(agent.paths[0]);
-    const destinationPath = existing
-      ? existingPath
-      : path.join(rootPath, resolved.instance.directoryName);
-    if (!isStrictlyWithin(rootPath, destinationPath)) {
-      throw new Error(
-        `目标必须位于 ${agent.name} 的技能目录内，不能替换技能根目录本身。`,
-      );
-    }
-    const exists = await pathExists(destinationPath);
-    const samePath =
-      path.resolve(destinationPath) === path.resolve(resolved.instance.absolutePath);
-    const sameHash = existing?.hash === resolved.instance.hash;
-    const action = samePath || (sameHash && mode === "copy")
-      ? "noop"
-      : exists
-        ? "replace"
-        : "create";
-    const backupPath =
-      action === "replace"
-        ? path.join(
-            BACKUP_DIRECTORY,
-            backupGroup,
-            agent.id,
-            path.basename(destinationPath),
-          )
-        : null;
-    actions.push({
-      agentId: agent.id,
-      agentName: agent.name,
-      action,
-      mode: mode === "symlink" ? "symlink" : "copy",
-      source: compactHome(resolved.instance.absolutePath),
-      destination: compactHome(destinationPath),
-      backup: backupPath ? compactHome(backupPath) : null,
-      sourceHash: resolved.instance.shortHash,
-      targetHash: existing?.shortHash || null,
-      identical: sameHash,
-    });
-  }
-
+  const syncMode = mode === "symlink" ? "symlink" : "copy";
+  const planned = await planTargetActions({
+    config,
+    targetAgentIds,
+    instances: resolved.skill.instances,
+    source: {
+      path: resolved.instance.absolutePath,
+      agentId: resolved.instance.agentId,
+      directoryName: resolved.instance.directoryName,
+      hash: resolved.instance.hash,
+      shortHash: resolved.instance.shortHash,
+    },
+    mode: syncMode,
+  });
   return {
     skillId: resolved.skill.id,
     skillName: resolved.skill.name,
     sourceInstanceId,
     sourceAgentId: resolved.instance.agentId,
-    mode: mode === "symlink" ? "symlink" : "copy",
-    actions,
-    backupGroup,
+    mode: syncMode,
+    ...planned,
   };
+}
+
+
+async function planSync(input) {
+  const config = await loadConfig();
+  const scan = await getScan(true);
+  return publicPlan(await buildSyncPlan(config, scan, input || {}));
 }
 
 async function executeSync(input) {
   if (input?.confirm !== true) {
     throw new Error("需要明确确认后才能写入技能目录。");
   }
-  const plan = await planSync(input);
-  const completed = [];
-  for (const action of plan.actions) {
-    if (action.action === "noop") {
-      completed.push({ ...action, result: "skipped" });
-      continue;
-    }
-    const sourcePath = expandHome(action.source);
-    const destinationPath = expandHome(action.destination);
-    const backupPath = action.backup ? expandHome(action.backup) : null;
-    await materializeSkillDirectory({
-      sourcePath,
-      destinationPath,
-      backupPath,
-      mode: action.mode,
-    });
-    completed.push({ ...action, result: "completed" });
-  }
+  const config = await loadConfig();
+  const scan = await getScan(true);
+  const plan = await buildSyncPlan(config, scan, input);
+  const completed = await executePlanActions(plan);
 
   const historyEntry = {
     id: createHash("sha1")
@@ -2902,7 +3051,7 @@ async function executeSync(input) {
   await mkdir(STATE_DIRECTORY, { recursive: true });
   await appendFile(HISTORY_FILE, `${JSON.stringify(historyEntry)}\n`, "utf8");
   invalidateScanCache();
-  return { ...plan, actions: completed, historyEntry };
+  return { ...publicPlan(plan), actions: completed, historyEntry };
 }
 
 function jsonResponse(response, statusCode, payload, origin) {
@@ -2964,6 +3113,27 @@ function originAllowed(request) {
   return !origin || ALLOWED_ORIGINS.has(origin);
 }
 
+/**
+ * DNS-rebinding guard: a page on another site can resolve its own hostname to 127.0.0.1
+ * and send same-origin (Origin-less) GETs. Only loopback Host headers that carry the
+ * port this connection was accepted on are served.
+ */
+function hostAllowed(request) {
+  const port = request.socket?.localPort;
+  const host = String(request.headers.host || "").toLowerCase();
+  if (!port || !host) return false;
+  return [`127.0.0.1:${port}`, `localhost:${port}`, `[::1]:${port}`].includes(host);
+}
+
+/** Last line of defense: never echo the home directory in an error message. */
+function publicErrorMessage(error) {
+  let message = String(error?.message || "本地服务处理失败。").slice(0, 600);
+  for (const home of [HOME_DIRECTORY, REAL_HOME_DIRECTORY].filter(Boolean)) {
+    message = message.split(home).join("~");
+  }
+  return message;
+}
+
 async function revealPath(instanceId) {
   const scan = await getScan();
   const resolved = resolveInstance(scan, instanceId);
@@ -2990,8 +3160,71 @@ async function revealPath(instanceId) {
   });
 }
 
+class HttpError extends Error {
+  constructor(statusCode, message) {
+    super(message);
+    this.statusCode = statusCode;
+  }
+}
+
+const integrationsLoader = createCachedLoader(() => scanIntegrations(HOME_DIRECTORY), {
+  ttlMs: INTEGRATIONS_CACHE_TTL,
+});
+const activityLoader = createCachedLoader(
+  async () => {
+    const config = await loadConfig();
+    return scanAgentActivity(HOME_DIRECTORY, {
+      agentIds: config.agents.map((agent) => agent.id),
+    });
+  },
+  { ttlMs: ACTIVITY_CACHE_TTL },
+);
+
+/**
+ * Serves only images referenced by a scanned plugin manifest, inside its version root.
+ * Ids come from the last integrations scan; this never starts a rescan. Plugin SVGs are
+ * meant to be consumed through <img> only, and are additionally served with a sandbox
+ * CSP and nosniff so a direct navigation cannot run script either.
+ */
+async function readPluginAsset(assetIdValue) {
+  if (!/^[a-f0-9]{24}$/u.test(String(assetIdValue || ""))) {
+    throw new HttpError(404, "找不到这个插件图标。");
+  }
+  const integrations = await integrationsLoader.peek();
+  const asset = integrations?.assets.get(assetIdValue);
+  if (!asset) throw new HttpError(404, "找不到这个插件图标。");
+  let file;
+  try {
+    file = await resolveSkillFile(asset.root, asset.relativePath);
+  } catch {
+    throw new HttpError(404, "插件图标已不存在或无法安全读取。");
+  }
+  const { relativePath, resolvedFile, fileStats } = file;
+  const mimeType = PLUGIN_ASSET_TYPES.get(path.extname(relativePath).toLowerCase());
+  if (!mimeType) throw new Error("插件图标格式不受支持。");
+  if (fileStats.size > PLUGIN_ASSET_LIMIT) throw new Error("插件图标超过 2 MB。");
+  let buffer;
+  try {
+    buffer = await readFile(resolvedFile);
+  } catch {
+    throw new HttpError(404, "插件图标已不存在或无法安全读取。");
+  }
+  if (buffer.length > PLUGIN_ASSET_LIMIT) throw new Error("插件图标超过 2 MB。");
+  if (mimeType === "image/svg+xml") validateSvgPreview(buffer);
+  return { buffer, mimeType, filename: path.basename(relativePath) };
+}
+
+function publicCodexConnectors(codexConnectors) {
+  const { available, source, cachedAt, connectors, warnings } = codexConnectors;
+  return { available, source, cachedAt, connectors, warnings };
+}
+
 export async function handleRequest(request, response) {
   const origin = request.headers.origin;
+  if (!hostAllowed(request)) {
+    jsonResponse(response, 403, { error: "不允许的主机名，本地服务只接受回环地址访问。" });
+    return;
+  }
   if (!originAllowed(request)) {
     jsonResponse(response, 403, { error: "不允许的请求来源。" });
     return;
@@ -3038,7 +3271,98 @@ export async function handleRequest(request, response) {
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/api/connectors") {
-      jsonResponse(response, 200, await scanSmartOrderConnectors(HOME_DIRECTORY), origin);
+      const force = requestUrl.searchParams.get("force") === "1";
+      const [smartOrder, integrations] = await Promise.allSettled([
+        scanSmartOrderConnectors(HOME_DIRECTORY),
+        integrationsLoader.get(force),
+      ]);
+      const smartOrderPayload =
+        smartOrder.status === "fulfilled"
+          ? smartOrder.value
+          : {
+              available: false,
+              productId: "smartorder",
+              productName: "订单来了",
+              connectors: [],
+              plugins: [],
+              warnings: ["订单来了连接器读取失败，已跳过。"],
+              scannedAt: new Date().toISOString(),
+            };
+      jsonResponse(
+        response,
+        200,
+        {
+          ...smartOrderPayload,
+          codex: publicCodexConnectors(
+            integrations.status === "fulfilled"
+              ? integrations.value.codexConnectors
+              : emptyCodexConnectors("Codex 连接器读取失败，已跳过。"),
+          ),
+        },
+        origin,
+      );
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/api/integrations") {
+      const integrations = await integrationsLoader.get(requestUrl.searchParams.get("force") === "1");
+      jsonResponse(response, 200, integrations.payload, origin);
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/api/plugins") {
+      const { payload } = await integrationsLoader.get(requestUrl.searchParams.get("force") === "1");
+      jsonResponse(
+        response,
+        200,
+        {
+          plugins: payload.plugins,
+          sources: payload.sources,
+          warnings: payload.warnings,
+          scannedAt: payload.scannedAt,
+        },
+        origin,
+      );
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/api/mcp") {
+      const { payload } = await integrationsLoader.get(requestUrl.searchParams.get("force") === "1");
+      jsonResponse(
+        response,
+        200,
+        {
+          servers: payload.mcpServers,
+          matrix: payload.mcpMatrix,
+          warnings: payload.warnings,
+          scannedAt: payload.scannedAt,
+        },
+        origin,
+      );
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/api/plugin-asset") {
+      const asset = await readPluginAsset(requestUrl.searchParams.get("id"));
+      binaryResponse(
+        response,
+        200,
+        asset.buffer,
+        {
+          "content-type": asset.mimeType,
+          "content-disposition": `inline; filename*=UTF-8''${encodeURIComponent(asset.filename)}`,
+          "cache-control": "private, max-age=300",
+          "content-security-policy":
+            "default-src 'none'; img-src data:; style-src 'unsafe-inline'; sandbox",
+          "cross-origin-resource-policy": "same-site",
+        },
+        origin,
+      );
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/api/agents/activity") {
+      jsonResponse(
+        response,
+        200,
+        await activityLoader.get(requestUrl.searchParams.get("force") === "1"),
+        origin,
+      );
       return;
     }
     if (
@@ -3387,8 +3711,8 @@ export async function handleRequest(request, response) {
   } catch (error) {
     jsonResponse(
       response,
-      400,
-      { error: error?.message || "本地服务处理失败。" },
+      error instanceof HttpError ? error.statusCode : 400,
+      { error: publicErrorMessage(error) },
       origin,
     );
   }

@@ -69,13 +69,14 @@ test("parses skill metadata and a useful body excerpt", () => {
   );
 
   assert.equal(parsed.name, "example-skill");
-  assert.equal(parsed.displayName, "example-skill");
+  assert.equal(parsed.displayName, "Example");
   assert.equal(parsed.description, "A portable test skill");
+  assert.equal(parsed.descriptionZh, null);
   assert.deepEqual(parsed.tags, ["test", "portable"]);
   assert.match(parsed.body, /Use this skill carefully/);
 });
 
-test("prefers a Chinese heading and introduction for display metadata", () => {
+test("uses the leading H1 as display name and offers a Chinese first paragraph separately", () => {
   const parsed = parseFrontmatter(
     [
       "---",
@@ -93,10 +94,131 @@ test("prefers a Chinese heading and introduction for display metadata", () => {
 
   assert.equal(parsed.name, "local-skill-manager");
   assert.equal(parsed.displayName, "本地技能管家");
+  assert.equal(parsed.description, "Manage local skills across agents.");
   assert.equal(
-    parsed.description,
+    parsed.descriptionZh,
     "统一管理不同 Agent 产品中已经安装的技能，并优先展示中文信息。",
   );
+
+  const chineseFrontmatter = parseFrontmatter(
+    "---\nname: zh\ndescription: 已经是中文的描述。\n---\n# 标题\n\n另一段中文介绍文字。\n",
+    "zh",
+  );
+  assert.equal(chineseFrontmatter.description, "已经是中文的描述。");
+  assert.equal(chineseFrontmatter.descriptionZh, null);
+});
+
+test("keeps a trailing # that is part of the H1 text and strips closing hashes", () => {
+  assert.equal(parseFrontmatter("# Learn C#\n", "x").displayName, "Learn C#");
+  assert.equal(parseFrontmatter("# Closed title ##\n", "x").displayName, "Closed title");
+  assert.equal(parseFrontmatter("#NoSpace\n", "fallback").displayName, "fallback");
+});
+
+test("parses pathological Markdown and frontmatter in bounded time", () => {
+  const inputs = [
+    `---\nname: redos\n---\n${"a<".repeat(80_000)}\n`,
+    `---\nname: redos\n---\n${"[a](".repeat(80_000)}\n`,
+    `---\nname: redos\n---\n# ${"[a](".repeat(80_000)}\n`,
+    `---\nname: redos\n---\n# a${" ".repeat(80_000)}b\n`,
+    `---\nname: redos\ndescription: x\n${"tags: [a\n".repeat(20_000)}---\n`,
+    `---\nname: redos\n---\n${"**a__".repeat(40_000)}\n`,
+    `---\nname: redos\n---\n${"\n".repeat(80_000)}1`,
+  ];
+  for (const input of inputs) {
+    const started = performance.now();
+    parseFrontmatter(input, "fallback");
+    const elapsed = performance.now() - started;
+    assert.ok(elapsed < 200, `took ${elapsed.toFixed(1)} ms`);
+  }
+});
+
+test("prefers explicit frontmatter display names over body headings", () => {
+  const ordered = parseFrontmatter(
+    "---\nname: tech\ntitle: 标题\nname_zh: 中文名\n---\n",
+    "fallback",
+  );
+  assert.equal(ordered.displayName, "中文名");
+  for (const key of ["display_name", "displayName", "title", "name_zh", "name-zh"]) {
+    const parsed = parseFrontmatter(
+      `---\nname: tech-name\n${key}: 明确名称\ndescription: x\n---\n# Heading\n`,
+      "fallback",
+    );
+    assert.equal(parsed.displayName, "明确名称", key);
+  }
+});
+
+test("never derives display names from code comments, deeper headings or long titles", () => {
+  const cases = [
+    {
+      name: "lark-calendar",
+      expected: "calendar (v4)",
+      body: [
+        "# calendar (v4)",
+        "",
+        "## 身份",
+        "",
+        "```bash",
+        "# BAD — bot 身份查用户日程，返回空列表",
+        "lark-cli calendar +agenda --as bot",
+        "# GOOD — user 身份查日程",
+        "```",
+      ],
+    },
+    {
+      name: "lark-doc",
+      expected: "docs",
+      body: ["# docs", "", "```bash", "# 常用示例", "lark-cli docs +fetch", "```", "", "## 前置条件 — 执行操作前必读"],
+    },
+    {
+      name: "lark-markdown",
+      expected: "lark-markdown",
+      body: ["## 快速决策", "", "```bash", "# BAD: 未转义正则特殊字符，可能匹配到错误位置", "```", "", "# markdown (v1)"],
+    },
+    {
+      name: "lark-sheets",
+      expected: "lark-sheets",
+      body: ["```bash", "# workbook 定位：--url <workbook-url>", "```", "", "- 列表项不是名称", "", "### sheets"],
+    },
+    {
+      name: "guizang-ppt-skill",
+      expected: "Magazine Web Ppt",
+      body: [
+        "# Magazine Web Ppt",
+        "",
+        "> 来源识别: guizang-ppt-skill",
+        "",
+        "## 这个 Skill 做什么",
+        "",
+        "### 风格 A · 电子杂志风",
+      ],
+    },
+    {
+      name: "ameng-skill-scout",
+      expected: "Skill Scout（ameng-skill-scout）",
+      body: [
+        "# Skill Scout（ameng-skill-scout）",
+        "",
+        "## Phase 1：搜索与下载",
+        "",
+        "```bash",
+        "# skills.sh — 记录每个 Skill 的安装量 installs",
+        "```",
+      ],
+    },
+    {
+      name: "long-title",
+      expected: "long-title",
+      body: ["# 这是一个非常非常长的标题，用来确认超过四十个字符的一级标题不会被当成技能名称使用，而是回退到技术名称"],
+    },
+  ];
+  for (const { name, expected, body } of cases) {
+    const parsed = parseFrontmatter(
+      [`---`, `name: ${name}`, `description: "飞书示例：中文描述"`, `---`, "", ...body].join("\n"),
+      "fallback",
+    );
+    assert.equal(parsed.displayName, expected, name);
+    assert.doesNotMatch(parsed.displayName, /BAD|常用示例|workbook|风格 A|skills\.sh/u, name);
+  }
 });
 
 test("parses folded YAML descriptions used by installed skills", () => {
@@ -459,6 +581,22 @@ test("previews raster images and safe SVG files without allowing active SVG cont
     readSkillImageAsset(skillDirectory, "assets/unsafe.svg"),
     /不安全内容/,
   );
+  const unsafeVariants = [
+    '<svg xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg"><svg:script>alert(1)</svg:script></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><a><set attributeName="href" to="javascript:alert(1)"/></a></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><animate attributeName="href" values="javascript:alert(1)"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill: image-set(\'x.png\' 1x)"/></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><style>rect { fill: \\75 rl(x) }</style></svg>',
+    '<svg xmlns="http://www.w3.org/2000/svg"><rect style="background:\\75 rl(x)"/></svg>',
+  ];
+  for (const [index, variant] of unsafeVariants.entries()) {
+    await writeFile(path.join(skillDirectory, "assets", `variant-${index}.svg`), variant, "utf8");
+    await assert.rejects(
+      readSkillImageAsset(skillDirectory, `assets/variant-${index}.svg`),
+      /不安全内容/,
+      variant,
+    );
+  }
   await assert.rejects(
     readSkillImageAsset(skillDirectory, "../outside.png"),
     /文件路径无效|Skill 目录之外/,
