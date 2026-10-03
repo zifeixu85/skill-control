@@ -50,8 +50,29 @@ on Keep a Changelog and the project follows Semantic Versioning.
 - Full conflict-version inspection with file-level changes, line-level text
   differences, and side-by-side image comparison.
 - Portable ZIP export alongside the `.skill` archive format.
+- Hermes Agent, OpenClaw and QClaw as first-class agents, shown only when
+  detected. Each follows its product's own skill rules: Hermes recursive
+  discovery with bundled / Hub / organization / external-dir / profile sources,
+  disabled and per-platform disabled skills, `.usage.json` usage and an archived
+  list; OpenClaw's six skill roots and precedence, symlink-escape hiding,
+  ClawHub origin, per-skill disable and requirements; QClaw's remote and
+  SkillHub folders (read-only). Copies hidden or overridden by the product are
+  marked `shadowed` / `hiddenByProduct` and excluded from status.
+- Hermes profiles and OpenClaw / QClaw agents as capabilities, their plugins and
+  MCP servers in the integrations inventory, Chinese setting rows for each, and
+  token-based 30-day activity from Hermes `state.db` and OpenClaw
+  `sessions.json`.
+- `relatedProducts` in `/api/integrations` for LumiClaw, MotiClaw and Clawith
+  (read-only presence, version and counts).
 
 ### Changed
+
+- Primary-agent suggestions rank by `weight30d` (session bytes, or tokens × 4
+  for token-based products) instead of `bytes30d`.
+- Installs into Hermes and OpenClaw always copy (never symlink); installs into
+  QClaw and over Hermes Hub / bundled / organization skills are refused.
+- New runtime dependencies `js-yaml` 4.3.0 and `json5` 2.2.3 (exact versions,
+  licenses in `resources/licenses/`).
 
 - Skill display names now come from explicit frontmatter display keys, else the
   first H1 that precedes any deeper heading (≤ 40 characters, never inside code
@@ -75,6 +96,13 @@ on Keep a Changelog and the project follows Semantic Versioning.
 - TypeScript checking is now an explicit local, CI, and release quality gate.
 
 ### Security
+
+- Hermes `.env`, `auth.json` and `channel_directory.json`, OpenClaw
+  `credentials/`, `auth-profiles.json`, `identity/device-auth.json` and
+  `devices/paired.json`, and LumiClaw `config.json` are never opened (existence
+  only where shown). Hermes `state.db` is opened read-only and only the
+  `sessions` table is aggregated. QClaw guid / session identifiers are never
+  returned.
 
 - WorkBuddy expert members now reject sensitive paths and files whose resolved
   targets escape the expert package, instead of exposing their contents in

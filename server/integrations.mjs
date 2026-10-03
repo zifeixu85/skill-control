@@ -1,5 +1,8 @@
 import { homedir } from "node:os";
 import { scanClaudePlugins, scanWorkBuddyPlugins } from "./installed-plugins.mjs";
+import { scanHermesPlugins } from "./hermes.mjs";
+import { scanOpenClawPlugins } from "./openclaw.mjs";
+import { detectRelatedProducts } from "./related-products.mjs";
 import { scanCodexConnectors, scanCodexPlugins } from "./codex-plugins.mjs";
 import { scanMcpInventory } from "./mcp-inventory.mjs";
 
@@ -53,56 +56,62 @@ export async function scanIntegrations(
     scanCodexPlugins,
     scanClaudePlugins,
     scanWorkBuddyPlugins,
+    scanHermesPlugins,
+    scanOpenClawPlugins: () => scanOpenClawPlugins("openclaw", homeDirectory),
+    scanQClawPlugins: () => scanOpenClawPlugins("qclaw", homeDirectory),
     scanMcpInventory,
     scanCodexConnectors,
+    detectRelatedProducts,
     ...overrides,
   };
-  const [codexPlugins, claudePlugins, workbuddyPlugins, mcp] = await Promise.all([
-    isolate(() => scanners.scanCodexPlugins(homeDirectory), emptyCodexPlugins, "Codex 插件"),
-    isolate(() => scanners.scanClaudePlugins(homeDirectory), emptyInstalledPlugins, "Claude Code 插件"),
-    isolate(() => scanners.scanWorkBuddyPlugins(homeDirectory), emptyInstalledPlugins, "WorkBuddy 插件"),
-    isolate(() => scanners.scanMcpInventory(homeDirectory), emptyMcp, "MCP 配置"),
-  ]);
+  const [codexPlugins, claudePlugins, workbuddyPlugins, hermesPlugins, openclawPlugins, qclawPlugins, mcp, relatedProducts] =
+    await Promise.all([
+      isolate(() => scanners.scanCodexPlugins(homeDirectory), emptyCodexPlugins, "Codex 插件"),
+      isolate(() => scanners.scanClaudePlugins(homeDirectory), emptyInstalledPlugins, "Claude Code 插件"),
+      isolate(() => scanners.scanWorkBuddyPlugins(homeDirectory), emptyInstalledPlugins, "WorkBuddy 插件"),
+      isolate(() => scanners.scanHermesPlugins(homeDirectory), emptyInstalledPlugins, "Hermes 插件"),
+      isolate(() => scanners.scanOpenClawPlugins(homeDirectory), emptyInstalledPlugins, "OpenClaw 插件"),
+      isolate(() => scanners.scanQClawPlugins(homeDirectory), emptyInstalledPlugins, "QClaw 插件"),
+      isolate(() => scanners.scanMcpInventory(homeDirectory), emptyMcp, "MCP 配置"),
+      scanners.detectRelatedProducts(homeDirectory).catch(() => []),
+    ]);
   const codexConnectors = await isolate(
     () => scanners.scanCodexConnectors(homeDirectory, { plugins: codexPlugins.plugins }),
     () => emptyCodexConnectors(),
     "Codex 连接器",
   );
-  // Plugin roots stay server-side; keys are `codex:<id>` or the installed plugin key.
+  const installed = [claudePlugins, workbuddyPlugins, hermesPlugins, openclawPlugins, qclawPlugins];
+  // Plugin roots stay server-side; keys are `codex:<id>` or the plugin key.
   const roots = new Map([
     ...[...(codexPlugins.roots || new Map())].map(([id, root]) => [`codex:${id}`, root]),
-    ...(claudePlugins.roots || new Map()),
-    ...(workbuddyPlugins.roots || new Map()),
+    ...installed.flatMap((result) => [...(result.roots || new Map())]),
   ]);
   return {
     assets: codexPlugins.assets,
     roots,
     codexConnectors,
     payload: {
-      plugins: [...codexPlugins.plugins, ...claudePlugins.plugins, ...workbuddyPlugins.plugins],
+      plugins: [...codexPlugins.plugins, ...installed.flatMap((result) => result.plugins)],
       connectors: codexConnectors.connectors,
       mcpServers: mcp.servers,
       mcpMatrix: mcp.matrix,
+      relatedProducts,
       sources: {
         codex: {
           available: codexPlugins.available,
           marketplaces: codexPlugins.marketplaces,
           connectorsCachedAt: codexConnectors.cachedAt,
         },
-        claude: {
-          available: claudePlugins.available,
-          marketplaces: claudePlugins.marketplaces,
-        },
-        workbuddy: {
-          available: workbuddyPlugins.available,
-          marketplaces: workbuddyPlugins.marketplaces,
-        },
+        claude: { available: claudePlugins.available, marketplaces: claudePlugins.marketplaces },
+        workbuddy: { available: workbuddyPlugins.available, marketplaces: workbuddyPlugins.marketplaces },
+        hermes: { available: hermesPlugins.available },
+        openclaw: { available: openclawPlugins.available },
+        qclaw: { available: qclawPlugins.available },
       },
       warnings: [
         ...codexPlugins.warnings,
         ...codexConnectors.warnings,
-        ...claudePlugins.warnings,
-        ...workbuddyPlugins.warnings,
+        ...installed.flatMap((result) => result.warnings),
         ...mcp.warnings,
       ],
       scannedAt: new Date().toISOString(),

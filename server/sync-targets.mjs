@@ -138,6 +138,13 @@ export async function createWriteTracker({
   };
 }
 
+// Copies a product updates or manages itself; installing over them is refused.
+const PRODUCT_MANAGED_SOURCES = new Map([
+  ["hermes-hub", "Skills Hub "],
+  ["hermes-bundled", "内置"],
+  ["hermes-org", "组织同步"],
+]);
+
 /**
  * Prefers a writable, non-managed copy. When the only copies are Codex's bundled
  * `.system` skills, a new user copy is created beside them (Codex rewrites `.system`
@@ -146,7 +153,10 @@ export async function createWriteTracker({
 export function pickTargetInstance(instances, agent) {
   const own = (instances || []).filter((instance) => instance.agentId === agent.id);
   const writable = own.filter((instance) => !instance.readOnly);
-  const preferred = writable.find((instance) => !instance.managed) || writable[0];
+  const preferred =
+    writable.find((instance) => !instance.managed && !instance.inactive) ||
+    writable.find((instance) => !instance.managed) ||
+    writable[0];
   if (preferred) return preferred;
   if (own.length && own.every((instance) => instance.source === "codex-system")) {
     return null;
@@ -179,31 +189,51 @@ export async function planTargetWrites({
   displayHomeDirectory,
   backupDirectory,
   backupGroup,
+  scanAgents = [],
 }) {
   const targetIds = [
     ...new Set(Array.isArray(targetAgentIds) ? targetAgentIds : []),
   ].slice(0, 24);
+  // Every root an Agent actually loads (adapter roots included), so `alsoVisibleTo`
+  // reports Agents that see a write through shared folders such as ~/.agents/skills.
+  const scanned = new Map(scanAgents.map((agent) => [agent.id, agent]));
+  const agentRoots = (agent) => [
+    ...new Set([...agent.paths, ...(scanned.get(agent.id)?.roots || []).map((root) => root.path).filter(Boolean)]),
+  ];
   const writes = await createWriteTracker({
     sourcePath: source.path,
     sourceAgentId: source.agentId,
-    agents: config.agents,
+    agents: config.agents.map((agent) => ({ ...agent, paths: agentRoots(agent) })),
     expandPath,
     displayHomeDirectory,
   });
-  const unsafeLinks = mode === "copy" ? await findUnsafeLinks(source.path) : [];
+  const unsafeLinks = await findUnsafeLinks(source.path);
   const actions = [];
+  const warnings = [];
 
   for (const targetAgentId of targetIds) {
     const agent = config.agents.find((item) => item.id === targetAgentId);
     if (!agent) continue;
+    const policy = scanned.get(agent.id) || {};
+    if (policy.refuseInstall) throw new Error(policy.refuseInstall);
+    const productManaged = (instances || []).find(
+      (instance) => instance.agentId === agent.id && PRODUCT_MANAGED_SOURCES.has(instance.source),
+    );
+    if (productManaged) {
+      throw new Error(
+        `${agent.name} 里已有同名的${PRODUCT_MANAGED_SOURCES.get(productManaged.source)}技能，由 ${agent.name} 自己更新或管理，不能直接覆盖。`,
+      );
+    }
+    const actionMode = policy.copyOnly ? "copy" : mode;
+    if (actionMode !== mode) warnings.push(`${agent.name} 只支持复制安装，已改用复制。`);
     const existing = pickTargetInstance(instances, agent);
     const existingPath = existing ? expandPath(existing.path) : null;
     const rootPath =
       (existingPath
-        ? agent.paths
+        ? agentRoots(agent)
             .map(expandPath)
             .find((candidateRoot) => isWithin(candidateRoot, existingPath))
-        : null) || expandPath(agent.paths[0]);
+        : null) || expandPath(policy.installRoot || agent.paths[0]);
     const destinationPath = existing
       ? existingPath
       : path.join(rootPath, source.directoryName);
@@ -217,7 +247,7 @@ export async function planTargetWrites({
       Boolean(existing) &&
       (source.hash ? existing.hash === source.hash : existing.shortHash === source.shortHash);
     const action =
-      shared.reason || (identical && mode === "copy")
+      shared.reason || (identical && actionMode === "copy")
         ? "noop"
         : (await exists(shared.writePath))
           ? "replace"
@@ -233,7 +263,7 @@ export async function planTargetWrites({
       agentId: agent.id,
       agentName: agent.name,
       action,
-      mode,
+      mode: actionMode,
       source: compactPath(source.path),
       destination: compactPath(destinationPath),
       realDestination: shared.realDestination,
@@ -245,18 +275,19 @@ export async function planTargetWrites({
       sourceHash: source.shortHash,
       targetHash: existing?.shortHash || null,
       identical,
-      skippedLinks: ["create", "replace"].includes(action) ? unsafeLinks : [],
+      skippedLinks: ["create", "replace"].includes(action) && actionMode === "copy" ? unsafeLinks : [],
       sourcePath: source.path,
       writePath: shared.writePath,
       backupPath,
     });
   }
   const linkWarning = describeSkippedLinks(unsafeLinks);
+  if (linkWarning && actions.some((item) => item.skippedLinks.length)) warnings.push(linkWarning);
   return {
     actions,
     backupGroup,
     sharedDestinations: writes.sharedDestinations(),
-    warnings: linkWarning && actions.some((item) => item.skippedLinks.length) ? [linkWarning] : [],
+    warnings: [...new Set(warnings)],
   };
 }
 

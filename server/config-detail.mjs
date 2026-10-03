@@ -3,6 +3,7 @@ import { stringify as stringifyToml } from "smol-toml";
 import { agentSettingsDetail, AGENT_DETAIL_IDS } from "./agent-settings.mjs";
 import { isSecretKey, MASK, maskConfig, maskServerConfig, scrubTokens } from "./config-mask.mjs";
 import { frontmatterBlock, readYamlScalar } from "./frontmatter.mjs";
+import { dumpYaml, readYamlFile } from "./config-files.mjs";
 import {
   compactHomeInText,
   hostnameOf,
@@ -37,12 +38,18 @@ const AGENT_LABELS = {
   cursor: "Cursor",
   gemini: "Gemini CLI",
   workbuddy: "WorkBuddy",
+  hermes: "Hermes Agent",
+  openclaw: "OpenClaw",
+  qclaw: "QClaw",
 };
 const TRANSPORT_LABELS = { stdio: "本地命令（stdio）", http: "HTTP", sse: "SSE", unknown: "未知" };
-const MANIFEST_DIRECTORIES = {
-  codex: ".codex-plugin",
-  claude: ".claude-plugin",
-  workbuddy: ".codebuddy-plugin",
+const MANIFEST_FILES = {
+  codex: ".codex-plugin/plugin.json",
+  claude: ".claude-plugin/plugin.json",
+  workbuddy: ".codebuddy-plugin/plugin.json",
+  hermes: "plugin.yaml",
+  openclaw: "openclaw.plugin.json",
+  qclaw: "openclaw.plugin.json",
 };
 
 export class DetailError extends Error {
@@ -167,7 +174,9 @@ async function mcpDetail(name, context) {
     const body =
       entry.format === "toml"
         ? stringifyToml({ mcp_servers: { [entry.name]: masked } })
-        : JSON.stringify({ [entry.name]: masked }, null, 2);
+        : entry.format === "yaml"
+          ? dumpYaml({ mcp_servers: { [entry.name]: masked } })
+          : JSON.stringify({ [entry.name]: masked }, null, 2);
     return fileEntry(
       { filePath: entry.source, label: entryLabel(entry), language: entry.format, body, structured: true },
       homes,
@@ -347,16 +356,27 @@ async function pluginDetail(id, context) {
   const root = plugin ? roots.get(plugin.key) : null;
   if (!plugin || !root) throw new DetailError(404, "没有找到这个插件，或它尚未安装到本机。");
   const homes = context.displayHomes;
-  const manifestPath = `${MANIFEST_DIRECTORIES[plugin.agentId] || ".claude-plugin"}/plugin.json`;
+  const manifestPath = MANIFEST_FILES[plugin.agentId] || ".claude-plugin/plugin.json";
   const manifestFile = await resolveInside(root, manifestPath);
-  const manifestRead = manifestFile ? await readBoundedJson(manifestFile, MANIFEST_LIMIT) : null;
+  const manifestRead = manifestFile
+    ? manifestPath.endsWith(".yaml")
+      ? await readYamlFile(manifestFile, MANIFEST_LIMIT)
+      : await readBoundedJson(manifestFile, MANIFEST_LIMIT)
+    : null;
   const manifest = manifestRead?.status === "ok" ? object(manifestRead.value) : null;
   const files = [];
   if (manifest) {
     // The whole manifest is masked: mcpServers, lspServers, hooks, userConfig, settings …
+    const masked = maskConfig(manifest, { homes });
+    const yamlManifest = manifestPath.endsWith(".yaml");
     files.push(
       fileEntry(
-        { filePath: manifestPath, language: "json", body: JSON.stringify(maskConfig(manifest, { homes }), null, 2), structured: true },
+        {
+          filePath: manifestPath,
+          language: yamlManifest ? "yaml" : "json",
+          body: yamlManifest ? dumpYaml(masked) : JSON.stringify(masked, null, 2),
+          structured: true,
+        },
         homes,
       ),
     );
@@ -415,6 +435,44 @@ function frontmatterRows(source, homes) {
   return rows;
 }
 
+/** Product-specific facts about one installed copy (Hermes usage, OpenClaw requirements …). */
+function productStateRows(instance, homes) {
+  const rows = [];
+  if (instance.readOnly) rows.push(row("可写", "否，由产品自己管理", homes));
+  if (instance.disabled) rows.push(row("状态", "已在产品配置中停用", homes));
+  if (instance.disabledOn?.length) rows.push(row("按平台停用", instance.disabledOn.join("、"), homes));
+  if (instance.shadowed) rows.push(row("生效情况", `被同名技能覆盖（${instance.shadowedBy}）`, homes));
+  if (instance.hiddenByProduct === "symlink-escape") {
+    rows.push(row("生效情况", "软链接指向技能目录之外，产品本身会跳过它", homes));
+  }
+  if (instance.usage) {
+    const usage = instance.usage;
+    rows.push(
+      row(
+        "使用记录",
+        `${usage.confidence === "inferred" && usage.windowDays ? `近 ${usage.windowDays} 天 ` : ""}${usage.count} 次${usage.lastUsedAt ? `，最近 ${String(usage.lastUsedAt).slice(0, 10)}` : ""}${usage.state ? `，状态 ${usage.state}` : ""}${usage.confidence === "inferred" ? "（根据会话推断）" : ""}`,
+        homes,
+      ),
+    );
+  }
+  if (instance.remote) {
+    rows.push(row("远程同步", [instance.remote.version && `版本 ${instance.remote.version}`, instance.remote.type, instance.remote.installMode, instance.remote.effectScope].filter(Boolean).join(" · "), homes));
+  }
+  const requirements = instance.requirements;
+  if (requirements) {
+    const parts = [
+      requirements.bins?.length && `命令 ${requirements.bins.join("、")}`,
+      requirements.anyBins?.length && `任一命令 ${requirements.anyBins.join("、")}`,
+      requirements.env?.length && `环境变量 ${requirements.env.join("、")}`,
+      requirements.config?.length && `配置 ${requirements.config.join("、")}`,
+      requirements.os?.length && `系统 ${requirements.os.join("、")}`,
+      requirements.install?.length && `安装方式 ${requirements.install.join("、")}`,
+    ].filter(Boolean);
+    if (parts.length) rows.push(row("依赖", parts.join("；"), homes));
+  }
+  return rows;
+}
+
 async function skillDetail(skillId, instanceId, context) {
   const found = await context.findSkillInstance(skillId, instanceId);
   if (!found) throw new DetailError(404, "没有找到这个技能安装，请重新扫描后再试。");
@@ -428,7 +486,8 @@ async function skillDetail(skillId, instanceId, context) {
     rows: [
       ...frontmatterRows(read.text, homes),
       row("所属 Agent", instance.agentName || instance.agentId, homes),
-      row("来源", instance.source || "local", homes),
+      row("来源", [instance.sourceLabel, instance.source || "local"].filter(Boolean).join(" · "), homes),
+      ...productStateRows(instance, homes),
       row("内容指纹", instance.shortHash, homes),
       row("位置", instance.path, homes),
     ],

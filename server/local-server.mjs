@@ -24,27 +24,18 @@ import { Worker } from "node:worker_threads";
 import { unzipSync, zipSync } from "fflate";
 import { scanSmartOrder, scanSmartOrderConnectors } from "./smartorder.mjs";
 import { containsChinese } from "./skill-metadata.mjs";
-import {
-  cleanMarkdownText,
-  frontmatterBlock,
-  parseFrontmatter,
-  parseSimpleYamlSection,
-  readYamlScalar,
-} from "./frontmatter.mjs";
-import { scanAgentActivity } from "./agents-activity.mjs";
-import {
-  capabilityId,
-  isSensitiveCapabilityPath,
-  scanWorkBuddyExperts,
-} from "./workbuddy-experts.mjs";
+import { parseFrontmatter } from "./frontmatter.mjs";
+import { ACTIVITY_WINDOW_DAYS, scanAgentActivity } from "./agents-activity.mjs";
+import { applyPrecedence, detectionPaths, SKILL_ADAPTERS } from "./agent-adapters.mjs";
+import { isSensitiveCapabilityPath, scanWorkBuddyExperts } from "./workbuddy-experts.mjs";
 import { readWorkBuddyExpertUsage } from "./workbuddy-usage.mjs";
+import { scanHermesProfiles } from "./hermes.mjs";
+import { scanOpenClawAgents } from "./openclaw.mjs";
 import {
   compactHomeInText,
   compactHomePath,
   homeVariants,
   isWithin,
-  readBoundedText,
-  text as outboundText,
 } from "./fs-safe.mjs";
 import { maskConfig } from "./config-mask.mjs";
 import {
@@ -64,6 +55,7 @@ import { copySkillTree } from "./skill-copy.mjs";
 export { compareVersions } from "./skill-status.mjs";
 export { parseFrontmatter } from "./frontmatter.mjs";
 export { scanWorkBuddyExperts } from "./workbuddy-experts.mjs";
+export { scanHermesProfiles } from "./hermes.mjs";
 
 const HOME_DIRECTORY = homedir();
 const REAL_HOME_DIRECTORY = (() => {
@@ -78,7 +70,6 @@ const CONFIG_FILE = path.join(STATE_DIRECTORY, "config.json");
 const HISTORY_FILE = path.join(STATE_DIRECTORY, "history.jsonl");
 const BACKUP_DIRECTORY = path.join(STATE_DIRECTORY, "backups");
 const IMPORT_DIRECTORY = path.join(STATE_DIRECTORY, "imports");
-const HERMES_HOME_RELATIVE_PATH = ".hermes";
 const FINGERPRINT_CACHE_FILE = path.join(
   STATE_DIRECTORY,
   "fingerprint-cache.json",
@@ -251,6 +242,29 @@ const AGENT_CATALOG = [
     color: "#aeb7d4",
     paths: ["~/.copilot/skills", "~/.github/copilot/skills"],
   },
+  // Adapter-backed agents: skill roots, precedence and install policy come from
+  // server/agent-adapters.mjs; `paths[0]` is only the default install location.
+  {
+    id: "hermes",
+    name: "Hermes Agent",
+    shortName: "HM",
+    color: "#e4b86a",
+    paths: ["~/.hermes/skills"],
+  },
+  {
+    id: "openclaw",
+    name: "OpenClaw",
+    shortName: "OCL",
+    color: "#e8836b",
+    paths: ["~/.openclaw/skills"],
+  },
+  {
+    id: "qclaw",
+    name: "QClaw",
+    shortName: "QC",
+    color: "#6fa8f5",
+    paths: ["~/.qclaw/skills"],
+  },
 ];
 
 const LEGACY_AGENT_COLORS = new Map([
@@ -329,212 +343,6 @@ function publicCapability(capability) {
   return publicValue;
 }
 
-function safeHermesConfiguration(source, profileRoot) {
-  const sectionKeys = {
-    model: ["provider", "default"],
-    agent: [
-      "max_turns",
-      "reasoning_effort",
-      "tool_use_enforcement",
-      "disabled_toolsets",
-    ],
-    delegation: [
-      "model",
-      "provider",
-      "reasoning_effort",
-      "max_iterations",
-      "child_timeout_seconds",
-      "max_concurrent_children",
-      "max_spawn_depth",
-      "orchestrator_enabled",
-      "subagent_auto_approve",
-      "inherit_mcp_toolsets",
-    ],
-    display: ["personality", "language", "interface"],
-    terminal: ["backend", "cwd", "timeout", "working_dir"],
-    skills: ["external_dirs", "guard_agent_created"],
-    kanban: [
-      "auto_decompose",
-      "default_assignee",
-      "orchestrator_profile",
-      "max_in_progress_per_profile",
-    ],
-  };
-  const summary = {
-    note: "仅展示非敏感配置；API Key、Token、认证与会话数据已省略。",
-    profilePath: compactHome(profileRoot),
-  };
-  for (const [sectionName, allowedKeys] of Object.entries(sectionKeys)) {
-    const values = parseSimpleYamlSection(source, sectionName, allowedKeys);
-    for (const pathKey of ["cwd", "working_dir"]) {
-      if (typeof values[pathKey] === "string" && path.isAbsolute(values[pathKey])) {
-        values[pathKey] = compactHome(values[pathKey]);
-      }
-    }
-    if (Object.keys(values).length) summary[sectionName] = values;
-  }
-  return summary;
-}
-
-async function countDirectSkillDirectories(rootPath) {
-  if (!(await pathExists(rootPath))) return 0;
-  const entries = await readdir(rootPath, { withFileTypes: true });
-  let count = 0;
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
-    if (await pathExists(path.join(rootPath, entry.name, "SKILL.md"))) count += 1;
-  }
-  return count;
-}
-
-async function createHermesProfileCapability(profileRoot, profileName, isDefault) {
-  const configPath = path.join(profileRoot, "config.yaml");
-  const soulPath = path.join(profileRoot, "SOUL.md");
-  const profileMetadataPath = path.join(profileRoot, "profile.yaml");
-  // Bounded, FIFO-safe reads: a missing, oversized or special file reads as empty.
-  const readOptional = async (filePath) => {
-    const result = await readBoundedText(filePath, SKILL_CONTENT_LIMIT);
-    return result.status === "ok" ? result.text : "";
-  };
-  const configSource = await readOptional(configPath);
-  const soulSource = await readOptional(soulPath);
-  const metadataSource = await readOptional(profileMetadataPath);
-  const safeConfig = maskConfig(safeHermesConfiguration(configSource, profileRoot), {
-    homes: [HOME_DIRECTORY, REAL_HOME_DIRECTORY],
-  });
-  const modelConfig = safeConfig.model || {};
-  const agentConfig = safeConfig.agent || {};
-  const delegationConfig = safeConfig.delegation || {};
-  const profileDescription =
-    outboundText(
-      readYamlScalar(frontmatterBlock(metadataSource) || metadataSource, "description") ||
-        cleanMarkdownText(soulSource).slice(0, 220),
-      400,
-    ) || "使用 Hermes Profile、SOUL.md 与委派设置定义的本地 Agent。";
-  const displayName =
-    outboundText(
-      readYamlScalar(frontmatterBlock(metadataSource) || metadataSource, "displayName") ||
-        readYamlScalar(frontmatterBlock(metadataSource) || metadataSource, "name"),
-      80,
-    ) || (isDefault ? "Hermes 默认 Agent" : profileName);
-  const virtualPath = "配置摘要.json";
-  const virtualFiles = new Map([
-    [
-      virtualPath,
-      `${JSON.stringify(safeConfig, null, 2)}\n`,
-    ],
-  ]);
-  const allowedFiles = new Set();
-  for (const fileName of ["SOUL.md", "profile.yaml", "AGENTS.md"]) {
-    if (await pathExists(path.join(profileRoot, fileName))) {
-      allowedFiles.add(fileName);
-    }
-  }
-  const primaryFilePath = allowedFiles.has("SOUL.md")
-    ? "SOUL.md"
-    : virtualPath;
-  const referenceStats = await stat(
-    (await pathExists(configPath)) ? configPath : profileRoot,
-  );
-  return {
-    id: capabilityId("hermes", profileRoot),
-    productId: "hermes",
-    productName: "Hermes Agent",
-    productShortName: "HM",
-    productColor: "#e4b86a",
-    kind: "agent-profile",
-    origin: "profile",
-    originLabel: "Agent Profile",
-    kindLabel: isDefault ? "默认 Agent" : "Agent Profile",
-    name: profileName,
-    displayName,
-    description: profileDescription,
-    profession: "",
-    version: "",
-    tags: [
-      "SOUL.md",
-      delegationConfig.orchestrator_enabled ? "可委派" : "",
-    ].filter(Boolean),
-    members: [],
-    memberCount: 0,
-    fileCount: allowedFiles.size + virtualFiles.size,
-    connectorCount: 0,
-    skillCount: await countDirectSkillDirectories(
-      path.join(profileRoot, "skills"),
-    ),
-    model: [modelConfig.provider, modelConfig.default]
-      .filter(Boolean)
-      .join(" / "),
-    maxTurns: agentConfig.max_turns || null,
-    delegation: {
-      enabled: Boolean(delegationConfig.orchestrator_enabled),
-      maxConcurrentChildren:
-        Number(delegationConfig.max_concurrent_children) || null,
-      maxSpawnDepth: Number(delegationConfig.max_spawn_depth) || null,
-    },
-    sourcePath: compactHome(profileRoot),
-    primaryFilePath,
-    modifiedAt: referenceStats.mtime.toISOString(),
-    rootPath: profileRoot,
-    allowedFiles,
-    virtualFiles,
-  };
-}
-
-export async function scanHermesProfiles(homeDirectory = HOME_DIRECTORY) {
-  const hermesRoot = path.join(homeDirectory, HERMES_HOME_RELATIVE_PATH);
-  if (!(await pathExists(hermesRoot))) {
-    return {
-      id: "hermes",
-      name: "Hermes Agent",
-      shortName: "HM",
-      color: "#e4b86a",
-      kindLabel: "Agent Profile",
-      sourcePath: compactHome(hermesRoot),
-      available: false,
-      catalogCount: 0,
-      itemCount: 0,
-      memberCount: 0,
-      items: [],
-    };
-  }
-
-  const items = [
-    await createHermesProfileCapability(hermesRoot, "default", true),
-  ];
-  const profilesRoot = path.join(hermesRoot, "profiles");
-  if (await pathExists(profilesRoot)) {
-    const profileEntries = (
-      await readdir(profilesRoot, { withFileTypes: true })
-    )
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-      .sort((left, right) => left.name.localeCompare(right.name));
-    for (const profileEntry of profileEntries) {
-      items.push(
-        await createHermesProfileCapability(
-          path.join(profilesRoot, profileEntry.name),
-          profileEntry.name,
-          false,
-        ),
-      );
-    }
-  }
-
-  return {
-    id: "hermes",
-    name: "Hermes Agent",
-    shortName: "HM",
-    color: "#e4b86a",
-    kindLabel: "Agent Profile",
-    sourcePath: compactHome(hermesRoot),
-    available: true,
-    catalogCount: items.length,
-    itemCount: items.length,
-    memberCount: 0,
-    items,
-  };
-}
-
 // Expert usage comes from WorkBuddy's SQLite database; it is cached separately (10 min).
 const expertUsageLoader = createCachedLoader(() => readWorkBuddyExpertUsage(HOME_DIRECTORY), {
   ttlMs: 10 * 60_000,
@@ -551,7 +359,9 @@ async function getCapabilityProducts(force = false) {
   const usage = await expertUsageLoader.get(force).catch(() => null);
   const products = await Promise.all([
     scanWorkBuddyExperts(HOME_DIRECTORY, { usage }),
-    scanHermesProfiles(),
+    scanHermesProfiles(HOME_DIRECTORY),
+    scanOpenClawAgents("openclaw", HOME_DIRECTORY),
+    scanOpenClawAgents("qclaw", HOME_DIRECTORY),
   ]);
   cachedCapabilityProducts = products;
   cachedCapabilityProductsAt = Date.now();
@@ -574,6 +384,8 @@ export async function scanCapabilityCatalog(
       : await Promise.all([
           scanWorkBuddyExperts(homeDirectory),
           scanHermesProfiles(homeDirectory),
+          scanOpenClawAgents("openclaw", homeDirectory),
+          scanOpenClawAgents("qclaw", homeDirectory),
         ]);
   const availableProducts = products.filter((product) => product.available);
   return {
@@ -861,6 +673,15 @@ function validateConfigInput(input) {
   }
 }
 
+/** A catalog agent is offered only when its folders or product files exist. */
+async function agentDetected(agent) {
+  const candidates = [
+    ...agent.paths.map(expandHome),
+    ...detectionPaths(agent.id, HOME_DIRECTORY),
+  ];
+  return (await Promise.all(candidates.map((candidate) => pathExists(candidate).catch(() => false)))).some(Boolean);
+}
+
 export async function loadConfig() {
   const storedConfig = await readJsonFile(CONFIG_FILE, null);
   let config;
@@ -869,13 +690,7 @@ export async function loadConfig() {
   } else {
     const detectedAgents = [];
     for (const agent of AGENT_CATALOG) {
-      const detected = (
-        await Promise.all([
-          ...agent.paths,
-          ...(agent.id === "smartorder" ? ["~/.smartorder/config.toml"] : []),
-        ].map((agentPath) => pathExists(expandHome(agentPath))))
-      ).some(Boolean);
-      if (detected) detectedAgents.push(agent);
+      if (await agentDetected(agent)) detectedAgents.push(agent);
     }
     config = sanitizeConfig({
       ...DEFAULT_CONFIG,
@@ -888,13 +703,7 @@ export async function loadConfig() {
   const newlyDetected = [];
   for (const agent of AGENT_CATALOG) {
     if (configuredIds.has(agent.id) || dismissedAgentIds.has(agent.id)) continue;
-    const detected = (
-      await Promise.all([
-        ...agent.paths,
-        ...(agent.id === "smartorder" ? ["~/.smartorder/config.toml"] : []),
-      ].map((agentPath) => pathExists(expandHome(agentPath))))
-    ).some(Boolean);
-    if (detected) newlyDetected.push(agent);
+    if (await agentDetected(agent)) newlyDetected.push(agent);
   }
   return sanitizeConfig({
     ...config,
@@ -1224,12 +1033,18 @@ async function scanAgentRoot({
   const rootPath = expandHome(configuredPath);
   const available = await pathExists(rootPath);
   const realRoot = available ? await realpath(rootPath).catch(() => null) : null;
-  const skillDirectories = (available
-    ? await discoverSkillDirectories(rootPath, 4, agent.id === "smartorder")
-    : []).filter((skillPath) => !(smartOrder?.disabledSkillPaths || []).some((disabled) =>
-      disabled === skillPath || disabled === path.join(skillPath, "SKILL.md")));
+  // Adapter sources bring their own discovery (Hermes recursive walk, OpenClaw one level).
+  const found = !available
+    ? []
+    : source.discover
+      ? await source.discover().catch(() => [])
+      : (await discoverSkillDirectories(rootPath, 4, agent.id === "smartorder"))
+          .filter((skillPath) => !(smartOrder?.disabledSkillPaths || []).some((disabled) =>
+            disabled === skillPath || disabled === path.join(skillPath, "SKILL.md")))
+          .map((skillPath) => ({ skillPath, realPath: null }));
+  const skillDirectories = found.map((item) => item.skillPath);
   const realSkillPaths = await Promise.all(
-    skillDirectories.map((skillPath) => realpath(skillPath).catch(() => skillPath)),
+    found.map((item) => item.realPath || realpath(item.skillPath).catch(() => item.skillPath)),
   );
   const instances = visible
     ? (
@@ -1258,6 +1073,18 @@ async function scanAgentRoot({
                     : "local";
                 instance.managed = instance.readOnly;
               }
+              if (source.annotate) {
+                if (source.label) instance.sourceLabel = source.label;
+                if (source.readOnly) instance.readOnly = true;
+                await source.annotate(instance, skillPath, found[index]);
+                Object.assign(instance, {
+                  precedence: source.precedence ?? 0,
+                  scope: source.scope || "default",
+                  scopes: source.scopes,
+                  firstWins: Boolean(source.firstWins),
+                  order: index,
+                });
+              }
               return instance;
             } catch (error) {
               return {
@@ -1272,12 +1099,13 @@ async function scanAgentRoot({
     : [];
   return {
     root: {
-      configuredPath,
+      configuredPath: compactHome(rootPath),
       path: compactHome(rootPath),
       realPath: realRoot ? compactHomePath(realRoot, homes.display) : null,
       available,
       skillCount: skillDirectories.length,
-      ...(source.readOnly ? { readOnly: true, sourceLabel: source.label } : {}),
+      ...(source.readOnly ? { readOnly: true } : {}),
+      ...(source.label ? { sourceLabel: source.label } : {}),
     },
     realRoot,
     instances,
@@ -1290,29 +1118,53 @@ async function scanAgentRoot({
 
 async function scanAgentSkills(agent, { visible, homeDirectory, homes, fingerprintOptions }) {
   const smartOrder = agent.id === "smartorder" ? await scanSmartOrder(homeDirectory) : null;
+  const adapter = SKILL_ADAPTERS[agent.id]
+    ? await SKILL_ADAPTERS[agent.id](homeDirectory).catch(() => null)
+    : null;
   const scanSources = [
+    ...(adapter?.sources || []),
     ...agent.paths.map((sourcePath) => ({ path: sourcePath, readOnly: false, label: "" })),
     ...(smartOrder?.skillSources || []),
-  ].filter((source, index, list) => list.findIndex((item) => expandHome(item.path) === expandHome(source.path)) === index);
+  ].filter((source, index, list) => list.findIndex((item) => expandHome(item.path) === expandHome(source.path) && item.scope === source.scope) === index)
+    // An adapter knows the product's roots; a configured default path it already covers is skipped.
+    .filter((source, index, list) => source.annotate || !list.some((item) => item.annotate && expandHome(item.path) === expandHome(source.path)));
   const rootScans = await Promise.all(
     scanSources.map((source) =>
       scanAgentRoot({ agent, source, smartOrder, visible, homes, fingerprintOptions }),
     ),
   );
   // One physical directory reached through several roots counts once per agent.
-  const instances = dedupeAgentInstances(
-    rootScans.flatMap((rootScan) => rootScan.instances),
+  const instances = applyPrecedence(
+    dedupeAgentInstances(rootScans.flatMap((rootScan) => rootScan.instances)),
   );
   const skillNames = visible
     ? instances.map((instance) => instance.name.trim().toLocaleLowerCase())
     : rootScans.flatMap((rootScan) => rootScan.directoryNames);
+  const warnings = [
+    ...(smartOrder?.warnings || []),
+    ...(adapter?.warnings || []),
+    ...(adapter?.escapeWarnings?.count
+      ? [`${adapter.escapeWarnings.count} 个技能是指向技能目录之外的软链接，${agent.name} 本身会跳过它们。`]
+      : []),
+  ];
   return {
     agent: {
       ...agent,
       roots: rootScans.map((rootScan) => rootScan.root),
-      available: rootScans.some((rootScan) => rootScan.root.available),
+      available: rootScans.some((rootScan) => rootScan.root.available) || Boolean(adapter?.available),
       visible,
-      ...(smartOrder ? { warnings: smartOrder.warnings } : {}),
+      ...(warnings.length ? { warnings } : {}),
+      ...(adapter
+        ? {
+            adapter: true,
+            installRoot: adapter.installRoot ? compactHome(adapter.installRoot) : null,
+            copyOnly: Boolean(adapter.copyOnly),
+            refuseInstall: adapter.refuseInstall || null,
+            archivedCount: adapter.archived?.length || 0,
+            managedBy: adapter.install?.managedBy || [],
+            productVersion: adapter.install?.version || null,
+          }
+        : {}),
       installationCount: new Set(
         rootScans.flatMap((rootScan) => rootScan.realSkillPaths),
       ).size,
@@ -1324,7 +1176,29 @@ async function scanAgentSkills(agent, { visible, homeDirectory, homes, fingerpri
       realRoot: rootScan.realRoot,
     })),
     instances,
+    archived: visible ? adapter?.archived || [] : [],
   };
+}
+
+/**
+ * OpenClaw-family products keep no per-skill usage file; SKILL.md reads found in recent
+ * session transcripts are attached to the copy the product actually loads, as an estimate.
+ */
+function withInferredUsage(instances, activity) {
+  const readsByAgent = new Map(
+    activity.agents.filter((agent) => agent.skillReads30d).map((agent) => [agent.agentId, agent.skillReads30d]),
+  );
+  if (!readsByAgent.size) return instances;
+  return instances.map((instance) => {
+    const reads = readsByAgent.get(instance.agentId);
+    if (!reads || instance.usage || instance.inactive) return instance;
+    const key = [path.basename(instance.path || ""), instance.name].find((candidate) => Object.hasOwn(reads, candidate));
+    if (!key) return instance;
+    return {
+      ...instance,
+      usage: { count: reads[key], lastUsedAt: null, state: null, pinned: false, confidence: "inferred", windowDays: ACTIVITY_WINDOW_DAYS },
+    };
+  });
 }
 
 function publicSkillInstance(instance) {
@@ -1332,6 +1206,11 @@ function publicSkillInstance(instance) {
   for (const key of [
     "absolutePath",
     "realPath",
+    "precedence",
+    "scope",
+    "scopes",
+    "firstWins",
+    "order",
     "description",
     "descriptionZh",
     "tags",
@@ -1456,8 +1335,9 @@ export async function scanAll(
     }),
   ]);
   const agentResults = agentScans.map((agentScan) => agentScan.agent);
-  const allInstances = markSharedInstances(
-    agentScans.flatMap((agentScan) => agentScan.instances),
+  const allInstances = withInferredUsage(
+    markSharedInstances(agentScans.flatMap((agentScan) => agentScan.instances)),
+    activity,
   );
   if (persistentCache) await persistFingerprintCache();
   const sharedRoots = buildSharedRoots(
@@ -1491,6 +1371,8 @@ export async function scanAll(
     effectivePrimaryAgentIds,
     agentActivity: activity,
     sharedRoots,
+    // Skills a product archived (e.g. the Hermes curator): listed, never part of status.
+    archivedSkills: agentScans.flatMap((agentScan) => agentScan.archived || []),
     summary: {
       total: skills.length,
       inPrimary: skills.filter((skill) => skill.inPrimary).length,
@@ -2554,6 +2436,7 @@ async function buildImportPlan({ importId, targetAgentIds }) {
   );
   const planned = await planTargetActions({
     config,
+    scanAgents: scan.agents,
     targetAgentIds,
     instances: existingSkill?.instances,
     source: {
@@ -2687,6 +2570,7 @@ export async function buildSyncPlan(
   const syncMode = mode === "symlink" ? "symlink" : "copy";
   const planned = await planTargetActions({
     config,
+    scanAgents: scan.agents,
     targetAgentIds,
     instances: resolved.skill.instances,
     source: {

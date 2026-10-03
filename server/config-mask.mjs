@@ -18,6 +18,10 @@ export { MASK, scrubTokens };
 const STRING_LIMIT = 8_192;
 const MAX_DEPTH = 10;
 const MAX_ENTRIES = 300;
+// YAML aliases let one object be referenced many times, so depth and width caps
+// alone allow 300^10 visits; every maskConfig call gets a total node budget.
+const MAX_NODES = 20_000;
+let nodeBudget = MAX_NODES;
 
 const SAFE_ENUMS = new Set([
   "debug", "info", "warn", "warning", "error", "trace", "fatal", "silent", "verbose",
@@ -405,7 +409,8 @@ function childContext(parent, key) {
 }
 
 function maskNode(value, context, homes, depth) {
-  if (depth > MAX_DEPTH) return MASK;
+  nodeBudget -= 1;
+  if (depth > MAX_DEPTH || nodeBudget < 0) return MASK;
   if (value === null || value === undefined || typeof value === "boolean") return value;
   if (typeof value === "number") {
     return !context.secret && Number.isInteger(value) && Math.abs(value) < 1_000_000 ? value : MASK;
@@ -438,6 +443,7 @@ function maskNode(value, context, homes, depth) {
 
 /** Deep, default-deny masked copy of any structured configuration value. */
 export function maskConfig(value, { homes = [], key = "" } = {}) {
+  nodeBudget = MAX_NODES;
   return maskNode(value, { key }, homes, 0);
 }
 

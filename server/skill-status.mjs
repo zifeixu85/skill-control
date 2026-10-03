@@ -96,16 +96,29 @@ export function buildSharedRoots(rootRecords, homeDirectories, compact) {
     .sort((left, right) => left.realPath.localeCompare(right.realPath));
 }
 
-/** Keeps one instance per (agent, real directory); other paths become aliases. */
+/**
+ * Keeps one instance per (agent, real directory); other paths become aliases. When the
+ * same directory is reached through several roots, the copy the product actually loads
+ * (not hidden, highest precedence) is kept.
+ */
 export function dedupeAgentInstances(instances) {
   const byRealPath = new Map();
+  const better = (candidate, current) =>
+    (current.hiddenByProduct && !candidate.hiddenByProduct) ||
+    (Boolean(current.hiddenByProduct) === Boolean(candidate.hiddenByProduct) &&
+      (candidate.precedence ?? 0) > (current.precedence ?? 0) &&
+      !candidate.firstWins);
   for (const instance of instances) {
     const existing = byRealPath.get(instance.realPath);
-    if (existing) {
-      existing.aliases.push(instance.path);
+    if (!existing) {
+      byRealPath.set(instance.realPath, { ...instance, aliases: [] });
       continue;
     }
-    byRealPath.set(instance.realPath, { ...instance, aliases: [] });
+    if (better(instance, existing)) {
+      byRealPath.set(instance.realPath, { ...instance, aliases: [...existing.aliases, existing.path] });
+    } else {
+      existing.aliases.push(instance.path);
+    }
   }
   return [...byRealPath.values()];
 }
@@ -131,7 +144,7 @@ export function markSharedInstances(instances) {
 export function duplicatesFor(instances) {
   const byAgent = new Map();
   for (const instance of instances) {
-    if (instance.managed) continue;
+    if (instance.managed || instance.hiddenByProduct) continue;
     byAgent.set(instance.agentId, [...(byAgent.get(instance.agentId) || []), instance]);
   }
   return [...byAgent.entries()]
@@ -167,7 +180,9 @@ export function primaryStatusFor(instances, primaryAgentIds) {
   const installedPrimary = primaryAgentIds.filter((agentId) =>
     primaryInstances.some((instance) => instance.agentId === agentId),
   );
-  const comparable = primaryInstances.filter((instance) => !instance.managed);
+  // Managed copies and copies the product does not load (shadowed, hidden, disabled)
+  // cannot make a skill "differ".
+  const comparable = primaryInstances.filter((instance) => !instance.managed && !instance.inactive);
   const byHash = new Map();
   for (const instance of comparable) {
     byHash.set(instance.hash, [...(byHash.get(instance.hash) || []), instance]);

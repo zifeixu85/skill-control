@@ -76,6 +76,11 @@ Electron renderer 使用 `contextIsolation: true`、`nodeIntegration: false` 和
 | `server/mcp-inventory.mjs` | 只读汇总 Codex / Claude Code / Cursor / Gemini 的 MCP 服务器 |
 | `server/integrations.mjs` | 聚合插件、连接器与 MCP，供 `/api/integrations` 使用 |
 | `server/fs-safe.mjs` | 集成扫描共用的限长读取、真实路径边界与 MCP 传输类型判断 |
+| `server/config-files.mjs` | 限长 YAML（js-yaml 安全模式）与 JSON5 读取、`~` / `${VAR}` 路径展开、`Info.plist` 版本读取 |
+| `server/agent-adapters.mjs` | 有自身技能布局的 Agent 适配器（`SKILL_ADAPTERS`）、产品检测路径、按产品规则标记被覆盖副本 |
+| `server/hermes.mjs` | Hermes Agent：递归技能发现、来源（内置/Hub/归档/组织/外部目录/Profile）、停用、`.usage.json`、`state.db` 活跃度、Profile、插件、MCP 与设置行 |
+| `server/openclaw.mjs` | OpenClaw 与 QClaw：安装定位、六级技能根与优先级、符号链接越界、ClawHub、远程同步元数据、Agent 列表、插件、MCP、会话用量与设置行 |
+| `server/related-products.mjs` | 只读识别 LumiClaw / MotiClaw / Clawith 等“相关产品”（不是 Agent） |
 | `scripts/local-runner.mjs` | 源码模式下同时管理 Web 与本地服务 |
 | `desktop/main.mjs` | Electron 生命周期、本地服务、窗口和导航安全 |
 | `desktop/preload.cjs` | 受控的 renderer-to-main API |
@@ -316,6 +321,85 @@ SmartOrder 的系统/插件实例带 `readOnly` 和来源标签，安装/同步�
 原始配置或连接凭据，也不向连接器发送网络请求。新增 runtime 依赖应一并核验 Electron
 安装产物能解析该模块。
 
+## Hermes Agent 与 OpenClaw 家族
+
+`AGENT_CATALOG` 中的 `hermes`、`openclaw`、`qclaw` 只在检测到产品文件时出现（Hermes：
+`$HERMES_HOME` 或 `~/.hermes`；OpenClaw：`$OPENCLAW_STATE_DIR` 或 `~/.openclaw` /
+`~/.clawdbot` / `~/.moltbot`；QClaw：`~/.qclaw/qclaw.json`）。它们的技能目录不是“一层
+`SKILL.md` 文件夹”，所以 `server/agent-adapters.mjs` 的 `SKILL_ADAPTERS` 为每个产品返回
+若干扫描源（各自的发现函数、来源标签、优先级、作用域），`scanAll()` 先合并这些源，再
+用 `applyPrecedence()` 按产品自己的规则标记被覆盖的副本。环境变量只在扫描真实主目录时
+生效，测试用的临时主目录不会被真实环境变量指回本机产品目录。
+
+**Hermes**（对照 Hermes v0.20.2 `skill_utils`）
+
+- 递归扫描 `skills/`，跟随软链接、按真实路径去重；跳过 `.git`、`.hub`、`.archive`、
+  `venv`、`node_modules`，以及技能内的 `references/templates/assets/scripts`；
+  `_org/<id>/` 只在 `.active_org` 指向该组织时参与。
+- 额外根：`skills.external_dirs`（展开 `~` 与 `${VAR}`，不存在则跳过）。先出现者优先：
+  本地目录先于外部目录，后者的同名副本标记 `shadowed`。每个
+  `profiles/<name>/skills` 是独立作用域（实例带 `profile`）。
+- 来源：`.bundled_manifest` → `hermes-bundled`（托管、可写，界面显示“内置”）；
+  `.hub/lock.json` → `hermes-hub`（只读）；`_org` → `hermes-org`；外部目录 →
+  `hermes-external`；`.archive/` → `hermes-archived`（只读，不参与状态统计，单独放在
+  `scan.archivedSkills`）。
+- `skills.disabled` → `disabled: true`；`skills.platform_disabled` → `disabledOn: [平台]`。
+- `.usage.json` → 实例 `usage: { count, lastUsedAt, state, pinned, confidence: "recorded" }`。
+- 安装目标 `$HERMES_HOME/skills/<name>`，只复制、不建软链接（`copyOnly`）；目标中已有同名
+  Hub / 内置 / 组织技能时拒绝写入。
+- 活跃度：只读打开 `state.db`（`mode=ro` + `PRAGMA query_only = 1`，不使用
+  `immutable`），只聚合 `sessions` 表近 30 天的次数、token 与费用，不读取标题和 `messages`；
+  没有数据库时退回 `.usage.json` 的最近使用时间。
+- Profile 能力项：`SOUL.md` 摘要（脱敏）、`profile.yaml` 描述、模型（`base_url` 只取主机名）、
+  技能数、定时任务数（只取名称、计划、启用）、记忆体积、网关状态（`gateway.pid` +
+  `gateway_state.json`）、已启用插件。
+- 从不打开 `.env`、`auth.json`（只在设置行里报告是否存在）和 `channel_directory.json`。
+  版本取自 `hermes-agent/pyproject.toml` 或应用包，从不执行 `hermes --version`。
+
+**OpenClaw**（对照 OpenClaw 2026.4.21 `loadSkillEntries`）
+
+- 配置：`$OPENCLAW_CONFIG_PATH` 或 `<stateDir>/openclaw.json`（JSON5）；版本取
+  `meta.lastTouchedVersion`，或已安装运行时的 `package.json`。
+- 技能根（后者覆盖前者）：`skills.load.extraDirs` < 运行时内置 `openclaw-bundled`（只读）
+  < `<stateDir>/skills`（`openclaw-managed`，安装目标）< `~/.agents/skills` <
+  `<workspace>/.agents/skills` < `<workspace>/skills`。只扫一层，并识别嵌套的 `skills/`。
+  每个 Agent 工作区是独立作用域。
+- 真实路径离开所在根的软链接标记 `hiddenByProduct: "symlink-escape"`（产品不会加载，
+  本应用仍展示），`allowSymlinkTargets` 列出的目标除外。
+- `.clawhub/origin.json`（或 `.clawdhub`）→ `clawhub`（只读）；
+  `skills.entries.<key>.enabled = false` → `disabled`；frontmatter
+  `metadata.openclaw`（及旧键）中的 requires / os / emoji / install → `requirements`
+  （只返回名称）。
+- Agent：`agents.list[]` 或 `agents.entries`，都没有时隐含 `main`；作为能力项
+  （`kind: "agent"`）返回 `IDENTITY.md` 名称与 emoji、工作区文件和体积，文件预览走脱敏管线。
+- 插件：`openclaw.plugin.json`（运行时 extensions、`<stateDir>/extensions`）+
+  `plugins.entries / allow / deny`；MCP：`mcp.servers`；设置行包含频道（名称与启用）、
+  网关（mode / bind / port / auth.mode）和凭据文件（只报告是否存在）。
+- 用量：`agents/<id>/sessions/sessions.json` 近 30 天的 token；再从至多 30 个、每个 ≤ 4 MB
+  的会话 `jsonl` 中统计 `skills/<name>/SKILL.md` 路径出现次数（只取技能文件夹名，不保留
+  其他内容），作为活跃度里的 `skillReads30d`，并附加到产品实际加载的那份副本：
+  `usage: { count, confidence: "inferred", windowDays: 30 }`。
+- `AGENTS.md` / `LUMICLAW.md` 中的 LumiClaw 标记与插件条目给出 `managedBy`。
+
+**QClaw**：路径来自 `~/.qclaw/qclaw.json`（只取 `stateDir`、`configPath`、
+`cli.openclawMjs`，且必须是主目录内的绝对路径；`sharedParams` 中的 guid / sessionId 从不
+返回）。在 OpenClaw 规则之外增加 QClaw 配置技能、`~/.qclaw/skills`（`.remote-skills-meta.json`
+的版本与来源 → `remote`）、`~/.qclaw/skillhub-skills`（`skillhub`）和工作区技能。第一版全部
+只读，安装计划返回“QClaw 的技能由 QClaw 同步管理，请在 QClaw 里安装”。
+
+**共享与写入**
+
+- 多个产品经软链接指向同一物理技能（例如 `~/.openclaw/skills` 与 `~/.hermes/skills`
+  链到 `~/.agents/skills`，再到 `~/.mirasim/skills`）时，按真实路径只计一次，并在
+  `alsoVisibleTo` 中列出所有会看到这次写入的 Agent（包括 OpenClaw、QClaw、Hermes）。
+- 本应用不向技能目录写入标记文件；安装记录只保存在 `~/.agent-skill-manager`。
+  目前没有卸载功能。
+
+**相关产品**：LumiClaw（编排）、MotiClaw（管理工具）、Clawith（平台）不是 Agent，只在
+`/api/integrations` 的 `relatedProducts` 中列出 `{ id, name, kind, bundleId, version,
+stateDir, notes }`。是否存在由各自的状态目录决定，应用包只用来补充版本；从不读取它们的
+配置文件（LumiClaw 的 `config.json` 含令牌）。
+
 ## Agent 集成：插件、连接器与 MCP（只读）
 
 这些扫描器只读本机文件、不联网、不写入，返回前去掉所有配置值：
@@ -461,10 +545,10 @@ JWT、Google 等令牌格式；`Bearer`/`Basic` 只有后面跟着 ≥ 16 位令
 
 | 接口 | 返回 |
 | --- | --- |
-| `GET /api/scan` | 原有字段 + `primaryAgentIds`、`suggestedPrimaryAgentIds`、`effectivePrimaryAgentIds`、`agentActivity`、`sharedRoots`、`summary`，Skill 上的新状态字段 |
+| `GET /api/scan` | 原有字段 + `primaryAgentIds`、`suggestedPrimaryAgentIds`、`effectivePrimaryAgentIds`、`agentActivity`、`sharedRoots`、`summary`、`archivedSkills`，Skill 上的新状态字段；Agent 新增 `installRoot`、`copyOnly`、`refuseInstall`、`archivedCount`、`managedBy`、`productVersion`；实例新增 `disabled`、`disabledOn`、`shadowed`、`shadowedBy`、`hiddenByProduct`、`usage`、`requirements`、`remote`、`profile` |
 | `GET/PUT /api/config` | 新增 `primaryAgentIds: string[] \| null` |
-| `GET /api/agents/activity` | `{ windowDays, rankedBy: "bytes30d", agents: [{ agentId, status, files30d, bytes30d, activeDays30d, lastActiveAt, truncated }], suggestedPrimaryAgentIds, warnings }`，缓存 10 分钟 |
-| `GET /api/integrations` | `{ plugins, connectors, mcpServers, mcpMatrix, sources, warnings, scannedAt }`；`plugins` 含 Codex、Claude Code 与 WorkBuddy，缓存 60 秒，`?force=1` 刷新 |
+| `GET /api/agents/activity` | `{ windowDays, rankedBy: "weight30d", agents: [{ agentId, status, basis, files30d, bytes30d, weight30d, activeDays30d, lastActiveAt, truncated }], suggestedPrimaryAgentIds, warnings }`；Hermes / OpenClaw / QClaw 的 `basis` 为 `tokens`（另有 `tokens30d`、`costUsd30d`，OpenClaw / QClaw 另有 `skillReads30d`；`weight30d = tokens × 4` 以便与会话字节数比较），缓存 10 分钟 |
+| `GET /api/integrations` | `{ plugins, connectors, mcpServers, mcpMatrix, sources, relatedProducts, warnings, scannedAt }`；`plugins` 含 Codex、Claude Code、WorkBuddy、Hermes、OpenClaw 与 QClaw，缓存 60 秒，`?force=1` 刷新 |
 | `GET /api/plugins` | `{ plugins, sources, warnings, scannedAt }`；Codex 与 Claude Code 插件共用同一结构（`id`、`agentId`、`displayName`、`enabled: true \| false \| "unknown"`、`version`、`components` 等） |
 | `GET /api/mcp` | `{ servers, matrix, warnings, scannedAt }` |
 | `GET /api/connectors` | 原 SmartOrder 结构不变，新增 `codex: { available, source, cachedAt, connectors, warnings }` |

@@ -10,8 +10,8 @@ terms.
 ## JavaScript 与桌面依赖
 
 直接和传递依赖记录在 `package.json` 与 `package-lock.json` 中，包括但不限于
-Electron、React、Vinext、Vite、Tailwind CSS、fflate、smol-toml、react-markdown 和
-remark-gfm。准确版本以对应 Release 的 lockfile 和构建记录为准。
+Electron、React、Vinext、Vite、Tailwind CSS、fflate、smol-toml、js-yaml、json5、
+react-markdown 和 remark-gfm。准确版本以对应 Release 的 lockfile 和构建记录为准。
 
 Direct and transitive JavaScript dependencies are recorded in `package.json`
 and `package-lock.json`. The lockfile and build record for a release are the
@@ -22,6 +22,9 @@ authoritative source for exact versions.
 ```text
 resources/licenses/vinext-LICENSE
 resources/licenses/smol-toml-LICENSE
+resources/licenses/js-yaml-LICENSE
+resources/licenses/json5-LICENSE
+resources/licenses/argparse-LICENSE
 ```
 
 Electron 和 electron-builder 生成的产物还可能包含其运行时许可证和 Chromium
@@ -37,7 +40,8 @@ add.
 ## 产品与商标名称
 
 Codex、Claude Code、WorkBuddy、Cursor、Gemini、Kiro、Trae、OpenCode、
-Windsurf、Cline、Roo Code、CodeBuddy、Qwen Code 和 GitHub Copilot 等名称
+Windsurf、Cline、Roo Code、CodeBuddy、Qwen Code、GitHub Copilot、Hermes Agent、
+OpenClaw、QClaw、LumiClaw、MotiClaw 和 Clawith 等名称
 仅用于描述兼容的本地目录与互操作目标。相关商标归各自权利人所有。除非另有明确
 说明，Skill Control 与这些产品的所有者没有隶属、赞助或背书关系。
 

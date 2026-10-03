@@ -13,6 +13,8 @@ import {
   readStatusMessage,
 } from "./fs-safe.mjs";
 import { secretFieldReport } from "./secret-fields.mjs";
+import { hermesMcpEntries } from "./hermes.mjs";
+import { openClawMcpEntries } from "./openclaw.mjs";
 
 export { secretFieldNames } from "./secret-fields.mjs";
 
@@ -144,13 +146,21 @@ async function readJsonServers(homeDirectory, relative, agentId, label, warnings
 export async function readMcpSources(homeDirectory = homedir()) {
   const homes = await homeVariants(homeDirectory);
   const warnings = [];
+  const fromAdapter = async (reader) => {
+    const result = await reader().catch(() => ({ entries: [], warnings: ["MCP 配置读取失败，已跳过。"] }));
+    warnings.push(...result.warnings);
+    return result.entries;
+  };
   const groups = await Promise.all([
     readCodex(homeDirectory, warnings),
     readClaude(homeDirectory, homes, warnings),
     readJsonServers(homeDirectory, path.join(".cursor", "mcp.json"), "cursor", "Cursor mcp.json", warnings),
     readJsonServers(homeDirectory, path.join(".gemini", "settings.json"), "gemini", "Gemini settings.json", warnings),
+    fromAdapter(() => hermesMcpEntries(homeDirectory)),
+    fromAdapter(() => openClawMcpEntries("openclaw", homeDirectory)),
+    fromAdapter(() => openClawMcpEntries("qclaw", homeDirectory)),
   ]);
-  return { entries: groups.flat(), warnings };
+  return { entries: groups.flat(), warnings: [...new Set(warnings)] };
 }
 
 export function buildMcpMatrix(servers) {

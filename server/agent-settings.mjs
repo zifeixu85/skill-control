@@ -1,5 +1,7 @@
 import path from "node:path";
 import { isTokenLike, MASK, maskCommandLine } from "./config-mask.mjs";
+import { hermesSettingsDetail } from "./hermes.mjs";
+import { openClawSettingsDetail } from "./openclaw.mjs";
 import {
   multilineText,
   object,
@@ -237,6 +239,9 @@ const READERS = {
   workbuddy: workbuddyRows,
   gemini: geminiRows,
   cursor: cursorRows,
+  hermes: (homeDirectory, homes) => hermesSettingsDetail(homeDirectory, homes),
+  openclaw: (homeDirectory, homes) => openClawSettingsDetail("openclaw", homeDirectory, homes),
+  qclaw: (homeDirectory, homes) => openClawSettingsDetail("qclaw", homeDirectory, homes),
 };
 
 export const AGENT_DETAIL_IDS = Object.keys(READERS);
@@ -245,11 +250,13 @@ export async function agentSettingsDetail(agentId, homeDirectory, homes) {
   const reader = READERS[agentId];
   if (!reader) return null;
   const detail = await reader(homeDirectory, homes);
-  return (
-    detail || {
+  if (!detail) {
+    return {
       title: "Agent 配置",
       location: null,
       rows: [row("状态", "未找到配置文件，或文件无法安全读取")],
-    }
-  );
+    };
+  }
+  // Every row value passes the same cleanup (format characters, token scrubbing, caps).
+  return { ...detail, rows: detail.rows.map((item) => ({ label: multilineText(item.label, 120), value: multilineText(String(item.value ?? "无"), 4_000) })) };
 }

@@ -1,6 +1,9 @@
 import { lstat, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { hermesHomeFor, readHermesActivity } from "./hermes.mjs";
+import { readOpenClawActivity } from "./openclaw.mjs";
+import { readBoundedJson } from "./fs-safe.mjs";
 
 /**
  * Agent activity is derived from session file metadata only (stat, never contents).
@@ -137,11 +140,69 @@ function emptyActivity(agentId, status) {
   return {
     agentId,
     status,
+    basis: "bytes",
     files30d: 0,
     bytes30d: 0,
+    weight30d: 0,
     activeDays30d: 0,
     lastActiveAt: null,
     truncated: false,
+  };
+}
+
+// Products that keep token counts in a database instead of transcript files. Their
+// activity weight is tokens × 4 (≈ characters), comparable to transcript bytes.
+const TOKEN_WEIGHT = 4;
+const TOKEN_SOURCES = {
+  hermes: {
+    label: "Hermes Agent",
+    read: (homeDirectory, now) => readHermesActivity(homeDirectory, { now }),
+    fallback: hermesUsageFallback,
+  },
+  openclaw: { label: "OpenClaw", read: (homeDirectory, now) => readOpenClawActivity("openclaw", homeDirectory, { now }) },
+  qclaw: { label: "QClaw", read: (homeDirectory, now) => readOpenClawActivity("qclaw", homeDirectory, { now }) },
+};
+
+/** Without state.db, Hermes' skill usage file still tells when it was last used. */
+async function hermesUsageFallback(homeDirectory) {
+  const usage = await readBoundedJson(path.join(hermesHomeFor(homeDirectory), "skills", ".usage.json"), 4_000_000);
+  if (usage.status !== "ok") return null;
+  const times = Object.values(usage.value || {})
+    .map((entry) => Date.parse(entry?.last_used_at))
+    .filter((value) => Number.isFinite(value));
+  return times.length ? new Date(Math.max(...times)).toISOString() : null;
+}
+
+/** Skill folder name → SKILL.md reads seen in recent transcripts (an estimate, capped). */
+function topSkillReads(reads) {
+  return Object.fromEntries([...reads].sort((left, right) => right[1] - left[1]).slice(0, MAX_SKILL_READS));
+}
+
+async function scanTokenSource(homeDirectory, agentId, source, { now }) {
+  const activity = await source.read(homeDirectory, now).catch(() => null);
+  if (!activity?.available) {
+    const lastActiveAt = source.fallback ? await source.fallback(homeDirectory).catch(() => null) : null;
+    return {
+      ...emptyActivity(agentId, lastActiveAt ? "ok" : "missing"),
+      basis: source.fallback ? "skill-usage" : "tokens",
+      lastActiveAt,
+      warnings: activity?.warnings || [],
+    };
+  }
+  return {
+    agentId,
+    status: "ok",
+    basis: "tokens",
+    files30d: activity.sessions30d,
+    bytes30d: null,
+    tokens30d: activity.tokens30d,
+    costUsd30d: activity.costUsd30d,
+    weight30d: activity.tokens30d * TOKEN_WEIGHT,
+    activeDays30d: null,
+    lastActiveAt: activity.lastActiveAt,
+    truncated: false,
+    ...(activity.skillReads?.size ? { skillReads30d: topSkillReads(activity.skillReads) } : {}),
+    warnings: activity.warnings || [],
   };
 }
 
@@ -169,33 +230,42 @@ async function scanSource(homeDirectory, agentId, source, { now, maxFiles, windo
   return {
     agentId,
     status: "ok",
+    basis: "bytes",
     files30d,
     bytes30d,
+    weight30d: bytes30d,
     activeDays30d: days.size,
     lastActiveAt: latest ? new Date(latest).toISOString() : null,
     truncated,
   };
 }
 
-/** Top agents by recent session bytes; agents below 2% of the leader or with fewer than 3 sessions are dropped. */
+const MAX_SKILL_READS = 500;
+const weightOf = (agent) => agent.weight30d ?? agent.bytes30d ?? 0;
+
+/**
+ * Top agents by recent activity weight (transcript bytes, or tokens × 4 for products
+ * that only record tokens); agents below 2% of the leader or with fewer than 3
+ * sessions are dropped.
+ */
 export function suggestPrimaryAgents(agents, limit = SUGGESTION_LIMIT) {
   const ranked = agents
     .filter(
       (agent) =>
         agent.status === "ok" &&
         agent.files30d >= SUGGESTION_MIN_FILES &&
-        agent.bytes30d > 0,
+        weightOf(agent) > 0,
     )
     .sort(
       (left, right) =>
-        right.bytes30d - left.bytes30d ||
+        weightOf(right) - weightOf(left) ||
         right.files30d - left.files30d ||
         left.agentId.localeCompare(right.agentId),
     );
   if (!ranked.length) return [];
-  const threshold = ranked[0].bytes30d * SUGGESTION_MIN_SHARE;
+  const threshold = weightOf(ranked[0]) * SUGGESTION_MIN_SHARE;
   return ranked
-    .filter((agent) => agent.bytes30d >= threshold)
+    .filter((agent) => weightOf(agent) >= threshold)
     .slice(0, limit)
     .map((agent) => agent.agentId);
 }
@@ -220,15 +290,21 @@ export async function scanAgentActivity(
             maxFiles,
             windowDays,
           })
-        : emptyActivity(agentId, "unknown"),
+        : Object.hasOwn(TOKEN_SOURCES, agentId) && agentIds.includes(agentId)
+          ? scanTokenSource(homeDirectory, agentId, TOKEN_SOURCES[agentId], { now })
+          : emptyActivity(agentId, "unknown"),
     ),
   );
-  const warnings = agents
-    .filter((agent) => agent.truncated)
-    .map(
-      (agent) =>
-        `${ACTIVITY_SOURCES[agent.agentId]?.label || agent.agentId} 的会话文件过多，仅统计了最近的部分文件，活跃度可能偏低。`,
-    );
+  const warnings = [
+    ...agents
+      .filter((agent) => agent.truncated)
+      .map(
+        (agent) =>
+          `${ACTIVITY_SOURCES[agent.agentId]?.label || agent.agentId} 的会话文件过多，仅统计了最近的部分文件，活跃度可能偏低。`,
+      ),
+    ...agents.flatMap((agent) => agent.warnings || []),
+  ];
+  for (const agent of agents) delete agent.warnings;
   // Suggestions are ranked among configured Agents only, before the top-N cap.
   const allowed = new Set(agentIds.map(String));
   const candidates = allowed.size
@@ -236,7 +312,7 @@ export async function scanAgentActivity(
     : agents;
   return {
     windowDays,
-    rankedBy: "bytes30d",
+    rankedBy: "weight30d",
     agents,
     suggestedPrimaryAgentIds: suggestPrimaryAgents(candidates),
     warnings,

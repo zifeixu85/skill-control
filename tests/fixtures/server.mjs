@@ -10,6 +10,7 @@ export const PROJECT_DIRECTORY = path.resolve(
   "..",
 );
 export const TEST_ORIGIN = "http://127.0.0.1:3000";
+const PRODUCT_LOCATION_VARIABLES = new Set(["HERMES_HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
 
 async function reserveFreePort() {
   const server = net.createServer();
@@ -44,10 +45,14 @@ export async function startTestServer(context, home) {
   const port = await reserveFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const logs = [];
+  // Product location overrides would point the synthetic home at real folders.
+  const inherited = Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => !PRODUCT_LOCATION_VARIABLES.has(name)),
+  );
   const child = spawn(process.execPath, ["server/local-server.mjs"], {
     cwd: PROJECT_DIRECTORY,
     env: {
-      ...process.env,
+      ...inherited,
       HOME: home,
       USERPROFILE: home,
       SKILL_MANAGER_HOST: "127.0.0.1",

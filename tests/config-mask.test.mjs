@@ -89,3 +89,18 @@ test("masks pathological values in bounded time", () => {
   scrubTokens(`Bearer ${"x".repeat(500_000)} eyJ${"a".repeat(100_000)}.`);
   assert.ok(performance.now() - started < 300);
 });
+
+test("bounds the work on YAML alias bombs", async () => {
+  const { default: yaml } = await import("js-yaml");
+  const levels = ["a: &a [x, x, x, x, x, x, x, x, x, x]"];
+  for (let level = 1; level < 9; level += 1) {
+    const prev = String.fromCharCode(96 + level);
+    const name = String.fromCharCode(97 + level);
+    levels.push(`${name}: &${name} [${Array(10).fill(`*${prev}`).join(", ")}]`);
+  }
+  const bomb = yaml.load(levels.join("\n"), { json: true });
+  const started = performance.now();
+  const masked = maskServerConfig(bomb);
+  assert.ok(performance.now() - started < 500);
+  assert.ok(JSON.stringify(masked).length < 2_000_000);
+});

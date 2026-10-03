@@ -16,6 +16,12 @@ import {
   SKILL_TEXT,
   createLeakProbeHome,
 } from "./fixtures/leak-cases.mjs";
+import {
+  createHermesHome,
+  createLumiClawHome,
+  createOpenClawHome,
+  createQClawHome,
+} from "./fixtures/claw-hermes.mjs";
 import { startTestServer } from "./fixtures/server.mjs";
 
 const leaksIn = (value) => [...new Set(String(value).match(MARKER_PATTERN) || [])];
@@ -92,6 +98,78 @@ test("no planted secret or home path appears in any local API response", async (
   const codexDetail = JSON.parse(responses.find((response) => response.label === "mcp:t03_envtable").body);
   assert.match(codexDetail.files[0].text, /LOG_LEVEL = "debug"/u);
   assert.match(codexDetail.files[0].text, /postgres:\/\/••••••@h\/db/u);
+});
+
+test("no planted Hermes, OpenClaw, QClaw or LumiClaw secret appears in any local API response", async (context) => {
+  const home = await mkdtemp(path.join(tmpdir(), "leak-claw-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  await createHermesHome(home);
+  await createOpenClawHome(home);
+  await createQClawHome(home);
+  await createLumiClawHome(home);
+  const { request } = await startTestServer(context, home);
+  const responses = [];
+  const get = async (label, pathname) => {
+    const response = await request(pathname);
+    const body = await response.text();
+    responses.push({ label, status: response.status, body });
+    return { status: response.status, body };
+  };
+
+  const config = JSON.parse((await get("config", "/api/config")).body);
+  const detected = config.agents.map((agent) => agent.id);
+  for (const id of ["hermes", "openclaw", "qclaw"]) {
+    assert.ok(detected.includes(id), id);
+    const { status } = await get(`agent:${id}`, `/api/config-detail?kind=agent&id=${id}`);
+    assert.equal(status, 200, id);
+  }
+  for (const name of ["hermcp", "ocmcp"]) {
+    const { status } = await get(`mcp:${name}`, `/api/config-detail?kind=mcp&id=${name}`);
+    assert.equal(status, 200, name);
+  }
+  const capabilities = JSON.parse((await get("capabilities", "/api/capabilities")).body);
+  const items = capabilities.products
+    .filter((product) => ["hermes", "openclaw", "qclaw"].includes(product.id))
+    .flatMap((product) => product.items);
+  assert.ok(items.length >= 4);
+  for (const item of items) {
+    await get(`expert:${item.name}`, `/api/config-detail?kind=expert&id=${item.id}`);
+    const listing = JSON.parse((await get(`files:${item.name}`, `/api/capability-files?capabilityId=${item.id}`)).body);
+    for (const entry of (listing.entries || []).filter((file) => file.type === "file")) {
+      await get(`file:${item.name}:${entry.path}`, `/api/capability-file?capabilityId=${item.id}&path=${encodeURIComponent(entry.path)}`);
+    }
+    for (const probe of [".env", "auth.json", "channel_directory.json", "credentials/oauth.json", "auth-profiles.json", "../.env"]) {
+      const { status } = await get(`probe:${item.name}:${probe}`, `/api/capability-file?capabilityId=${item.id}&path=${encodeURIComponent(probe)}`);
+      assert.equal(status, 400, `${item.name} ${probe}`);
+    }
+  }
+  const scan = JSON.parse((await get("scan", "/api/scan?force=1")).body);
+  for (const skill of scan.skills) {
+    for (const instance of skill.instances.filter((item) => ["hermes", "openclaw", "qclaw"].includes(item.agentId))) {
+      await get(`skill:${instance.agentId}:${skill.name}`, `/api/config-detail?kind=skill&id=${skill.id}&instance=${instance.id}`);
+    }
+  }
+  const integrations = JSON.parse((await get("integrations", "/api/integrations?force=1")).body);
+  assert.deepEqual(integrations.relatedProducts.map((product) => product.id), ["lumiclaw"]);
+  const clawPlugins = integrations.plugins.filter((item) => ["hermes", "openclaw", "qclaw"].includes(item.agentId));
+  assert.deepEqual(clawPlugins.map((plugin) => plugin.agentId).sort(), ["hermes", "openclaw", "qclaw"]);
+  for (const plugin of clawPlugins) {
+    const id = `${plugin.agentId}:${plugin.id}`;
+    const { status } = await get(`plugin:${id}`, `/api/config-detail?kind=plugin&id=${encodeURIComponent(id)}`);
+    assert.equal(status, 200, id);
+  }
+  await get("mcp", "/api/mcp");
+  await get("activity", "/api/agents/activity?force=1");
+
+  const leaks = responses
+    .map((response) => ({ label: response.label, markers: leaksIn(response.body) }))
+    .filter((item) => item.markers.length);
+  assert.deepEqual(leaks, [], `planted ${MARKER} markers leaked`);
+  const homeLeaks = responses.filter((response) => response.body.includes(home)).map((response) => response.label);
+  assert.deepEqual(homeLeaks, []);
+  const fileReads = responses.filter((response) => response.label.startsWith("file:") && response.status === 200);
+  assert.ok(fileReads.length >= 4, "workspace and profile files were read through the redactor");
+  assert.ok(responses.filter((response) => response.label.startsWith("skill:")).length >= 20);
 });
 
 test("refuses cross-site reads of configuration and assets", async (context) => {
