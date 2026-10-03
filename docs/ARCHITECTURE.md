@@ -81,6 +81,16 @@ Electron renderer 使用 `contextIsolation: true`、`nodeIntegration: false` 和
 | `server/hermes.mjs` | Hermes Agent：递归技能发现、来源（内置/Hub/归档/组织/外部目录/Profile）、停用、`.usage.json`、`state.db` 活跃度、Profile、插件、MCP 与设置行 |
 | `server/openclaw.mjs` | OpenClaw 与 QClaw：安装定位、六级技能根与优先级、符号链接越界、ClawHub、远程同步元数据、Agent 列表、插件、MCP、会话用量与设置行 |
 | `server/related-products.mjs` | 只读识别 LumiClaw / MotiClaw / Clawith 等“相关产品”（不是 Agent） |
+| `server/insight-routes.mjs` | 洞察接口路由：Agent 文件、Agent 工具、用量、体检、应用图标（均只读、仅同站） |
+| `server/agent-files.mjs` | 各 Agent 的指令、人格、身份、记忆、规则文件列表与脱敏读取（不透明 ID） |
+| `server/agent-tools.mjs` | 各 Agent 的功能开关、工具集、MCP、连接器、插件命令、子代理与权限规则 |
+| `server/hermes-toolsets.mjs` | 静态解析 Hermes `toolsets.py` 的 `TOOLSETS` 字面量（从不导入或执行 Python） |
+| `server/usage-sources.mjs` | 用量来源：会话 JSONL 的逐行处理器（只取计数）与数据库/JSON 快照 |
+| `server/usage-index.mjs` | 增量用量索引：按字节偏移续读、时间预算、去重、保留已删除会话的汇总 |
+| `server/usage-query.mjs` | 用量查询：概览、单个技能、单个 Agent；标注来源与可信度 |
+| `server/usage-service.mjs` / `server/usage-worker.mjs` | 在后台线程分片建立索引并报告进度 |
+| `server/health-report.mjs` / `server/path-lookup.mjs` | 体检报告；不执行任何命令的 PATH 查找（含 nvm 识别） |
+| `server/agent-icons.mjs` | 用 `sips` 把已安装 macOS 应用的图标转换为 128 px PNG 并缓存 |
 | `scripts/local-runner.mjs` | 源码模式下同时管理 Web 与本地服务 |
 | `desktop/main.mjs` | Electron 生命周期、本地服务、窗口和导航安全 |
 | `desktop/preload.cjs` | 受控的 renderer-to-main API |
@@ -527,6 +537,204 @@ JWT、Google 等令牌格式；`Bearer`/`Basic` 只有后面跟着 ≥ 16 位令
 `*.key`、`id_*` 等敏感文件不会出现在列表中，也无法读取。Hermes 文件用有上限、FIFO 安全的
 方式读取，配置摘要中的模型提供方等值同样经过白名单。
 
+## 洞察接口（只读）
+
+以下接口都只读、只接受同站请求（`Sec-Fetch-Site: cross-site` 返回 403），错误统一为
+`{ error }`，状态码 400 / 403 / 404。返回内容中的路径一律压缩为 `~/…`，不会出现主目录。
+
+### Agent 文件
+
+`GET /api/agent-files?agent=<id>[&profile=<name>][&agentId=<OpenClaw agent>]`
+
+```ts
+{
+  agentId: string,
+  groups: Array<{
+    id: string,               // instructions | rules | memories | memory-summaries | agents | commands |
+                              // identity | persona | cron | workspace | memory | agent-state | state
+    label: string,            // 中文分组名
+    note?: string,            // 例如 "由 LumiClaw 写入"
+    files: Array<{
+      id: string,             // 24 位十六进制不透明 ID
+      name: string,
+      kind: "instructions" | "persona" | "identity" | "user" | "memory" | "tools" | "heartbeat"
+          | "bootstrap" | "lessons" | "rules" | "other",
+      size: number,           // 字节
+      modifiedAt: string,     // ISO
+      displayPath: string,    // "~/.codex/AGENTS.md"
+      note?: string,
+    }>,
+  }>,
+  profiles?: string[],        // 仅 Hermes："default" 与 ~/.hermes/profiles/* 名称
+  profile?: string,           // 仅 Hermes：当前 profile
+  agents?: string[],          // 仅 OpenClaw/QClaw：配置中的 agent 与 <stateDir>/agents/* 目录
+  agentId?: string,           // 仅 OpenClaw/QClaw：当前 agent（注意与顶层 agentId 同名，值为子 agent）
+  capabilities: Array<{ capabilityId, name, kind, origin }>, // 可在 /api/capability-files 查看的专家/Profile/Agent
+}
+```
+
+来源（只列出存在的文件）：Codex `~/.codex/AGENTS.md`、`AGENTS.override.md`、`rules/*.rules`、
+`memories/*.md`、`memories/rollout_summaries/*.md`（最近 50 个）；Claude Code `~/.claude/CLAUDE.md`、
+`projects/*/memory/*.md`（最近 50 个）、`rules/**/*.md`（4 层、200 个）、`agents/*.md`、`commands/` 下两层内的 `*.md`；
+WorkBuddy `~/.workbuddy/{SOUL,IDENTITY,USER,MEMORY,AGENTS}.md`；Gemini `~/.gemini/GEMINI.md`；
+Cursor `~/.cursor/rules/**/*.{md,mdc}`；Hermes（按 profile）`SOUL.md`、`AGENTS.md`、`profile.yaml`、
+`memories/*.md`、`cron/jobs.json`（只渲染名称、计划、状态、技能、工具集、上次/下次运行，不含提示词、
+脚本、错误与投递目标）；OpenClaw/QClaw（按 agent）工作区 `AGENTS.md`、`SOUL.md`、`IDENTITY.md`、
+`USER.md`、`TOOLS.md`、`HEARTBEAT.md`、`BOOTSTRAP.md`、`BOOT.md`、`MEMORY.md`、`memory/*.md`
+（最近 50 个），`<stateDir>/agents/<id>/*.md` 与 `<stateDir>/{AGENTS,LUMICLAW}.md`。工作区必须位于
+主目录内。
+
+`GET /api/agent-file?id=<id>`
+
+```ts
+{ name: string, language: "md" | "yaml" | "json" | "text", text: string, truncated: boolean, redactions: number }
+```
+
+读取时重新校验：真实路径必须在登记的根目录内（软链接指向外部会被拒绝）、必须是普通文件、
+以 `O_NONBLOCK` 打开（FIFO 不会阻塞）、最多 512 KB（超出时 `truncated: true`）。`.env*`、
+`auth*.json`、`credentials*`、`*.key`、`*.pem`、含 token/secret/session 等字样的文件名一律不列出也不读取。
+Markdown 与文本经自由文本脱敏（`redactions` 为本次新增的遮盖数）；YAML/JSON 先解析再按默认拒绝规则
+遮盖，解析失败时退回为脱敏文本。ID 在服务重启后仍可用（未命中时会重新列出所有 Agent 的文件）。
+
+### Agent 工具
+
+`GET /api/agent-tools?agent=<id>`
+
+```ts
+{
+  agentId: string,
+  groups: Array<{
+    id: string, label: string, source: string,   // source 为 "~/.codex/config.toml" 等说明文字
+    items: Array<{
+      name: string,
+      description: string,                       // 脱敏、≤ 300 字
+      kind: "builtin" | "toolset" | "mcp" | "connector" | "plugin-command" | "subagent" | "permission" | "feature",
+      enabled: boolean | null,                   // null 表示未知或不适用（如 ask 规则）
+      tools?: string[],                          // 连接器或工具集包含的工具名（≤ 50）
+    }>,
+  }>,
+  notes: string[],
+}
+```
+
+Codex：`[features]` 开关、已连接应用及其工具名（`~/.codex/cache/codex_apps_tools`）、MCP 服务（工具清单只在
+运行时获取，标注“未缓存工具清单”）、插件提供的技能与命令。Claude Code：`settings.json` 的
+`permissions.defaultMode` 与 allow / ask / deny 规则（参数部分按配置详情的规则遮盖；allow 为 `true`、
+deny 为 `false`、ask 为 `null`）、MCP、子代理、命令、插件命令与子代理。WorkBuddy：
+`mcp-tool-list.json` 中按服务摘要分组的工具（无法对应到服务名，组名为摘要前 8 位）、连接器名称与开关
+（只读 `connectors/<账号>/connector-states.json` 的 `connectors`，不读 header/env 覆盖与凭据文件）、插件。
+Hermes：静态解析的全部工具集（`enabled` 表示配置启用或被其包含）、启用工具集的工具、
+`command_allowlist`（遮盖后）、MCP、插件。OpenClaw/QClaw：`tools.profile`、allow / alsoAllow / deny、
+`tools.<分区>.<名称>.enabled`、`browser.enabled`、MCP、插件（插件清单不声明工具，列出频道与技能）。
+
+### 用量分析
+
+索引文件：`~/.agent-skill-manager/usage-index.json`（权限 0600）。只保存计数与汇总：每个会话文件的
+字节偏移、大小、修改时间、头部摘要、按天的 `[会话数, 输入, 输出, 缓存读, 缓存写, 合计]`、按天的技能次数、
+工作目录名（只取最后一段）；每个数据库会话的日期、token 与费用；消息 ID 只以 12 位摘要保存，用于识别
+续接/分叉会话复制的旧消息。消息正文、工具参数与输出、标题从不写入。文件键为路径摘要，不含路径。
+
+| 来源 | token | 技能 | 可信度 |
+| --- | --- | --- | --- |
+| Claude Code `~/.claude/projects/**/*.jsonl`（含子代理） | assistant 消息 `usage`（按消息 ID 全局去重） | `Skill` 工具调用（按调用 ID 去重）；`attributionSkill` 的 token | exact |
+| Codex `~/.codex/sessions/**`、`archived_sessions/*` | `token_count` 累计值的差；分叉/续接会话的首条与回退后只计 `last_token_usage` | 函数调用参数中出现的 `skills/<名称>/SKILL.md`（从不看输出） | token exact，技能 inferred |
+| WorkBuddy `~/.workbuddy/projects/**/*.jsonl` | `message.usage`（输入扣除缓存命中） | `Skill` 调用；`usage-log.json` 的使用日期补足未覆盖的日子 | exact / reported |
+| WorkBuddy `workbuddy.db` | — | — | `session_usage.credit_json` 合计为 `credits`（reported） |
+| Hermes `state.db` | `sessions` 表 token 与费用（只读、`query_only`） | `skills/.usage.json` 计数，每次运行的增量计入当天 | reported |
+| OpenClaw/QClaw `sessions.json` | 会话 token 与费用 | 会话 JSONL 中工具调用读取的 SKILL.md | token reported，技能 inferred |
+
+每轮索引有 3 秒预算，按修改时间从新到旧处理，每轮至少推进一个文件；服务在后台线程中连续分片执行直到
+完成，此后请求发现索引超过 60 秒未更新时再增量刷新。会话文件被产品删除后其汇总仍保留（保留 400 天）；
+文件被截短或头部变化时重新统计该文件。本机实测：约 2,000 个文件、22.7 GB 首次索引约 38 秒，增量约 0.1 秒，
+索引约 1.4 MB。
+
+`GET /api/usage/status`
+
+```ts
+{ state: "idle" | "indexing" | "partial" | "complete" | "error", indexedFiles, totalFiles, indexedBytes, totalBytes,
+  lastRunAt: string | null, lastRunMs: number | null, updatedAt: string | null, error: string | null }
+```
+
+`GET /api/usage/summary?days=30`（`days` 取 1–400，默认 30）
+
+```ts
+{
+  generatedAt, windowDays,
+  index: { complete: boolean, updatedAt: string | null, indexedFiles: number, totalFiles: number },
+  status: /* 同 /api/usage/status */,
+  agents: Array<{
+    agentId, sessions, activeDays,
+    tokens: { input, output, cacheRead, cacheWrite, total },   // input 不含缓存命中
+    costUsd: number | null,                                     // 只有 Hermes / OpenClaw / QClaw 有费用
+    credits?: number,                                           // 仅 WorkBuddy
+    series: Array<{ date: "YYYY-MM-DD", sessions, tokens }>,    // 每天一项（本地日期），tokens 为合计
+    sources: Array<{ id: "tokens" | "skills" | "credits", label, confidence: "exact" | "inferred" | "reported" }>,
+  }>,
+  topSkills: Array<{ name, count, tokens, agents: Array<{ agentId, count, confidence, lastUsedAt: "YYYY-MM-DD" }> }>, // ≤ 50
+}
+```
+
+`GET /api/usage/skill?name=<技能名>&days=90`（名称也匹配 `插件:技能` 的后半段）
+
+```ts
+{ name, windowDays, index, status,
+  agents: Array<{ agentId, name, total, tokens, lastUsedAt, confidence, reportedTotal?: number /* Hermes 累计 */,
+                  series: Array<{ date, count }> }> }
+```
+
+`GET /api/usage/agent?id=<agentId>&days=90`
+
+```ts
+{ agentId, windowDays, index, status,
+  totals: { sessions, activeDays, tokens: { input, output, cacheRead, cacheWrite, total }, costUsd: number | null },
+  series: Array<{ date, sessions, tokens: { input, output, cacheRead, cacheWrite, total } }>,
+  topSkills: Array<{ name, count, tokens, lastUsedAt, confidence }>,       // ≤ 30
+  topProjects: Array<{ name /* 工作目录最后一段 */, sessions, tokens }>,   // ≤ 20
+  sources }
+```
+
+### 体检报告
+
+`GET /api/health-report[?force=1]`（缓存 5 分钟；`force=1` 受 5 秒防抖限制）
+
+```ts
+{
+  generatedAt,
+  counts: { error, warn, info },
+  categories: Record<string, number>,
+  findings: Array<{
+    id: string,                                // 16 位十六进制，稳定
+    severity: "error" | "warn" | "info",
+    category: "broken-link" | "missing-skill-md" | "frontmatter" | "name-mismatch" | "oversize" | "differing-copies"
+            | "hidden-by-product" | "shadowed" | "disabled" | "archived" | "missing-bin" | "missing-env" | "nvm-only"
+            | "mcp-command-missing" | "mcp-literal-secret" | "plugin-state" | "shared-root",
+    title: string, detail: string,            // 中文
+    agentId?: string, skillName?: string, path?: string,   // path 为 "~/…"
+    fix: { kind: "none" | "open" | "reinstall" | "remove-link" | "enable" | "configure", label: string },
+  }>,
+}
+```
+
+技能相关检查覆盖当前“展示”的 Agent（与 `/api/scan` 一致），根目录检查覆盖所有已配置 Agent。
+检查项：各技能根目录顶层的失效软链接（error）与缺少 SKILL.md 的目录（空目录、只含隐藏文件或子目录的
+目录、带 `DESCRIPTION.md` 的 Hermes 分类目录除外）；SKILL.md 缺少
+frontmatter 或 `name` / `description`；技能名与目录名不一致（info）；SKILL.md 超过 256 KB（OpenClaw 不加载，
+warn）或 1 MB（error）；同一 Agent 内生效副本内容不同；被产品隐藏、被覆盖、已停用、已归档（info）；
+OpenClaw `metadata.openclaw.requires.bins` 找不到（在服务 PATH、Homebrew、`~/.local/bin`、`~/.cargo/bin`、
+各 nvm 版本等目录中查找，只检查可执行文件是否存在，从不执行）、只在 nvm 中存在（图形界面启动的 Agent
+可能看不到）、`requires.env` 未设置（只看名称）；MCP `command` 找不到或只在 nvm 中；MCP 配置里的明文密钥
+字段（只报字段名）——`command` 按程序路径处理（可含空格，`~/` 会展开，相对路径不检查）；插件只在缓存中、未安装或启用状态未知；被多个 Agent 共用的技能目录（info）。
+每个“类别 + Agent”最多 30 条，超出部分合并为一条说明；总数最多约 1,000 条；按严重程度排序。
+
+### 应用图标
+
+`GET /api/agent-icon?id=<agentId>` → `image/png`（128 px），没有安装或非 macOS 时 404（前端回退为字母）。
+在 `/Applications` 与 `~/Applications` 中按已知名称查找应用，并核对 Bundle ID（codex、claude、workbuddy、
+cursor、trae、hermes、qclaw、lumiclaw、moticlaw、smartorder、kiro、windsurf）；读取 `CFBundleIconFile`，
+图标文件必须位于应用包内且不超过 20 MB；用 `/usr/bin/sips`（参数数组，不经 shell，10 秒超时）转换，
+结果须是 ≤ 512 KB 的 PNG，缓存在 `~/.agent-skill-manager/icons/<id>-<摘要>.png`，应用更新后自动重新转换。
+测试通过 `SKILL_MANAGER_APPLICATION_DIRS` 指向临时目录，从不读取真实的 `/Applications`。
+
 ## 本地服务防护（新增）
 
 - 除 Origin 检查外，所有请求的 `Host` 必须是 `127.0.0.1:<端口>`、`localhost:<端口>`
@@ -556,6 +764,11 @@ JWT、Google 等令牌格式；`Bearer`/`Basic` 只有后面跟着 ≥ 16 位令
 | `GET /api/capabilities` | 专家条目新增 `origin`（`mine` / `market` / `profile`）、`version`、`installed`、`inUse`、`installedVersion`、`packaged`、`skills`、`defaultPrompt`、`quickPrompts`、`avatar`、`used`，成员新增 `avatar` |
 | `GET /api/expert-avatar?id=` | 专家与成员头像（PNG/JPEG/SVG ≤ 2 MB）；未知 ID 返回 404 |
 | `GET /api/config-detail` | 见“配置详情（只读、脱敏）” |
+| `GET /api/agent-files`、`/api/agent-file` | 见“洞察接口 · Agent 文件” |
+| `GET /api/agent-tools` | 见“洞察接口 · Agent 工具” |
+| `GET /api/usage/summary`、`/api/usage/skill`、`/api/usage/agent`、`/api/usage/status` | 见“洞察接口 · 用量分析” |
+| `GET /api/health-report` | 见“洞察接口 · 体检报告” |
+| `GET /api/agent-icon` | 见“洞察接口 · 应用图标” |
 | `POST /api/sync`、`/api/import-install` | 动作新增 `realDestination`、`viaSymlink`、`reason`、`sharedWithAgentId`、`alsoVisibleTo`、`skippedLinks`；计划新增 `sharedDestinations`、`warnings` |
 
 ## 已知架构限制

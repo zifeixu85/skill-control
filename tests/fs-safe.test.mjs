@@ -67,4 +67,6 @@ test("compacts Windows and POSIX home paths in serialized text", () => {
     compactHomeInText("file:///Users/ameng/x /Users/amengxyz/y", ["/Users/ameng"]),
     "file://~/x /Users/amengxyz/y",
   );
+  // Markdown and Chinese punctuation end a home path too.
+  assert.equal(compactHomeInText("在 `/Users/ameng` 下，/Users/ameng。<!-- /Users/ameng -->", ["/Users/ameng"]), "在 `~` 下，~。<!-- ~ -->");
 });

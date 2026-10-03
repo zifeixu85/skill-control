@@ -26,6 +26,8 @@ import { scanSmartOrder, scanSmartOrderConnectors } from "./smartorder.mjs";
 import { containsChinese } from "./skill-metadata.mjs";
 import { parseFrontmatter } from "./frontmatter.mjs";
 import { ACTIVITY_WINDOW_DAYS, scanAgentActivity } from "./agents-activity.mjs";
+import { defaultApplicationDirectories } from "./agent-icons.mjs";
+import { createInsightRoutes, INSIGHT_ROUTES } from "./insight-routes.mjs";
 import { applyPrecedence, detectionPaths, SKILL_ADAPTERS } from "./agent-adapters.mjs";
 import { isSensitiveCapabilityPath, scanWorkBuddyExperts } from "./workbuddy-experts.mjs";
 import { readWorkBuddyExpertUsage } from "./workbuddy-usage.mjs";
@@ -2708,6 +2710,7 @@ const SAME_SITE_ONLY_ROUTES = new Set([
   "/api/import-asset",
   "/api/plugin-asset",
   "/api/expert-avatar",
+  ...INSIGHT_ROUTES,
 ]);
 
 function crossSiteBlocked(request, pathname) {
@@ -2821,6 +2824,40 @@ async function readExpertAvatar(assetIdValue) {
   return readManifestImage(asset, "专家头像");
 }
 
+/** WorkBuddy experts (own or installed), Hermes profiles and OpenClaw agents of one agent. */
+async function listCapabilityLinks(agentId) {
+  const products = cachedCapabilityProducts || (await getCapabilityProducts());
+  return products
+    .flatMap((product) => product.items || [])
+    .filter((item) => item.productId === agentId && (agentId !== "workbuddy" || item.origin === "mine" || item.installed))
+    .slice(0, 100)
+    .map((item) => ({ capabilityId: item.id, name: item.displayName || item.name, kind: item.kind, origin: item.origin || null }));
+}
+
+/** Folders searched for agent apps (tests point this at a temporary directory). */
+function applicationDirectories() {
+  const configured = String(process.env.SKILL_MANAGER_APPLICATION_DIRS || "")
+    .split(path.delimiter)
+    .filter((entry) => entry && path.isAbsolute(entry));
+  return configured.length ? configured : defaultApplicationDirectories(HOME_DIRECTORY);
+}
+
+let insightRoutes = null;
+function getInsightRoutes() {
+  insightRoutes ||= createInsightRoutes({
+    homeDirectory: HOME_DIRECTORY,
+    homes: [HOME_DIRECTORY, REAL_HOME_DIRECTORY],
+    stateDirectory: STATE_DIRECTORY,
+    applicationDirectories: applicationDirectories(),
+    getScan: () => getScan(),
+    getIntegrations: () => integrationsLoader.get(),
+    listCapabilityLinks,
+    json: jsonResponse,
+    image: imageResponse,
+  });
+  return insightRoutes;
+}
+
 function configDetailContext() {
   return {
     homeDirectory: HOME_DIRECTORY,
@@ -2894,6 +2931,7 @@ export async function handleRequest(request, response) {
       jsonResponse(response, 403, { error: "不允许跨站读取本地配置或资源。" }, origin);
       return;
     }
+    if (await getInsightRoutes().handle(request, requestUrl, response, origin)) return;
     if (request.method === "GET" && requestUrl.pathname === "/api/health") {
       jsonResponse(
         response,

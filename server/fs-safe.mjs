@@ -112,8 +112,9 @@ const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
  * exactly (and not as a prefix of a longer name), Windows homes with either separator,
  * JSON-escaped backslashes and any drive-letter case.
  */
-// A home path ends at a separator, quote, whitespace or punctuation — never mid-name.
-const HOME_END = String.raw`(?=[/\\"'\s:;,)\]}]|$)`;
+// A home path ends wherever a file-name character does not follow — never mid-name
+// ("/Users/al" must not match "/Users/alice"), but before any punctuation or quote.
+const HOME_END = String.raw`(?![\p{L}\p{N}_-])`;
 // Windows separators: "\", "/" or a JSON-escaped "\\".
 const WINDOWS_SEPARATOR = String.raw`(?:\\\\|\\|/)`;
 

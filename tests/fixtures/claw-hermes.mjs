@@ -112,7 +112,7 @@ secrets:
   await writeFixtureFile(hermes, "cron/jobs.json", json({ jobs: [{ id: "j1", name: "Daily digest", schedule_display: "every day 9:00", enabled: true, prompt: "secret prompt ZZ9hermescron14" }] }));
   await writeFixtureFile(hermes, "gateway_state.json", json({ pid: 1, gateway_state: "running", argv: ["--token", "ZZ9hermesgateway15"] }));
   await writeFixtureFile(hermes, "gateway.pid", "1");
-  await writeFixtureFile(hermes, "memories/MEMORY.md", "remember ZZ9hermesmemory16\n");
+  await writeFixtureFile(hermes, "memories/MEMORY.md", "remember the token: ZZ9hermesmemory16\n");
   await writeFixtureFile(hermes, ".env", "OPENAI_API_KEY=ZZ9hermesdotenv17\n");
   await writeFixtureFile(hermes, "auth.json", json({ token: "ZZ9hermesauthjson18" }));
   await writeFixtureFile(hermes, "channel_directory.json", json({ chats: { "ZZ9hermeschat19": "x" } }));

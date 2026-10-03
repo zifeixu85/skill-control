@@ -482,6 +482,31 @@ async function directorySize(directory, limit = 2_000) {
   return total;
 }
 
+/**
+ * Cron jobs for display: name, schedule, state, skills and toolsets only. Prompts,
+ * scripts, errors, delivery targets and origins are never returned.
+ */
+export async function hermesCronJobs(hermesHome) {
+  const jobs = await readBoundedJson(path.join(hermesHome, "cron", "jobs.json"), 2_000_000);
+  const list = jobs.status === "ok" ? object(jobs.value).jobs : null;
+  const names = (value) => (Array.isArray(value) ? value : typeof value === "string" ? [value] : []).map((item) => safeIdentifier(item)).filter(Boolean).slice(0, 20);
+  const time = (value) => (typeof value === "string" && Number.isFinite(Date.parse(value)) ? new Date(Date.parse(value)).toISOString() : null);
+  return (Array.isArray(list) ? list : []).slice(0, 200).map((raw) => {
+    const job = object(raw);
+    return {
+      name: text(job.name, 80) || "未命名任务",
+      schedule: text(job.schedule_display || (typeof job.schedule === "string" ? job.schedule : ""), 80),
+      enabled: job.enabled !== false,
+      state: safeIdentifier(job.state) || null,
+      skills: [...new Set([...names(job.skills), ...names(job.skill)])],
+      toolsets: names(job.enabled_toolsets),
+      lastStatus: safeIdentifier(job.last_status) || null,
+      lastRunAt: time(job.last_run_at),
+      nextRunAt: time(job.next_run_at),
+    };
+  });
+}
+
 async function cronSummary(hermesHome) {
   const jobs = await readBoundedJson(path.join(hermesHome, "cron", "jobs.json"), 2_000_000);
   const list = jobs.status === "ok" ? object(jobs.value).jobs : null;

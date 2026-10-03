@@ -64,6 +64,24 @@ on Keep a Changelog and the project follows Semantic Versioning.
   `sessions.json`.
 - `relatedProducts` in `/api/integrations` for LumiClaw, MotiClaw and Clawith
   (read-only presence, version and counts).
+- Agent files (`GET /api/agent-files`, `/api/agent-file`): instructions,
+  persona, identity, user, memory, rule, subagent, command and LumiClaw lesson
+  files per agent, Hermes profile and OpenClaw agent, read through opaque ids
+  with redaction (Hermes cron jobs are summarized without prompts).
+- Agent tools (`GET /api/agent-tools`): feature flags, Hermes toolsets parsed
+  statically from `toolsets.py`, connectors and their tools, MCP servers, plugin
+  commands, subagents, Claude permission rules and OpenClaw tool policy.
+- Usage analytics (`GET /api/usage/summary`, `/api/usage/skill`,
+  `/api/usage/agent`, `/api/usage/status`): an incremental, worker-built index
+  of Claude, Codex, WorkBuddy, Hermes and OpenClaw usage (tokens, sessions,
+  skills, projects) that stores counts only, survives transcript deletion and
+  labels every figure exact, inferred or reported.
+- Health report (`GET /api/health-report`): broken links, missing or invalid
+  SKILL.md, oversize skills, differing copies, product-hidden skills, missing
+  commands and environment variables (looked up without executing anything),
+  literal MCP secrets and plugin state.
+- App icons (`GET /api/agent-icon`): installed macOS app icons converted once
+  with `sips` and cached.
 
 ### Changed
 
@@ -96,6 +114,12 @@ on Keep a Changelog and the project follows Semantic Versioning.
 - TypeScript checking is now an explicit local, CI, and release quality gate.
 
 ### Security
+
+- Home paths are now redacted wherever they end before a non-name character
+  (backticks, CJK punctuation …), not only before separators and quotes.
+- The new insight endpoints are same-site only; agent files are re-validated on
+  every read (real path inside the agent's folder, regular file, bounded,
+  FIFO-safe) and credential files are never listed.
 
 - Hermes `.env`, `auth.json` and `channel_directory.json`, OpenClaw
   `credentials/`, `auth-profiles.json`, `identity/device-auth.json` and

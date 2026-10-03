@@ -58,6 +58,8 @@ export async function startTestServer(context, home) {
       SKILL_MANAGER_HOST: "127.0.0.1",
       SKILL_MANAGER_PORT: String(port),
       SKILL_MANAGER_ORIGINS: TEST_ORIGIN,
+      // App icons are looked up in the synthetic home only, never in /Applications.
+      SKILL_MANAGER_APPLICATION_DIRS: path.join(home, "Applications"),
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

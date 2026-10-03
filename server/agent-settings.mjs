@@ -66,7 +66,7 @@ const safeTheme = (value) =>
   typeof value === "string" && /^[A-Za-z][A-Za-z -]{0,31}$/u.test(value) ? value : value ? MASK : "未设置";
 
 /** `Bash(cmd …)` → tool name + masked command; other rules keep the tool name and masked body. */
-function maskPermissionRule(rule, homes) {
+export function maskPermissionRule(rule, homes = []) {
   const trimmed = String(rule).slice(0, 2_000).trim();
   const call = trimmed.match(/^([A-Za-z][\w-]{0,63})\(([\s\S]*)\)$/u);
   if (!call) return text(maskCommandLine(trimmed, homes), 200);

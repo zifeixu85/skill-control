@@ -74,7 +74,7 @@ export function envFor(homeDirectory, name) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-/** CFBundleIdentifier / CFBundleShortVersionString from an XML Info.plist. */
+/** CFBundleIdentifier / CFBundleShortVersionString / CFBundleIconFile from an XML Info.plist. */
 export async function readAppBundle(appPath) {
   const read = await readBoundedText(path.join(appPath, "Contents", "Info.plist"), 512_000);
   if (read.status !== "ok" || !read.text.startsWith("<?xml")) return null;
@@ -84,5 +84,9 @@ export async function readAppBundle(appPath) {
     const match = read.text.slice(index, index + 400).match(/<string>([^<]{1,128})<\/string>/u);
     return match ? match[1].trim() : null;
   };
-  return { bundleId: value("CFBundleIdentifier"), version: value("CFBundleShortVersionString") };
+  return {
+    bundleId: value("CFBundleIdentifier"),
+    version: value("CFBundleShortVersionString"),
+    iconFile: value("CFBundleIconFile"),
+  };
 }
