@@ -1,0 +1,257 @@
+/* Skill detail panel: header, where-installed rows, install plan, copies, usage. */
+
+.inspector {
+  border-left: 1px solid var(--line-2);
+  background: var(--window);
+  overflow-x: hidden;
+  overflow-y: auto;
+  min-width: 0;
+  overscroll-behavior: contain;
+}
+/* Keeps text from reflowing while the panel slides open. */
+.inspector > .insp {
+  min-width: 330px;
+}
+.split:not(.open) .inspector {
+  border-left: 0;
+  visibility: hidden;
+}
+.insp {
+  padding: 20px 20px 28px;
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  align-content: start;
+}
+.inspector .insp {
+  animation: fade 0.2s var(--ease) both;
+}
+.insp > *,
+.insp-body > * {
+  min-width: 0;
+}
+.insp-body {
+  display: grid;
+  gap: 18px;
+  align-content: start;
+}
+.insp-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.insp-title {
+  min-width: 0;
+}
+.insp-head h2 {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.35;
+  font-family: var(--font-display);
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+.insp-head .tech {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-3);
+  overflow-wrap: anywhere;
+}
+.insp-head .x {
+  margin-left: auto;
+  flex: none;
+}
+.insp p.desc {
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+.insp h3,
+.config-detail h3 {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--ink-2);
+  margin: 0 0 8px;
+}
+.insp section {
+  min-width: 0;
+}
+.insp .inside {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.insp-acts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.config-detail {
+  display: grid;
+  gap: 16px;
+}
+
+.where {
+  display: grid;
+  gap: 6px;
+}
+.where-row {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  background: var(--panel);
+  border-radius: 10px;
+  padding: 9px 10px;
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+.where-row b {
+  font-size: 13.5px;
+  font-weight: 600;
+  display: block;
+}
+.where-row span:not(.tag):not(.av):not(.av-letter) {
+  font-size: 12px;
+  color: var(--ink-2);
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.where-row.off b {
+  color: var(--ink-2);
+  font-weight: 500;
+}
+
+.confirm {
+  background: var(--panel);
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent) 40%, transparent), var(--shadow-md);
+  padding: 12px 14px;
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  animation: fade 0.2s var(--ease) both;
+  font-size: 12.5px;
+}
+.confirm.quiet {
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+.confirm > b {
+  font-size: 14px;
+}
+.confirm p {
+  color: var(--ink-2);
+}
+.confirm code {
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.confirm .acts {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.plan-action {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--window);
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+.plan-line {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+.plan-line code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan-shared {
+  color: var(--info) !important;
+}
+.plan-warning {
+  color: var(--warn) !important;
+  background: var(--warn-wash);
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+
+.usebox {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px;
+}
+.usebox > div {
+  background: var(--panel);
+  border-radius: 10px;
+  padding: 10px 12px;
+  box-shadow: 0 0 0 1px var(--line-2);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.usebox b {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  display: block;
+  line-height: 1.2;
+}
+.usebox span {
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+.doc {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  background: var(--panel);
+  border-radius: 10px;
+  border: 0;
+  box-shadow: 0 0 0 1px var(--line-2);
+  padding: 12px 14px;
+  font-size: 13px;
+}
+.doc:hover {
+  box-shadow: 0 0 0 1px var(--line), var(--shadow-sm);
+}
+.doc span {
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+/* In the narrow inspector a copy's path gets its own line. */
+.insp .copies > div {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  row-gap: 2px;
+}
+.insp .copies code {
+  grid-column: 1 / -1;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.insp .copies em:first-of-type {
+  white-space: normal;
+}
+
+@media (max-width: 880px) {
+  .inspector > .insp {
+    min-width: 0;
+  }
+  .split.open .inspector {
+    position: fixed;
+    inset: 0;
+    z-index: 25;
+    border-left: 0;
+    animation: slide 0.22s var(--ease) both;
+  }
+  .split:not(.open) .inspector {
+    display: none;
+  }
+}
