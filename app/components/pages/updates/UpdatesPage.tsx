@@ -7,13 +7,15 @@ import { invalidateResources, isUnsupported, primeResource, useResource } from "
 import { useScrollMemory } from "../../../hooks/useScrollMemory";
 import { api, errorMessage } from "../../../lib/api";
 import { formatDateTime, formatRelative, joinNames } from "../../../lib/format";
-import { groupUnits, STATUS_HINTS, STATUS_LABELS, type CheckJob, type UpdatesData } from "../../../lib/updates";
+import { groupUnits, STATUS_HINTS, STATUS_LABELS, type CheckJob, type UpdatesData, type UpdateStatus } from "../../../lib/updates";
 import { RefreshIcon } from "../../icons";
 import { useToast } from "../../providers/ToastProvider";
 import { EmptyState, Loading, SectionHeading, TopBar } from "../../ui/basics";
 import { UnitRow } from "./UnitRow";
 
 export const UPDATES_KEY = "updates";
+/** Groups with nothing to act on start folded so long lists do not bury the rest. */
+const FOLDED = new Set<UpdateStatus>(["unknown-source", "managed-by-host", "up-to-date"]);
 /** One progress request at a time, even if a poll tick outlasts the interval. */
 let polling = false;
 
@@ -67,7 +69,7 @@ export function UpdatesPage() {
   const toast = useToast();
   const scrollRef = useScrollMemory<HTMLDivElement>("updates");
   const [job, setJob] = useState<CheckJob | null>(null);
-  const [showCurrent, setShowCurrent] = useState(false);
+  const [expanded, setExpanded] = useState<Set<UpdateStatus>>(new Set());
   const activeJob = job || updates.data?.job || null;
   const running = activeJob?.state === "running";
 
@@ -103,8 +105,6 @@ export function UpdatesPage() {
 
   const data = updates.data;
   const groups = data ? groupUnits(data.units) : [];
-  const actionable = groups.filter((group) => group.status !== "up-to-date");
-  const current = groups.find((group) => group.status === "up-to-date");
 
   return (
     <section className="page" aria-labelledby="page-title">
@@ -141,32 +141,29 @@ export function UpdatesPage() {
               ))}
             </div>
             {!data.units.length ? <EmptyState title="没有找到可以追踪来源的技能或插件" /> : null}
-            {actionable.map((group) => (
-              <section key={group.status} aria-label={STATUS_LABELS[group.status]}>
-                <SectionHeading title={STATUS_LABELS[group.status]} note={`${group.units.length} 个 · ${STATUS_HINTS[group.status]}`} />
-                <div className="ulist">
-                  {group.units.map((unit) => (
-                    <UnitRow key={unit.unitKey} unit={unit} />
-                  ))}
-                </div>
-              </section>
-            ))}
-            {current ? (
-              <section aria-label="已是最新">
-                <SectionHeading title="已是最新" note={`${current.units.length} 个`} />
-                {showCurrent ? (
-                  <div className="ulist">
-                    {current.units.map((unit) => (
-                      <UnitRow key={unit.unitKey} unit={unit} />
-                    ))}
-                  </div>
-                ) : (
-                  <button type="button" className="btn sm ghost" onClick={() => setShowCurrent(true)}>
-                    显示 {current.units.length} 个已是最新的来源
-                  </button>
-                )}
-              </section>
-            ) : null}
+            {groups.map((group) => {
+              const folded = FOLDED.has(group.status) && !expanded.has(group.status);
+              return (
+                <section key={group.status} aria-label={STATUS_LABELS[group.status]}>
+                  <SectionHeading title={STATUS_LABELS[group.status]} note={`${group.units.length} 个 · ${STATUS_HINTS[group.status]}`} />
+                  {folded ? (
+                    <button
+                      type="button"
+                      className="btn sm ghost"
+                      onClick={() => setExpanded((current) => new Set([...current, group.status]))}
+                    >
+                      显示 {group.units.length} 个
+                    </button>
+                  ) : (
+                    <div className="ulist">
+                      {group.units.map((unit) => (
+                        <UnitRow key={unit.unitKey} unit={unit} />
+                      ))}
+                    </div>
+                  )}
+                </section>
+              );
+            })}
             <Footer data={data} />
           </>
         )}
