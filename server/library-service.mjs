@@ -55,6 +55,15 @@ export function createLibraryService({
       const list = (await hermesSkills()).disabled;
       return Array.isArray(list) ? list.filter((name) => typeof name === "string") : [];
     },
+    /** `hermes config set …` with a snapshot of config.yaml first, so the change can be undone. */
+    hermesCommandOps(file, args) {
+      const config = hermesConfigFile();
+      const snapshot = path.join(backupDirectory, "hermes-config", `config-${Date.now()}.yaml`);
+      return [
+        { op: "backup-file", from: config, to: snapshot },
+        { op: "command", file, args, restoreFile: { path: config, backup: snapshot } },
+      ];
+    },
     /** Without the hermes CLI: a YAML edit of config.yaml (comments are not kept), with backup and diff. */
     async hermesYamlOps(next) {
       const file = hermesConfigFile();

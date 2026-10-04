@@ -911,7 +911,8 @@ WorkBuddy、Trae；其余 Agent 只用自己的副本。可见性按产品规则
 
 涉及的 Agent：常用 Agent（未设置时用扫描得出的有效常用 Agent）、所有存在技能目录的 Agent，以及原生读取的 Agent。
 
-`POST /api/library/plan` `{ action: "adopt" | "link" | "unlink" | "disable" | "remove" | "batch", skill?, agents?, choice?, choices?: Record<itemId, choice>, from? }` →
+`POST /api/library/plan` `{ action: "adopt" | "link" | "unlink" | "disable" | "remove" | "batch", skill?, agents?, choice?, choices?: Record<itemId, choice>, from? }`
+（所有操作都接受 `choices`，冲突条目的键为 `conflict:<agentId>:<技能名>`；单个操作的 `choice` 优先）→
 
 ```ts
 {
@@ -962,17 +963,18 @@ OpenCode 参考最新 shell snapshot。工作区是否配置只看 `config.json`
   binaries: Array<{ path, version: string | null, kind: "npm-global" | "bundled" | "manual" | "wrapper", via: "PATH" | "nvm" | "bundled", target? }>,
   latest: string | null, versionSkew: boolean,
   agents: Array<{
-    agentId, pathSource: string, resolves: { path, version } | null,
+    agentId, agentName, pathSource: string, resolves: { path, version } | null,
     // 仅 lark-cli：
     workspace?: "local" | "hermes" | "openclaw", workspaceConfigured?: boolean, secretSource?: string | null,
     keychainReachable?: "yes" | "needs-downgrade" | "unknown", skill?: { name, inLibrary, visible },
     allowRule?: "present" | "missing" | "n/a", sandboxNetwork?: "ok" | "blocked" | "n/a", plist?: string,
   }>,
-  fixes: Array<{ id: "wrapper" | "allow-rules" | "hermes-path" | "workspace-binding" | "keychain-downgrade", label, kind: "self" | "guide", applicable, reason?, instructions? }>,
+  fixes: Array<{ id: "wrapper" | "allow-rules" | "hermes-path" | "workspace-binding" | "keychain-downgrade", label, kind: "self" | "guide", applicable, reason?, instructions?,
+    agentIds: string[] /* 文字中提到的 Agent（文字使用显示名称，如 Codex、Claude Code、OpenClaw） */ }>,
 }> }
 ```
 
-`POST /api/cli-tools/plan` `{ toolId, fixId, agents? }` → `{ planId, kind: "self", steps: [{ type: "write", path, backup, diff }], notes, skipped, expiresAt }`
+`POST /api/cli-tools/plan` `{ toolId, fixId, agents? }` → `{ planId, kind: "self", steps: [{ type: "write", path, backup, diff }], notes, agentIds, skipped: [{ agentId, agentName, reason }], expiresAt }`
 或 `{ planId: null, kind: "guide" | "none", instructions?, message? }`；`POST /api/cli-tools/apply` `{ planId, confirm: true }` +
 确认头 → `{ changed: [{ path, backup }], historyEntry }`。写入的修复只有两项：`~/.local/bin/lark-cli` 启动脚本
 （`#!/bin/sh` + `exec "<原生程序真实路径>" "$@"`，已有文件先备份）和放行规则（Claude `permissions.allow`
@@ -996,17 +998,27 @@ Gemini `tools.allowed`、已有配置的 Cursor CLI `permissions.allow` 与 Open
   skill: string | null, agents: string[], mode: "copy" | "symlink" | null,
   backups: Array<{ agentId, path /* ~/… */, target, restorable: boolean, reason? }>,
   trashId?: string,                 // uninstall：可从回收站恢复
+  units?: Array<{ id, title }>,     // 按单元撤销的记录（技能库、CLI 修复、它们的恢复）
   restorable: boolean, reason?: string,
 }> }
 ```
 
-`POST /api/history/plan-restore` `{ historyId }` →
-`{ planId, historyId, steps: [{ type: "restore-backup" | "trash-created" | "restore-trash", agentId?, target, from?, precondition /* 当前内容指纹前 16 位，或 "absent" */, trashId? }], warnings, expiresAt }`。
+技能库执行与 CLI 修复的历史记录会保存每个已执行操作的记录（move / stash / unlink / link / write / command，不含文件
+内容，路径与绝对链接目标都压缩为 `~/…`），以及操作后的指纹；`hermes config set` 之前会先给 `config.yaml` 拍快照。
+这些记录按“单元”撤销：技能库每个条目一个单元，CLI 修复每个文件一个单元，单元内按相反顺序执行反向操作
+（移回原位、重建链接、移除新建的链接、从备份恢复文件、把新建的文件移到备份），任一步失败即撤销本单元。
+
+`POST /api/history/plan-restore` `{ historyId, select?: string[] }` →
+`{ planId, historyId, steps: [{ type: "restore-backup" | "trash-created" | "restore-trash", agentId?, target, from?, precondition /* 当前内容指纹前 16 位，或 "absent" */, trashId? }], warnings, expiresAt }`；
+按单元撤销的记录另返回 `units: [{ id, title, selected, conflict?, unrestorable?, steps: [{ type, path, from? }] }]`：
+自那次操作后被改动过的路径（或原位置已被占用）标为 `conflict`，默认不选；在 `select` 中列出单元 id 才会恢复（覆盖前
+仍先备份当前内容）。没有可直接恢复的单元时 `planId` 为 null。
 replace 的反向是把备份放回原位（共享的真实目录只写一次），create 的反向是把创建出的目录移到回收站，卸载的反向是
 从回收站恢复。目标在那次写入之后又被修改过（`afterHash` 不同）会给出警告。
 
 `POST /api/history/apply-restore` `{ planId, confirm: true }` + `x-skill-manager-confirm: yes` →
-`{ planId, restored: [{ agentId, path, backup }], trashed: [{ agentId, path, trashId }], historyEntry }`。执行前逐个核对
+`{ planId, restored: [{ agentId, path, backup }], trashed: [{ agentId, path, trashId }], historyEntry }`（按单元撤销时为
+`{ planId, restoredUnits: [{ id, title }], historyEntry }`）。执行前逐个核对
 目标指纹与生成计划时一致，否则 409；放回前先把当前内容备份到 `backups/<时间>-restore/`，所以这次恢复本身也会作为
 `restore` 记录出现在历史里、可以再撤销。所有写入都经过写入保护。
 

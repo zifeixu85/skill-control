@@ -96,7 +96,7 @@ export async function disableOps(agent, skill, context) {
       if (current.includes(skill)) return null;
       const next = JSON.stringify([...current, skill]);
       return hermes
-        ? item([{ op: "command", file: hermes, args: ["config", "set", "skills.disabled", next] }], `用 hermes config set 停用 ${skill}`)
+        ? item(context.hermesCommandOps(hermes, ["config", "set", "skills.disabled", next]), `用 hermes config set 停用 ${skill}`)
         : instructions(agent, skill, `请运行 hermes config set skills.disabled '${next}'。`);
     }
     default: {

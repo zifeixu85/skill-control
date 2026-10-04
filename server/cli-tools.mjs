@@ -236,7 +236,20 @@ async function workspaceState(descriptor, homeDirectory, workspace) {
   };
 }
 
-export async function detectCliTools({ homeDirectory, homes = [homeDirectory], searchDirectories, agents = [], library = null, latest = {}, launchctlPath = null }) {
+/** Display names for Agents when the config does not provide one. */
+export const AGENT_DISPLAY_NAMES = {
+  codex: "Codex",
+  claude: "Claude Code",
+  workbuddy: "WorkBuddy",
+  cursor: "Cursor",
+  gemini: "Gemini CLI",
+  opencode: "OpenCode",
+  hermes: "Hermes Agent",
+  openclaw: "OpenClaw",
+  qclaw: "QClaw",
+};
+
+export async function detectCliTools({ homeDirectory, homes = [homeDirectory], searchDirectories, agents = [], agentNames = {}, library = null, latest = {}, launchctlPath = null }) {
   const displayHomes = [...new Set([...homes, ...(await homeVariants(homeDirectory))])];
   const display = (value) => (value ? compactHomePath(value, displayHomes) : null);
   const tools = [];
@@ -253,7 +266,7 @@ export async function detectCliTools({ homeDirectory, homes = [homeDirectory], s
       const source = await agentPathSource(agentId, homeDirectory, { launchctlPath });
       if (!source) continue;
       const resolved = await resolveOnPath(descriptor.command, source.path);
-      const row = { agentId, pathSource: source.via, resolves: resolved ? { path: display(resolved), version: await versionOf(resolved) } : null };
+      const row = { agentId, agentName: agentNames[agentId] || AGENT_DISPLAY_NAMES[agentId] || agentId, pathSource: source.via, resolves: resolved ? { path: display(resolved), version: await versionOf(resolved) } : null };
       if (descriptor.id === "lark-cli") {
         const workspace = await workspaceState(descriptor, homeDirectory, source.workspace);
         const switches = agentId === "codex" ? await readAgentSwitches("codex", homeDirectory) : {};

@@ -116,8 +116,16 @@ on Keep a Changelog and the project follows Semantic Versioning.
   `/api/skills/apply-uninstall`) with shared-folder warnings, and a shared
   trash (`GET /api/trash`, `POST /api/trash/restore`).
 - `iconAvailable` for each Agent in `/api/scan`.
+- Library applies and CLI fixes are recorded op by op and can be undone from
+  history (per library item / per file, with fingerprint preconditions and
+  explicit selection of changed files); the Hermes config is snapshotted
+  before `hermes config set`.
+- CLI fix reasons name Agents by display name and list `agentIds`.
 
 ### Changed
+
+- Library adopt and link plans accept the `choices` map keyed by item id (the
+  shape the UI sends), as batch plans already did.
 
 - Every detected Agent is visible by default until the user changes the visible
   list (`visibleCustomized`); status is still judged against primary Agents.

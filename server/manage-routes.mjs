@@ -78,6 +78,7 @@ export function createManageRoutes(context) {
       homes: context.homes,
       searchDirectories: await searchDirectories(),
       agents: (config.agents || []).map((agent) => agent.id).filter((id) => AGENT_PATH_SOURCES[id]),
+      agentNames: Object.fromEntries((config.agents || []).map((agent) => [agent.id, agent.name])),
       library: libraryView,
       latest: await latestVersions(),
       launchctlPath: await launchctlPath(),
@@ -153,7 +154,8 @@ export function createManageRoutes(context) {
     },
     async "/api/history/plan-restore"(body) {
       if (typeof body.historyId !== "string" || !/^[\w-]{1,64}$/u.test(body.historyId)) throw new RouteError(400, "历史记录无效。");
-      return restore.planRestore({ historyId: body.historyId });
+      const select = Array.isArray(body.select) ? body.select.filter((id) => typeof id === "string").slice(0, 500) : null;
+      return restore.planRestore({ historyId: body.historyId, select });
     },
     async "/api/history/apply-restore"(body, request) {
       confirmed(request, body);

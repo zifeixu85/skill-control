@@ -4,7 +4,7 @@ import path from "node:path";
 import { classifyPath, relativeLinkTarget } from "./fs-links.mjs";
 import { compactHomePath, homeVariants, object } from "./fs-safe.mjs";
 import { tierOf } from "./library-agents.mjs";
-import { LibraryError, runOps } from "./library-ops.mjs";
+import { LibraryError, recordOp, runOps } from "./library-ops.mjs";
 import { createHasher, readLibrary } from "./library.mjs";
 import { writeLibraryLock } from "./library-lock.mjs";
 import { disableOps } from "./library-switches.mjs";
@@ -88,7 +88,9 @@ export function createLibraryManager(context) {
   }
 
   /** An agent's own copy next to a library entry with the same name. */
-  async function copyItem(agent, location, entry, state, group, requested) {
+  async function copyItem(agent, location, entry, state, group, requestedChoice, choices = {}) {
+    // The UI sends `choices: { "conflict:<agent>:<name>": choice }`; a single action may send `choice`.
+    const requested = requestedChoice ?? choices[`conflict:${agent.agentId}:${entry.name}`];
     const classified = await classifyPath(location, entry.path);
     const tier = tierOf(agent.agentId);
     const base = { skill: entry.name, agentId: agent.agentId };
@@ -162,7 +164,7 @@ export function createLibraryManager(context) {
       agentId: "hermes",
       choices: ["configure", "skip"],
       choice: "skip",
-      ops: hermes ? [{ op: "command", file: hermes, args: ["config", "set", "skills.external_dirs", JSON.stringify(next)] }] : await context.hermesYamlOps(next),
+      ops: hermes ? context.hermesCommandOps(hermes, ["config", "set", "skills.external_dirs", JSON.stringify(next)]) : await context.hermesYamlOps(next),
       expect: [],
     };
   }
@@ -202,7 +204,7 @@ export function createLibraryManager(context) {
         if (entry?.kind === "link-external") items.push(adoptReverseLink(entry, state, group));
         else if (entry?.kind === "real") {
           for (const agent of targetAgents) for (const location of own(agent, skill)) {
-            const item = await copyItem(agent, location, entry, state, group, input.choice);
+            const item = await copyItem(agent, location, entry, state, group, input.choice, choices);
             if (item) items.push(item);
           }
         } else if (!entry) {
@@ -229,7 +231,7 @@ export function createLibraryManager(context) {
           const locations = own(agent, skill);
           let handled = false;
           for (const location of locations) {
-            const item = await copyItem(agent, location, entry, state, group, input.choice);
+            const item = await copyItem(agent, location, entry, state, group, input.choice, choices);
             if (item) {
               items.push(item);
               handled = true;
@@ -290,7 +292,7 @@ export function createLibraryManager(context) {
           for (const entry of state.entries.filter((item) => item.kind === "real" && !item.gitCheckout)) {
             for (const location of own(agent, entry.name)) {
               if (entry.gitCheckout || (await state.isExternal(location))) continue;
-              const item = await copyItem(agent, location, entry, state, group, choices[`conflict:${agent.agentId}:${entry.name}`]);
+              const item = await copyItem(agent, location, entry, state, group, undefined, choices);
               if (item) items.push(item);
             }
           }
@@ -405,7 +407,22 @@ export function createLibraryManager(context) {
       removed: results.filter((result) => result.status === "applied" && result.item.kind === "remove").map((result) => result.item.skill),
       now: now(),
     });
-    const record = { type: "library", action: stored.action, applied: results.filter((r) => r.status === "applied").length, failed: results.filter((r) => r.status !== "applied").length, createdAt: new Date(now()).toISOString() };
+    // Applied items keep a record of every op so the whole apply can be undone from history.
+    const recordedItems = [];
+    for (const result of results.filter((item) => item.status === "applied")) {
+      const ops = (await Promise.all(result.item.ops.map((op) => recordOp(op, display)))).filter(Boolean);
+      recordedItems.push({ id: result.item.id, title: result.item.title, skill: result.item.skill, ...(result.item.trashId ? { trashId: result.item.trashId } : {}), ops });
+    }
+    const record = {
+      id: randomUUID().replace(/-/gu, "").slice(0, 12),
+      type: "library",
+      action: stored.action,
+      skillName: recordedItems.length === 1 ? recordedItems[0].skill : null,
+      applied: recordedItems.length,
+      failed: results.filter((r) => r.status !== "applied").length,
+      items: recordedItems,
+      createdAt: new Date(now()).toISOString(),
+    };
     await mkdir(path.dirname(context.historyFile), { recursive: true });
     await appendFile(context.historyFile, `${JSON.stringify(record)}\n`, "utf8");
     return {

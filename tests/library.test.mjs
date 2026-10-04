@@ -198,3 +198,93 @@ test("Windows links fall back from symlink to junction to a recorded copy", asyn
   assert.deepEqual(calls, ["dir", "junction", "dir", "junction", "cp"]);
   await assert.rejects(createDirLink({ linkPath: "/a/x", relativeTarget: "../x", absoluteTarget: "/x", platform: "darwin", fsImpl: make(["dir"]) }), /EPERM/u, "no junction or copy fallback outside Windows");
 });
+
+test("adopt and link accept the UI's choices map keyed by item id", LIMIT, async (context) => {
+  const adopt = await setup(context);
+  const plan = await adopt.service.plan({ action: "adopt", skill: "shared-b", agents: ["claude"], choices: { "conflict:claude:shared-b": "use-this" } });
+  const item = plan.items.find((entry) => entry.id === "conflict:claude:shared-b");
+  assert.deepEqual([item.choice, item.requiresChoice, item.steps.length > 0], ["use-this", undefined, true]);
+  await adopt.service.apply({ planId: plan.planId, confirm: true });
+  assert.match(await readFile(path.join(adopt.home, ".agents", "skills", "shared-b", "SKILL.md"), "utf8"), /claude edit/u);
+
+  const link = await setup(context);
+  const linkPlan = await link.service.plan({ action: "link", skill: "shared-b", agents: ["claude"], choices: { "conflict:claude:shared-b": "keep-library" } });
+  assert.equal(linkPlan.items.find((entry) => entry.id === "conflict:claude:shared-b").choice, "keep-library");
+  await link.service.apply({ planId: linkPlan.planId, confirm: true });
+  assert.equal(await readlink(path.join(link.home, ".claude", "skills", "shared-b")), path.join("..", "..", ".agents", "skills", "shared-b"));
+});
+
+async function restoreFor(home, stateDirectory, agents) {
+  const { createRestoreService } = await import("../server/restore-service.mjs");
+  const { materializeSkillDirectory } = await import("../server/local-server.mjs");
+  return createRestoreService({
+    homeDirectory: home,
+    homes: [home],
+    stateDirectory,
+    backupDirectory: path.join(stateDirectory, "backups"),
+    historyFile: path.join(stateDirectory, "history.jsonl"),
+    getScan: async () => ({ skills: [], agents: [] }),
+    getAgents: async () => agents,
+    materialize: materializeSkillDirectory,
+  });
+}
+
+test("a library apply is undone from history, and the undo can be undone", LIMIT, async (context) => {
+  const { service, home, stateDirectory } = await setup(context);
+  const plan = await service.plan({ action: "batch" });
+  await service.apply({ planId: plan.planId, confirm: true });
+  const restore = await restoreFor(home, stateDirectory, libraryAgents(home));
+  const [entry] = (await restore.listHistory(5)).entries;
+  assert.deepEqual([entry.action, entry.restorable], ["library", true]);
+  assert.ok(entry.units.some((unit) => unit.id === "adopt-link:rev-1"));
+
+  const undo = await restore.planRestore({ historyId: entry.id });
+  assert.ok(undo.planId);
+  assert.ok(undo.units.every((unit) => unit.selected));
+  await restore.applyRestore({ planId: undo.planId, confirm: true });
+  const library = path.join(home, ".agents", "skills");
+  assert.equal(await readlink(path.join(library, "rev-1")), path.join(home, ".codex", "skills", "rev-1"), "the reverse link is back");
+  assert.match(await readFile(path.join(home, ".codex", "skills", "rev-1", "SKILL.md"), "utf8"), /rev-1/u);
+  assert.equal(await readlink(path.join(home, ".claude", "skills", "rev-1")), path.join(home, ".codex", "skills", "rev-1"));
+  assert.equal((await lstat(path.join(home, ".claude", "skills", "shared-a"))).isDirectory(), true);
+  assert.equal((await lstat(path.join(home, ".codex", "skills", "shared-a"))).isDirectory(), true);
+
+  const [undoEntry] = (await restore.listHistory(5)).entries;
+  assert.deepEqual([undoEntry.action, undoEntry.restorable], ["restore", true]);
+  const redo = await restore.planRestore({ historyId: undoEntry.id });
+  await restore.applyRestore({ planId: redo.planId, confirm: true });
+  assert.equal((await lstat(path.join(library, "rev-1"))).isDirectory(), true, "back to the adopted state");
+  assert.equal(await readlink(path.join(home, ".claude", "skills", "shared-a")), path.join("..", "..", ".agents", "skills", "shared-a"));
+});
+
+test("the Hermes external_dirs change is undone by restoring config.yaml from its snapshot", LIMIT, async (context) => {
+  const { home, stateDirectory } = await setup(context);
+  const configFile = path.join(home, ".hermes", "config.yaml");
+  const before = await readFile(configFile, "utf8");
+  const ran = [];
+  const hermesService = createLibraryService({
+    homeDirectory: home,
+    homes: [home],
+    stateDirectory,
+    backupDirectory: path.join(stateDirectory, "backups"),
+    historyFile: path.join(stateDirectory, "history.jsonl"),
+    getConfig: async () => ({ agents: libraryAgents(home), primaryAgentIds: ["hermes"] }),
+    findCommand: async (name) => (name === "hermes" ? "/fake/hermes" : null),
+    // Stand-in for `hermes config set`: it rewrites config.yaml.
+    run: async (file, args) => {
+      ran.push(args.join(" "));
+      await fs.writeFile(configFile, "skills:\n  external_dirs:\n    - ~/.agents/skills\n");
+      return { exitCode: 0, stdout: "", stderr: "" };
+    },
+    commandEnv: () => ({}),
+  });
+  const plan = await hermesService.plan({ action: "batch", choices: { "hermes-external-dirs": "configure" } });
+  assert.deepEqual(plan.items.find((item) => item.id === "hermes-external-dirs").steps.map((step) => step.type), ["backup-file", "command"]);
+  await hermesService.apply({ planId: plan.planId, confirm: true });
+  assert.deepEqual(ran, ['config set skills.external_dirs ["~/.agents/skills"]']);
+  const restore = await restoreFor(home, stateDirectory, libraryAgents(home));
+  const [entry] = (await restore.listHistory(5)).entries;
+  const undo = await restore.planRestore({ historyId: entry.id });
+  await restore.applyRestore({ planId: undo.planId, confirm: true });
+  assert.equal(await readFile(configFile, "utf8"), before);
+});

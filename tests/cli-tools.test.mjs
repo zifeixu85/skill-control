@@ -101,3 +101,55 @@ test("allow-rule fix edits each config with a backup and keeps other keys", LIMI
   assert.doesNotMatch(JSON.stringify(result), /ZZ9/u);
   assert.equal((await manager.plan({ toolId: "lark-cli", fixId: "hermes-path" })).kind, "guide");
 });
+
+async function restoreService(home) {
+  const { createRestoreService } = await import("../server/restore-service.mjs");
+  const stateDirectory = path.join(home, ".agent-skill-manager");
+  return createRestoreService({ homeDirectory: home, homes: [home], stateDirectory, backupDirectory: path.join(stateDirectory, "backups"), historyFile: path.join(stateDirectory, "history.jsonl"), getScan: async () => ({ skills: [], agents: [] }), getAgents: async () => [], materialize: async () => {} });
+}
+
+test("CLI fixes are undone per file; a file changed since needs an explicit choice", LIMIT, async (context) => {
+  const { manager, home } = await setup(context);
+  const { writeFile: write } = await import("node:fs/promises");
+  const rules = path.join(home, ".codex", "rules", "default.rules");
+  const gemini = path.join(home, ".gemini", "settings.json");
+  const geminiBefore = await readFile(gemini, "utf8");
+  const plan = await manager.plan({ toolId: "lark-cli", fixId: "allow-rules" });
+  await manager.apply({ planId: plan.planId, confirm: true });
+  await write(gemini, `${JSON.stringify({ edited: "by hand" })}\n`);
+  const restore = await restoreService(home);
+  const [entry] = (await restore.listHistory(5)).entries;
+  assert.deepEqual([entry.action, entry.restorable, entry.units.length], ["cli-fix", true, 2]);
+  const undo = await restore.planRestore({ historyId: entry.id });
+  const units = Object.fromEntries(undo.units.map((unit) => [unit.title, unit]));
+  assert.equal(units["~/.codex/rules/default.rules"].selected, true);
+  assert.equal(units["~/.gemini/settings.json"].selected, false);
+  assert.match(units["~/.gemini/settings.json"].conflict, /又被修改过/u);
+  await restore.applyRestore({ planId: undo.planId, confirm: true });
+  await assert.rejects(readFile(rules, "utf8"), "the created rules file moved to backups");
+  assert.match(await readFile(gemini, "utf8"), /by hand/u, "the changed file is left alone");
+  const forced = await restore.planRestore({ historyId: entry.id, select: [undo.units.find((unit) => unit.title === "~/.gemini/settings.json").id] });
+  await restore.applyRestore({ planId: forced.planId, confirm: true });
+  assert.equal(await readFile(gemini, "utf8"), geminiBefore);
+
+  const wrapper = await manager.plan({ toolId: "lark-cli", fixId: "wrapper" });
+  await manager.apply({ planId: wrapper.planId, confirm: true });
+  const [wrapperEntry] = (await restore.listHistory(5)).entries;
+  const removeWrapper = await restore.planRestore({ historyId: wrapperEntry.id });
+  await restore.applyRestore({ planId: removeWrapper.planId, confirm: true });
+  await assert.rejects(readFile(path.join(home, ".local", "bin", "lark-cli"), "utf8"));
+});
+
+test("CLI fix reasons use display names and list agentIds", LIMIT, async (context) => {
+  const { detect, home } = await setup(context);
+  const [lark] = await detect();
+  const fixes = Object.fromEntries(fixesFor(lark, { homes: [home] }).map((fix) => [fix.id, fix]));
+  assert.deepEqual(fixes["allow-rules"].agentIds.sort(), ["codex", "gemini", "hermes"]);
+  assert.match(fixes["allow-rules"].reason, /Codex/u);
+  assert.match(fixes["allow-rules"].reason, /Gemini CLI/u);
+  assert.doesNotMatch(fixes["allow-rules"].reason, /\bcodex\b/u);
+  assert.deepEqual(fixes["workspace-binding"].agentIds.sort(), ["hermes", "openclaw"]);
+  assert.match(fixes["workspace-binding"].reason, /Hermes Agent、OpenClaw/u);
+  assert.deepEqual(fixes["keychain-downgrade"].agentIds, ["codex"]);
+  assert.deepEqual(fixes.wrapper.agentIds, ["openclaw"]);
+});
