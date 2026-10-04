@@ -12,7 +12,7 @@ archiving, and writes are handled by a loopback-only manager service.
 ```text
 ┌─────────────────────────────────────────────┐
 │ React UI                                    │
-│ app/page.tsx + app/globals.css              │
+│ app/components · app/lib · app/styles       │
 └──────────────────────┬──────────────────────┘
                        │ HTTP / JSON, loopback only
 ┌──────────────────────▼──────────────────────┐
@@ -53,8 +53,14 @@ Electron renderer 使用 `contextIsolation: true`、`nodeIntegration: false` 和
 
 | 路径 | 职责 |
 | --- | --- |
-| `app/page.tsx` | 页面状态、Agent 切换、详情、导入和同步交互 |
-| `app/globals.css` | 视觉系统、布局、响应式与组件状态 |
+| `app/page.tsx` → `app/components/App.tsx` | 应用外壳：数据、导航与提示的 Provider，侧栏、当前页面、抽屉和首次启动面板 |
+| `app/components/pages/` | 每页一个组件：概览、技能（列表 + 详情面板 + 安装计划）、插件、专家与 Agent、连接器与 MCP、数据、体检、设置、Agent 页 |
+| `app/components/files/` | 完整文件浏览（文件树、Markdown 渲染/原文、frontmatter 表格、图片）与脱敏配置详情 |
+| `app/components/drawers/` | 插件、专家、MCP 抽屉与 `.skill` 导入对话框（预览 → 计划 → 确认） |
+| `app/lib/api.ts`、`app/lib/types.ts` | 类型化本地服务客户端；新接口经 `parse.ts` 宽松解析，404「接口不存在」视为未提供 |
+| `app/lib/skill-model.ts` 等 | 纯函数：常用 Agent 槽位（已装 / 只读 / 插件自带 / 拒绝 / 未装）、筛选、副本分组、安装来源、插件合并、格式化、高亮、图表几何（`tests/ui-*.test.mjs`） |
+| `app/hooks/` | 共享缓存的 GET（`useResource`）、滚动位置记忆、Esc 分层关闭、焦点陷阱、偏好存储等 |
+| `app/globals.css`、`app/styles/*.css` | 浅色 / 深色设计 token 与按区域拆分的样式；Bricolage Grotesque（OFL）随应用打包，不走 CDN |
 | `server/local-server.mjs` | 配置、Skill 与专家扫描、指纹、文件读取、`.skill`、同步与备份、HTTP 路由 |
 | `server/scan-worker.mjs` | 在后台线程执行目录扫描和指纹计算，避免阻塞桌面主进程 |
 | `server/skill-metadata.mjs` | 从 `SKILL.md` 正文推导展示名称（首个 H1）和中文首段介绍，忽略代码块 |
@@ -249,8 +255,11 @@ Electron renderer 使用 `contextIsolation: true`、`nodeIntegration: false` 和
 - 在返回 SVG 前阻止脚本、事件处理器、外部链接和可嵌入活动内容；
 - 对疑似二进制文件只返回元数据。
 
-Markdown 渲染在前端通过 `react-markdown` 和 `remark-gfm` 完成。不要直接把
-Skill 中的 HTML 注入 DOM。图片资源只从当前 Skill 或短期导入预览目录读取，
+Markdown 渲染在前端通过 `react-markdown` 和 `remark-gfm` 完成（`skipHtml`），
+配置与代码预览由逐行分词后作为文本节点渲染，脱敏值 `••••••` 显示为“已隐藏”标记。
+不要直接把 Skill 中的 HTML 注入 DOM。Agent 图标、插件图标和专家头像同样先经 CORS
+请求取得再转成 Blob URL：直接用 `<img>` 跨端口加载会被 Chromium 的
+`Cross-Origin-Resource-Policy` 拦截。图片资源只从当前 Skill 或短期导入预览目录读取，
 接口会再次执行路径边界和真实路径检查，并使用限制性 CSP 返回 SVG。桌面界面先
 通过本地 API 读取图片，再创建短期 Blob URL 交给 Chromium 解码；离开当前文件后
 立即释放 URL，避免跨端口图片策略差异和长期内存占用。

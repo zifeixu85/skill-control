@@ -24,6 +24,7 @@
   "scripts": {
     "dev": "node scripts/local-runner.mjs dev",
     "dev:web": "vinext dev",
+    "dev:ui": "node scripts/dev-ui.mjs",
     "build": "vinext build",
     "start": "node scripts/local-runner.mjs start",
     "start:web": "vinext start",

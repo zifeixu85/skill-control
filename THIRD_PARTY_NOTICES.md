@@ -25,7 +25,15 @@ resources/licenses/smol-toml-LICENSE
 resources/licenses/js-yaml-LICENSE
 resources/licenses/json5-LICENSE
 resources/licenses/argparse-LICENSE
+resources/licenses/bricolage-grotesque-OFL.txt
 ```
+
+界面中的数字与标题字体 Bricolage Grotesque（Copyright 2022 The Bricolage Grotesque
+Project Authors）以 SIL Open Font License 1.1 授权，字体文件位于 `app/fonts/`，许可证
+副本同时放在 `app/fonts/OFL.txt`。
+
+The display typeface Bricolage Grotesque is licensed under the SIL Open Font
+License 1.1; the font files ship in `app/fonts/` with the license alongside.
 
 Electron 和 electron-builder 生成的产物还可能包含其运行时许可证和 Chromium
 相关声明。重新分发修改后的安装包时，请保留产物中的全部许可证文件，并重新审计
