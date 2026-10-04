@@ -41,9 +41,17 @@ npm test
 `npm test` 会先构建应用，再运行 Node 测试。涉及 UI 的改动还需要在浏览器中验证
 主要交互和至少一个窄屏尺寸。
 
+本机已安装并运行 Skill Control 时，用 `npm run dev:ui` 在旁路端口开发：本地服务
+`127.0.0.1:43119`，界面 `http://127.0.0.1:3001`（可用 `SKILL_MANAGER_PORT`、
+`SKILL_CONTROL_UI_PORT` 调整）。界面只在开发构建中读取
+`NEXT_PUBLIC_SKILL_MANAGER_API_BASE`；两端都使用 `127.0.0.1`，否则图片与配置接口会被
+同站检查拒绝。验证写入流程时可以给本地服务单独设置 `HOME` 指向临时目录。
+
 Before submitting, run `npm run lint`, `npm run typecheck`, and `npm test`. UI
 changes should also be checked interactively at a normal desktop size and at
-least one narrow viewport.
+least one narrow viewport. If an installed Skill Control already owns the
+default ports, `npm run dev:ui` runs the service on 43119 and the UI on
+`http://127.0.0.1:3001`.
 
 ## 分支与提交 / Branches and commits
 
