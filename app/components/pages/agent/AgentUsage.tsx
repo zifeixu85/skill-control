@@ -31,6 +31,13 @@ export function AgentUsage({ agentId, agentName }: { agentId: string; agentName:
   if (usage.status === "error" && !data) return <EmptyState tone="error" title="读取使用数据失败">{errorMessage(usage.error)}</EmptyState>;
   if (!data) return <Loading label="正在统计…" rows={5} />;
 
+  if (!data.sessions && !data.tokens?.total && !data.topSkills.length && !isIndexing(data.status, data.index)) {
+    return (
+      <EmptyState title={`最近 ${DAYS} 天没有 ${agentName} 的使用数据`}>
+        目前能统计 Codex、Claude Code、WorkBuddy、Hermes、OpenClaw 和 QClaw 的本地会话记录。
+      </EmptyState>
+    );
+  }
   const byName = new Map(views.map((view) => [view.techName.toLowerCase(), view]));
   const series = fillSeries(data.series, DAYS, localDate(now || null) || data.series[data.series.length - 1]?.date || "");
   const hasTokens = Boolean(data.tokens?.total);
