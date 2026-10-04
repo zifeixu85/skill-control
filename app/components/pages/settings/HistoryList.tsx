@@ -6,6 +6,7 @@ import { formatDateTime, joinNames } from "../../../lib/format";
 import { HISTORY_ACTION_LABELS } from "../../../lib/history";
 import { useData } from "../../providers/DataProvider";
 import { useNav } from "../../providers/NavProvider";
+import { ItemText } from "../../ui/Item";
 
 /** Every recorded write, newest first, with 撤销 where the service can put things back. */
 export function HistoryList() {
@@ -18,12 +19,12 @@ export function HistoryList() {
     const legacy = scan.data?.history || [];
     if (!legacy.length) return <p className="muted small">还没有安装记录。</p>;
     return (
-      <div className="copies">
+      <div className="lrows">
         {legacy.slice(0, 20).map((entry) => (
-          <div key={entry.id}>
-            <code>{entry.skillName}</code>
-            <em>装到 {joinNames(entry.targets)}</em>
-            <em>{formatDateTime(entry.createdAt)}</em>
+          <div key={entry.id} className="lrow">
+            <ItemText title={entry.skillName} meta={`装到 ${joinNames(entry.targets)}`} />
+            <div className="metric">{formatDateTime(entry.createdAt)}</div>
+            <span />
           </div>
         ))}
       </div>
@@ -40,37 +41,39 @@ export function HistoryList() {
   if (!history.data.length) return <p className="muted small">还没有任何改动记录。</p>;
 
   return (
-    <div className="copies history">
+    <div className="lrows">
       {history.data.map((entry) => (
-        <div key={entry.id}>
-          <span className="trash-main">
-            <b>
+        <div key={entry.id} className="lrow">
+          <div className="it-main">
+            <div className="it-title">
               {HISTORY_ACTION_LABELS[entry.action] || entry.action}
               {entry.skill ? ` · ${entry.skill}` : ""}
-            </b>
+            </div>
+            {entry.agents.length || entry.mode || entry.backups.length ? (
+              <div className="it-meta">
+                {entry.agents.length ? joinNames(entry.agents.map(agentName)) : ""}
+                {entry.mode ? ` · ${entry.mode === "symlink" ? "软链接" : "复制"}` : ""}
+                {entry.backups.length ? ` · 备份 ${entry.backups.length} 份` : ""}
+              </div>
+            ) : null}
             {entry.units.length ? (
-              <span className="muted small history-units" title={entry.units.map((unit) => unit.title).join("\n")}>
+              <div className="it-desc" title={entry.units.map((unit) => unit.title).join("\n")}>
                 {entry.units.slice(0, 3).map((unit) => unit.title).join("；")}
                 {entry.units.length > 3 ? ` 等 ${entry.units.length} 项` : ""}
-              </span>
+              </div>
             ) : null}
-            <span className="muted small">
-              {entry.agents.length ? joinNames(entry.agents.map(agentName)) : ""}
-              {entry.mode ? ` · ${entry.mode === "symlink" ? "软链接" : "复制"}` : ""}
-              {entry.backups.length ? ` · 备份 ${entry.backups.length} 份` : ""}
-            </span>
-          </span>
-          <em>{formatDateTime(entry.at)}</em>
-          <em />
-          {entry.restorable ? (
-            <button type="button" className="btn sm" onClick={() => setRestoreHistoryId(entry.id)}>
-              撤销
-            </button>
-          ) : (
-            <span className="muted small" title={entry.reason || undefined}>
-              {entry.reason || "不能撤销"}
-            </span>
-          )}
+            {!entry.restorable && entry.reason ? <div className="it-desc">{entry.reason}</div> : null}
+          </div>
+          <div className="metric">{formatDateTime(entry.at)}</div>
+          <div className="it-acts">
+            {entry.restorable ? (
+              <button type="button" className="btn sm" onClick={() => setRestoreHistoryId(entry.id)}>
+                撤销
+              </button>
+            ) : (
+              <span className="muted small">不能撤销</span>
+            )}
+          </div>
         </div>
       ))}
     </div>

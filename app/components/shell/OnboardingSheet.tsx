@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useEscape } from "../../hooks/useEscape";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
+import { Scrim } from "../ui/Scrim";
 import { MAX_PRIMARY_AGENTS } from "../../lib/agents";
 import { errorMessage } from "../../lib/api";
 import { joinNames } from "../../lib/format";
@@ -41,7 +42,7 @@ export function OnboardingSheet({ onDismiss }: { onDismiss: () => void }) {
   };
 
   return (
-    <div className="scrim">
+    <Scrim onDismiss={onDismiss} busy={saving}>
       <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="onboarding-title" ref={ref} tabIndex={-1}>
         <h2 id="onboarding-title">你主要用哪几个 Agent？</h2>
         <p>
@@ -68,6 +69,6 @@ export function OnboardingSheet({ onDismiss }: { onDismiss: () => void }) {
           </span>
         </div>
       </div>
-    </div>
+    </Scrim>
   );
 }

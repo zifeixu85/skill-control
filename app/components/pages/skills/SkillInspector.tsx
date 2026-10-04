@@ -6,10 +6,11 @@ import { formatMonthDay } from "../../../lib/format";
 import { groupCopies, type SkillView } from "../../../lib/skill-model";
 import { FileBrowser, type FileSource } from "../../files/FileBrowser";
 import { ConfigDetailView } from "../../files/ConfigDetailView";
-import { CloseIcon, FinderIcon } from "../../icons";
+import { FinderIcon } from "../../icons";
 import { useData } from "../../providers/DataProvider";
 import { Tabs } from "../../ui/basics";
-import { primaryInstance, useReveal } from "./SkillActions";
+import { PanelShell } from "../../ui/PanelShell";
+import { primaryInstance, SkillActions, useReveal } from "./SkillActions";
 import { SkillOverview } from "./SkillOverview";
 
 export type InspectorTab = "overview" | "files" | "config";
@@ -76,17 +77,16 @@ export function SkillInspector({
   );
 
   return (
-    <div className="insp">
-      <div className="insp-head">
-        <div className="insp-title">
-          <h2 id="inspector-title">{view.title}</h2>
-          {view.showTech ? <div className="tech">{view.techName}</div> : null}
-        </div>
-        <button type="button" className="btn ghost sm x" onClick={onClose} aria-label="关闭详情">
-          <CloseIcon />
-        </button>
-      </div>
-      <Tabs tabs={TABS} value={tab} onChange={onTab} label="技能详情" idBase={`skill-${view.id}`} />
+    <PanelShell
+      title={view.title}
+      titleId="inspector-title"
+      subtitle={view.showTech ? <span className="mono">{view.techName}</span> : null}
+      closeLabel="关闭详情"
+      onClose={onClose}
+      resetKey={view.id}
+      footer={tab === "overview" && fallback ? <SkillActions view={view} /> : null}
+      tabs={<Tabs tabs={TABS} value={tab} onChange={onTab} label="技能详情" idBase={`skill-${view.id}`} />}
+    >
       <div role="tabpanel" aria-labelledby={`skill-${view.id}-tab-${tab}`} className="insp-body">
         {tab === "overview" ? (
           <SkillOverview
@@ -122,6 +122,6 @@ export function SkillInspector({
           </>
         ) : null}
       </div>
-    </div>
+    </PanelShell>
   );
 }

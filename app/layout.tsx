@@ -3,6 +3,7 @@ import "./globals.css";
 import "./styles/shell.css";
 import "./styles/controls.css";
 import "./styles/surfaces.css";
+import "./styles/anatomy.css";
 import "./styles/overlays.css";
 import "./styles/home.css";
 import "./styles/skills.css";

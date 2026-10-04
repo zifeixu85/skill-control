@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { noop, useEscape } from "../../hooks/useEscape";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
+import { Scrim } from "../ui/Scrim";
 
 /** Small modal for a planned write: what will happen, then an explicit confirm. */
 export function ConfirmSheet({
@@ -36,7 +37,7 @@ export function ConfirmSheet({
   // Stays registered while busy so Esc can't close this or anything underneath mid-write.
   useEscape(true, busy ? noop : onClose);
   return (
-    <div className="scrim">
+    <Scrim onDismiss={onClose} busy={busy}>
       <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-busy={busy} ref={ref} tabIndex={-1}>
         <h2 id="confirm-title">{title}</h2>
         {notice ? (
@@ -67,6 +68,6 @@ export function ConfirmSheet({
           </span>
         </div>
       </div>
-    </div>
+    </Scrim>
   );
 }

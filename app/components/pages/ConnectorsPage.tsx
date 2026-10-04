@@ -11,6 +11,7 @@ import { useData } from "../providers/DataProvider";
 import { useNav } from "../providers/NavProvider";
 import { AgentAvatar, LetterLogo, PluginLogo } from "../ui/Avatar";
 import { EmptyState, Loading, SectionHeading, Segmented, TopBar } from "../ui/basics";
+import { ItemText, TagStack } from "../ui/Item";
 import { usePersistent } from "../../hooks/usePersistent";
 import { persistentStore } from "../../lib/storage";
 import { CliTools } from "./cli/CliTools";
@@ -22,14 +23,14 @@ function ConnectorRow({ connector }: { connector: Connector }) {
   return (
     <div className="crow">
       {provider ? <PluginLogo plugin={provider} /> : <LetterLogo text={connector.name} />}
-      <div className="crow-main">
-        <b>{connector.name}</b>
-        <span title={connector.description}>{connector.description}</span>
-        <span className="muted">{provider ? `由插件 ${provider.displayName || provider.name} 提供` : "Codex 内置"}</span>
-      </div>
-      <div className="tools">
+      <ItemText
+        title={connector.name}
+        meta={provider ? `由插件 ${provider.displayName || provider.name} 提供` : "Codex 内置"}
+        desc={connector.description || null}
+      />
+      <div className="metric tools">
         <b>{connector.toolCount}</b>
-        <span>个工具</span>
+        <small>个工具</small>
       </div>
     </div>
   );
@@ -63,7 +64,7 @@ function McpMatrix() {
                 </span>
               </th>
             ))}
-            <th scope="col">提醒</th>
+            <th scope="col" className="th-tags">提醒</th>
           </tr>
         </thead>
         <tbody>
@@ -73,8 +74,17 @@ function McpMatrix() {
             const project = row.entries.every((entry) => entry.scope === "project");
             const disabled = row.entries.length > 0 && row.entries.every((entry) => entry.enabled === false);
             return (
-              <tr key={row.name} className="click" tabIndex={0} onClick={() => open(row.name)} onKeyDown={(event) => onKeyDown(event, row.name)}>
-                <th scope="row">{row.name}</th>
+              <tr
+                key={row.name}
+                className="click"
+                tabIndex={0}
+                data-detail-trigger=""
+                onClick={() => open(row.name)}
+                onKeyDown={(event) => onKeyDown(event, row.name)}
+              >
+                <th scope="row" className="cell-main">
+                  <ItemText title={<span className="mono">{row.name}</span>} titleText={row.name} />
+                </th>
                 {agentIds.map((agentId) => {
                   const on = row.agentIds.includes(agentId);
                   return (
@@ -83,10 +93,14 @@ function McpMatrix() {
                     </td>
                   );
                 })}
-                <td>
-                  {secret ? <span className="tag danger">请求头或环境变量里写着密钥</span> : null}
-                  {project ? <span className="tag mute">只在项目里</span> : null}
-                  {disabled ? <span className="tag mute">已停用</span> : null}
+                <td className="cell-tags">
+                  <TagStack
+                    chips={[
+                      ...(secret ? [{ id: "secret", kind: "status" as const, tone: "danger" as const, text: "明文密钥", title: "请求头或环境变量里写着密钥" }] : []),
+                      ...(disabled ? [{ id: "off", kind: "status" as const, tone: "mute" as const, text: "已停用" }] : []),
+                      ...(project ? [{ id: "project", kind: "kind" as const, text: "只在项目里" }] : []),
+                    ]}
+                  />
                 </td>
               </tr>
             );

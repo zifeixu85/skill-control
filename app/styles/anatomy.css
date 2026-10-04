@@ -1,0 +1,192 @@
+/*
+ * Shared anatomy for lists and cards.
+ * Row:  leading icon | main [title / identifier / description] | tags | metrics | actions
+ * Card: header [icon, title, subtitle, status] / description (2-line clamp) / chip footer
+ */
+
+/* Main column */
+.it-main {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  align-content: center;
+}
+.it-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}
+.it-meta {
+  font-size: 12px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.45;
+}
+.it-meta.mono {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+.it-meta .sep {
+  margin: 0 5px;
+  color: var(--line);
+}
+.it-desc {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.5;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  overflow-wrap: anywhere;
+}
+.it-desc.l2 {
+  -webkit-line-clamp: 2;
+}
+
+/* Tags: one line in cards (+N for the rest), stacked in table columns. */
+.chip-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+}
+/* Each chip is capped so one long label (a model name) can't take the whole row. */
+.chip-row .tag {
+  flex: none;
+  display: inline-block;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chip-row .tag:only-child,
+.chip-row .tag:first-child:nth-last-child(2) {
+  flex-shrink: 1;
+  min-width: 0;
+}
+.tag .chip-num {
+  font-weight: 750;
+  color: inherit;
+  font-variant-numeric: tabular-nums;
+  margin: 0 1px;
+}
+.tag-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+.tag-stack .tag {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+}
+
+/* Metrics: right-aligned, tabular, never wrap ("171 次"). */
+.metric {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.metric b {
+  font-weight: 650;
+  color: var(--ink);
+}
+.metric small {
+  display: block;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+/* Actions: right-aligned, same size everywhere. */
+.it-acts {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+.it-acts .btn {
+  white-space: nowrap;
+}
+
+/* Cards in grids: equal height per row, footer pinned to the bottom. */
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  align-items: stretch;
+}
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  height: 100%;
+}
+.card-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+.card-head .it-main {
+  gap: 0;
+}
+.card-status {
+  align-self: start;
+  justify-self: end;
+}
+.card-desc {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 3em;
+  overflow-wrap: anywhere;
+}
+.card-foot {
+  margin-top: auto;
+  min-width: 0;
+}
+
+/* Plain list rows (history, trash, drawer lists): main | metric | actions. */
+.lrows {
+  display: grid;
+  gap: 6px;
+}
+.lrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 4px 14px;
+  align-items: center;
+  padding: 9px 12px;
+  background: var(--panel);
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px var(--line-2);
+  min-width: 0;
+}
+.lrow.lead {
+  grid-template-columns: 28px minmax(0, 1fr) auto auto;
+}
+.lrow .it-title {
+  font-size: 13.5px;
+}
+.lrow > .metric {
+  min-width: 64px;
+}

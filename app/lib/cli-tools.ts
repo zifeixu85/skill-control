@@ -207,43 +207,69 @@ export function commandLines(text: string): Set<string> {
 export type CheckState = "ok" | "warn" | "bad" | "na";
 
 /** One status per column of an Agent row, with the plain-language reason when not ok. */
-export function agentChecks(row: CliAgentRow, latest: string | null) {
-  const checks: { label: string; state: CheckState; detail: string }[] = [];
+export type CheckKey = "command" | "workspace" | "keychain" | "skill" | "allow" | "sandbox";
+
+export interface AgentCheck {
+  key: CheckKey;
+  label: string;
+  /** A few characters for a table cell; `detail` is the full sentence. */
+  short: string;
+  state: CheckState;
+  detail: string;
+}
+
+/** Column order and headings when the checks are shown as a table. */
+export const CHECK_COLUMNS: { key: CheckKey; label: string }[] = [
+  { key: "command", label: "命令" },
+  { key: "workspace", label: "工作区" },
+  { key: "keychain", label: "钥匙串" },
+  { key: "skill", label: "技能" },
+  { key: "allow", label: "放行规则" },
+  { key: "sandbox", label: "沙箱网络" },
+];
+
+export function agentChecks(row: CliAgentRow, latest: string | null): AgentCheck[] {
+  const checks: AgentCheck[] = [];
   checks.push(
     row.resolves
       ? {
+          key: "command",
           label: "找得到命令",
+          short: row.resolves.version || "找得到",
           state: latest && row.resolves.version && row.resolves.version !== latest ? "warn" : "ok",
           detail: `${row.resolves.path}${row.resolves.version ? `（${row.resolves.version}）` : ""} · 来自 ${row.pathSource}`,
         }
-      : { label: "找不到命令", state: "bad", detail: `它的 PATH（${row.pathSource || "未知来源"}）里没有这个命令` },
+      : { key: "command", label: "找不到命令", short: "找不到", state: "bad", detail: `它的 PATH（${row.pathSource || "未知来源"}）里没有这个命令` },
   );
   if (row.workspace) {
     checks.push({
+      key: "workspace",
       label: "工作区",
+      short: row.workspaceConfigured ? "已配置" : "未配置",
       state: row.workspaceConfigured ? "ok" : "bad",
       detail: `${WORKSPACE_LABELS[row.workspace] || row.workspace}${row.workspaceConfigured ? "已配置" : "还没有配置"}`,
     });
   }
   if (row.keychainReachable && row.keychainReachable !== "unknown") {
-    checks.push({
-      label: "钥匙串",
-      state: row.keychainReachable === "yes" ? "ok" : "bad",
-      detail: row.keychainReachable === "yes" ? "能读到凭据" : "沙箱里读不到钥匙串，需要降级保存方式",
-    });
+    const ok = row.keychainReachable === "yes";
+    checks.push({ key: "keychain", label: "钥匙串", short: ok ? "能读到" : "读不到", state: ok ? "ok" : "bad", detail: ok ? "能读到凭据" : "沙箱里读不到钥匙串，需要降级保存方式" });
   }
   if (row.skill) {
     checks.push({
+      key: "skill",
       label: "技能",
+      short: row.skill.visible ? "可见" : row.skill.inLibrary ? "看不到" : "不在库里",
       state: row.skill.visible ? "ok" : row.skill.inLibrary ? "warn" : "bad",
       detail: row.skill.visible ? `${row.skill.name} 可见` : row.skill.inLibrary ? `${row.skill.name} 在库里，但这个 Agent 看不到` : `${row.skill.name} 不在技能库里`,
     });
   }
   if (row.allowRule && row.allowRule !== "n/a") {
-    checks.push({ label: "放行规则", state: row.allowRule === "present" ? "ok" : "warn", detail: row.allowRule === "present" ? "已允许直接运行" : "每次运行都会请你确认" });
+    const ok = row.allowRule === "present";
+    checks.push({ key: "allow", label: "放行规则", short: ok ? "已允许" : "每次确认", state: ok ? "ok" : "warn", detail: ok ? "已允许直接运行" : "每次运行都会请你确认" });
   }
   if (row.sandboxNetwork && row.sandboxNetwork !== "n/a") {
-    checks.push({ label: "沙箱网络", state: row.sandboxNetwork === "ok" ? "ok" : "bad", detail: row.sandboxNetwork === "ok" ? "可以联网" : "沙箱默认不让联网" });
+    const ok = row.sandboxNetwork === "ok";
+    checks.push({ key: "sandbox", label: "沙箱网络", short: ok ? "可联网" : "不能联网", state: ok ? "ok" : "bad", detail: ok ? "可以联网" : "沙箱默认不让联网" });
   }
   return checks;
 }

@@ -10,47 +10,59 @@ import {
   type LibraryData,
   type LibraryEntry,
 } from "../../../lib/library";
+import type { ChipSpec } from "../../../lib/chips";
 import { useData } from "../../providers/DataProvider";
 import { useNav } from "../../providers/NavProvider";
 import { AgentAvatar } from "../../ui/Avatar";
+import { ChipRow, ItemText, TagStack } from "../../ui/Item";
+
+/** Visibility counts as colored chips, problems before the rest, number emphasised. */
+function visibilityChips(counts: ReturnType<typeof agentCounts>): ChipSpec[] {
+  const chip = (id: string, value: number, text: string, tone: ChipSpec["tone"]): ChipSpec => ({
+    id,
+    kind: "status",
+    tone,
+    text: `${text} ${value}`,
+    count: { before: `${text} `, value },
+  });
+  const chips: ChipSpec[] = [];
+  if (counts.hidden) chips.push(chip("hidden", counts.hidden, "被隐藏", "danger"));
+  if (counts.duplicate) chips.push(chip("duplicate", counts.duplicate, "重复", "warn"));
+  if (counts.privateCopy) chips.push(chip("private", counts.privateCopy, "独立副本", "info"));
+  if (counts.missing) chips.push(chip("missing", counts.missing, "看不到", "mute"));
+  chips.push(chip("visible", counts.visible, "可见", "ok"));
+  return chips;
+}
 
 export function AgentStrip({ data, agents }: { data: LibraryData; agents: LibraryAgent[] }) {
   return (
-    <div className="lib-agents">
+    <div className="lib-agents card-grid">
       {agents.map((agent) => {
         const counts = agentCounts(data, agent.agentId);
+        const desc = counts.topReasons.join("；") || agent.notes;
         return (
-          <article key={agent.agentId} className={`lib-agent ${agent.primary ? "primary" : ""}`}>
-            <header>
+          <article key={agent.agentId} className={`lib-agent card ${agent.primary ? "primary" : ""}`}>
+            <div className="card-head">
               <AgentAvatar id={agent.agentId} size="md" />
-              <div>
-                <b>{agent.name}</b>
-                <span className="tier" title={TIER_HINTS[agent.tier]}>
-                  {TIER_LABELS[agent.tier]}
-                </span>
-              </div>
-              {agent.primary ? <span className="tag">常用</span> : null}
-            </header>
-            <div className="lib-counts">
-              <span className="state-chip visible">可见 {counts.visible}</span>
-              {counts.hidden ? <span className="state-chip hidden">被隐藏 {counts.hidden}</span> : null}
-              {counts.duplicate ? <span className="state-chip duplicate">重复 {counts.duplicate}</span> : null}
-              {counts.privateCopy ? <span className="state-chip private-copy">独立副本 {counts.privateCopy}</span> : null}
-              {counts.missing ? <span className="state-chip missing">看不到 {counts.missing}</span> : null}
+              <ItemText title={agent.name} meta={<span title={TIER_HINTS[agent.tier]}>{TIER_LABELS[agent.tier]}</span>} />
+              {agent.primary ? <span className="tag card-status">常用</span> : <span />}
             </div>
-            {counts.topReasons.length ? (
-              <ul className="lib-reasons">
-                {counts.topReasons.map((reason) => (
-                  <li key={reason}>{reason}</li>
-                ))}
-              </ul>
-            ) : null}
-            {agent.notes ? <p className="muted small">{agent.notes}</p> : null}
+            <p className="card-desc" title={agent.notes || undefined}>
+              {desc || "没有需要说明的情况。"}
+            </p>
+            <ChipRow className="card-foot" chips={visibilityChips(counts)} max={4} />
           </article>
         );
       })}
     </div>
   );
+}
+
+function entryChips(entry: LibraryEntry): ChipSpec[] {
+  const tone: ChipSpec["tone"] = entry.kind === "real" ? "mute" : entry.kind === "link-internal" ? "info" : entry.kind === "broken" ? "danger" : "warn";
+  const chips: ChipSpec[] = [{ id: "kind", kind: entry.kind === "real" ? "kind" : "status", tone, text: KIND_LABELS[entry.kind] }];
+  if (entry.externalManaged) chips.push({ id: "external", kind: "kind", text: "外部托管" });
+  return chips;
 }
 
 function Dot({ entry, agentId }: { entry: LibraryEntry; agentId: string }) {
@@ -72,7 +84,7 @@ export function EntriesTable({ entries, agents }: { entries: LibraryEntry[]; age
         <thead>
           <tr>
             <th scope="col">技能</th>
-            <th scope="col">类型</th>
+            <th scope="col" className="th-tags">标记</th>
             {agents.map((agent) => (
               <th scope="col" key={agent.agentId}>
                 <span className="th-agent" title={agent.name}>
@@ -88,21 +100,24 @@ export function EntriesTable({ entries, agents }: { entries: LibraryEntry[]; age
             const view = byName.get(entry.name.toLowerCase());
             return (
               <tr key={entry.name}>
-                <th scope="row">
-                  {view ? (
-                    <button type="button" className="link-btn" onClick={() => go("skills", { skillId: view.id })}>
-                      {entry.name}
-                    </button>
-                  ) : (
-                    <span>{entry.name}</span>
-                  )}
-                  {entry.target ? <small className="lib-target">→ {entry.target}</small> : null}
+                <th scope="row" className="cell-main">
+                  <ItemText
+                    title={
+                      view ? (
+                        <button type="button" className="link-btn" onClick={() => go("skills", { skillId: view.id })}>
+                          {entry.name}
+                        </button>
+                      ) : (
+                        entry.name
+                      )
+                    }
+                    titleText={entry.name}
+                    meta={entry.target ? `→ ${entry.target}` : null}
+                    mono
+                  />
                 </th>
-                <td>
-                  <span className={`tag ${entry.kind === "real" ? "mute" : entry.kind === "link-internal" ? "info" : entry.kind === "broken" ? "danger" : "warn"}`}>
-                    {KIND_LABELS[entry.kind]}
-                  </span>
-                  {entry.externalManaged ? <span className="tag mute">外部托管</span> : null}
+                <td className="cell-tags">
+                  <TagStack chips={entryChips(entry)} />
                 </td>
                 {agents.map((agent) => (
                   <td key={agent.agentId}>

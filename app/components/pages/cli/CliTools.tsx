@@ -2,10 +2,11 @@
 
 import { isUnsupported, useResource } from "../../../hooks/useResource";
 import { api, errorMessage } from "../../../lib/api";
-import { agentChecks, BINARY_KIND_LABELS, type CliTool } from "../../../lib/cli-tools";
+import { agentChecks, BINARY_KIND_LABELS, CHECK_COLUMNS, type CliTool } from "../../../lib/cli-tools";
 import { useData } from "../../providers/DataProvider";
 import { AgentAvatar } from "../../ui/Avatar";
 import { EmptyState, Loading } from "../../ui/basics";
+import { ItemText } from "../../ui/Item";
 import { CliFixCard } from "./CliFixCard";
 
 function Why() {
@@ -30,8 +31,67 @@ function Why() {
   );
 }
 
-function ToolCard({ tool }: { tool: CliTool }) {
+/** One row per Agent, one aligned column per check; the full sentence is in each cell's tooltip. */
+function AgentChecksTable({ tool }: { tool: CliTool }) {
   const { agentName } = useData();
+  const rows = tool.agents.map((row) => ({ row, checks: agentChecks(row, tool.latest) }));
+  const columns = CHECK_COLUMNS.filter((column) => rows.some((item) => item.checks.some((check) => check.key === column.key)));
+  const name = (row: CliTool["agents"][number]) => (agentName(row.agentId) === row.agentId && row.agentName ? row.agentName : agentName(row.agentId));
+  return (
+    <div className="matrix checks-table">
+      <table>
+        <caption className="sr-only">{tool.name} 在各 Agent 里的情况</caption>
+        <thead>
+          <tr>
+            <th scope="col">Agent</th>
+            {columns.map((column) => (
+              <th scope="col" key={column.key}>
+                {column.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ row, checks }) => {
+            const command = checks.find((check) => check.key === "command");
+            return (
+              <tr key={row.agentId}>
+                <th scope="row" className="cell-main">
+                  <span className="cell-lead">
+                    <AgentAvatar id={row.agentId} size="sm" />
+                    <ItemText
+                      title={name(row)}
+                      meta={row.resolves ? row.resolves.path : `PATH 来自 ${row.pathSource || "未知来源"}`}
+                      titleText={name(row)}
+                      mono={Boolean(row.resolves)}
+                    />
+                  </span>
+                </th>
+                {columns.map((column) => {
+                  const check = column.key === "command" ? command : checks.find((item) => item.key === column.key);
+                  return (
+                    <td key={column.key}>
+                      {check ? (
+                        <span className={`cstate ${check.state}`} title={`${check.label}：${check.detail}`}>
+                          <i aria-hidden="true" />
+                          {check.short}
+                        </span>
+                      ) : (
+                        <span className="none">—</span>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ToolCard({ tool }: { tool: CliTool }) {
   const skewed = tool.binaries.filter((binary) => tool.latest && binary.version && binary.version !== tool.latest);
   return (
     <article className="tool-card">
@@ -63,24 +123,7 @@ function ToolCard({ tool }: { tool: CliTool }) {
       {tool.agents.length ? (
         <section>
           <h4 className="mini-h">各 Agent 用起来怎么样</h4>
-          <div className="tool-agents">
-            {tool.agents.map((row) => (
-              <div className="tool-agent" key={row.agentId}>
-                <div>
-                  <AgentAvatar id={row.agentId} size="sm" />
-                  {agentName(row.agentId) === row.agentId && row.agentName ? row.agentName : agentName(row.agentId)}
-                </div>
-                <div className="checks">
-                  {agentChecks(row, tool.latest).map((check) => (
-                    <span key={check.label} className={`check ${check.state}`} title={check.detail}>
-                      <b>{check.label}</b>
-                      {check.detail}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
+          <AgentChecksTable tool={tool} />
         </section>
       ) : null}
       {tool.fixes.length ? (

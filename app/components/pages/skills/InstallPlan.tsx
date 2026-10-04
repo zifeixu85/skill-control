@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { refreshAfterWrite } from "../../../hooks/refresh";
+import { useMarkBusy } from "../../../hooks/useBusy";
 import { useBlockEscape } from "../../../hooks/useEscape";
 import { useUndoToast } from "../../../hooks/useUndoToast";
 import { api, errorMessage } from "../../../lib/api";
@@ -69,6 +70,8 @@ export function InstallPlan({ view, agentId, onDone }: { view: SkillView; agentI
   const [running, setRunning] = useState(false);
   // Esc must not dismiss the panel while files are being written.
   useBlockEscape(running);
+  // …and the inspector can't be closed (×, outside press) until the files are written.
+  useMarkBusy(running);
   const agent = agentsById.get(agentId);
   const mode: SyncMode = agent?.copyOnly ? "copy" : config.data?.syncMode || "copy";
 

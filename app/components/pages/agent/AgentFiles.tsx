@@ -126,7 +126,7 @@ export function AgentFiles({ agentId, agentName }: { agentId: string; agentName:
         <p className="muted small">
           也可以查看：
           {data.capabilities.map((item) => (
-            <button key={item.capabilityId} type="button" className="link-btn" onClick={() => openDrawer({ kind: "expert", id: item.capabilityId })}>
+            <button key={item.capabilityId} type="button" className="link-btn" data-detail-trigger="" onClick={() => openDrawer({ kind: "expert", id: item.capabilityId })}>
               {item.name}
             </button>
           ))}

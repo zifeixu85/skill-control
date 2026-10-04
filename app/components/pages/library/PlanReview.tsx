@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { refreshAfterWrite } from "../../../hooks/refresh";
 import { noop, useEscape } from "../../../hooks/useEscape";
 import { useFocusTrap } from "../../../hooks/useFocusTrap";
+import { Scrim } from "../../ui/Scrim";
 import { usePlanApply } from "../../../hooks/usePlanApply";
 import { useUndoToast } from "../../../hooks/useUndoToast";
 import { api } from "../../../lib/api";
@@ -75,7 +76,7 @@ export function PlanReview({ request, onClose, onWiden }: { request: PlanRequest
   const notice = flow.expired ? "计划已过期（10 分钟），请重新生成。" : flow.notice || (flow.plan && !flow.planId ? flow.plan.message || "" : "");
 
   return (
-    <div className="scrim">
+    <Scrim onDismiss={onClose} busy={flow.applying}>
       <div className="sheet wide" role="dialog" aria-modal="true" aria-labelledby="plan-title" aria-busy={flow.planning || flow.applying} ref={ref} tabIndex={-1}>
         <h2 id="plan-title">{request.title}</h2>
         {flow.result ? (
@@ -152,6 +153,6 @@ export function PlanReview({ request, onClose, onWiden }: { request: PlanRequest
           </span>
         </div>
       </div>
-    </div>
+    </Scrim>
   );
 }

@@ -18,8 +18,7 @@
   font-weight: 600;
 }
 .lib-agents {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
   gap: 10px;
   margin-bottom: 8px;
 }
@@ -28,46 +27,9 @@
   border-radius: var(--r-card);
   box-shadow: 0 0 0 1px var(--line-2);
   padding: 12px 14px;
-  display: grid;
-  gap: 8px;
-  align-content: start;
 }
 .lib-agent.primary {
   box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent) 30%, transparent);
-}
-.lib-agent header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.lib-agent header b {
-  display: block;
-  font-size: 14px;
-}
-.lib-agent .tier {
-  font-size: 12px;
-  color: var(--ink-2);
-}
-.lib-agent header .tag {
-  margin-left: auto;
-}
-.lib-counts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.lib-reasons {
-  margin: 0;
-  padding-left: 16px;
-  font-size: 12px;
-  color: var(--ink-2);
-}
-.lib-target {
-  display: block;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--ink-3);
-  font-weight: 400;
 }
 .state-chip {
   display: inline-flex;
@@ -259,56 +221,47 @@
   font-size: 17px;
   font-weight: 700;
 }
-.tool-agents {
-  display: grid;
-  gap: 6px;
+/* CLI checks: one aligned column per check, a colored dot and a few characters per cell. */
+.checks-table table {
+  min-width: 0;
 }
-.tool-agent {
-  display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-  padding: 8px 10px;
-  border-radius: 10px;
-  background: var(--window);
-  box-shadow: 0 0 0 1px var(--line-2);
+.checks-table th.cell-main {
+  min-width: 200px;
+  max-width: 300px;
 }
-.tool-agent > div:first-child {
+.cell-lead {
   display: flex;
+  gap: 9px;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  font-weight: 600;
+  min-width: 0;
 }
-.checks {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 6px;
-}
-.check {
+.cstate {
   display: inline-flex;
-  gap: 4px;
-  align-items: baseline;
+  align-items: center;
+  gap: 5px;
   font-size: 12px;
-  padding: 2px 8px;
-  border-radius: 8px;
-  background: var(--hover);
+  white-space: nowrap;
   color: var(--ink-2);
+  cursor: default;
 }
-.check b {
-  font-weight: 600;
+.cstate i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
 }
-.check.ok {
-  background: var(--accent-wash);
-  color: var(--accent);
-}
-.check.warn {
-  background: var(--warn-wash);
+.cstate.warn {
   color: var(--warn);
 }
-.check.bad {
-  background: var(--danger-wash);
+.cstate.warn i {
+  background: var(--warn);
+}
+.cstate.bad {
   color: var(--danger);
+}
+.cstate.bad i {
+  background: var(--danger);
 }
 .fix-grid {
   display: grid;
@@ -348,7 +301,6 @@
 }
 
 @media (max-width: 880px) {
-  .tool-agent,
   .recheck-row {
     grid-template-columns: 1fr;
   }
@@ -410,18 +362,6 @@
   display: flex;
   gap: 4px;
 }
-.trash-main {
-  display: grid;
-  min-width: 0;
-}
-.trash-main b {
-  font-size: 13px;
-}
-.trash-main code {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 
 /* A plan being regenerated: still readable, clearly not the one that will run. */
 .stale {
@@ -462,15 +402,4 @@
 }
 .restore-units .steps {
   margin: 6px 0 0 26px;
-}
-.history-units {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 52ch;
-}
-.trash-main .form-error {
-  display: block;
-  margin: 2px 0 0;
 }

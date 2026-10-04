@@ -8,6 +8,7 @@ import type { LibraryIssue } from "../../../lib/library";
 import { scopeForIssue } from "../../../lib/library-review";
 import { CheckIcon, WarnIcon } from "../../icons";
 import { EmptyState, Loading, SectionHeading, TopBar } from "../../ui/basics";
+import { ItemText } from "../../ui/Item";
 import { AgentStrip, EntriesTable } from "./LibraryParts";
 import { TrashList } from "./TrashList";
 import { useNav } from "../../providers/NavProvider";
@@ -80,16 +81,18 @@ export function LibraryPage() {
                     <span className={`ic ${issue.severity === "error" ? "danger" : issue.severity === "warn" ? "warn" : "ok"}`}>
                       {issue.severity === "info" ? <CheckIcon /> : <WarnIcon />}
                     </span>
-                    <div>
-                      <b>{issue.title}</b>
-                      <span>
-                        {issue.detail}
-                        {issue.names.length ? `（${issue.names.slice(0, 6).join("、")}${issue.names.length > 6 ? " 等" : ""}）` : ""}
-                      </span>
+                    <ItemText
+                      title={issue.title}
+                      meta={issue.names.length ? `${issue.names.slice(0, 8).join("、")}${issue.names.length > 8 ? ` 等 ${issue.names.length} 个` : ""}` : null}
+                      mono
+                      desc={issue.detail || null}
+                      lines={2}
+                    />
+                    <div className="it-acts">
+                      <button type="button" className="btn sm" onClick={() => reviewIssue(issue)}>
+                        整理
+                      </button>
                     </div>
-                    <button type="button" className="btn sm" onClick={() => reviewIssue(issue)}>
-                      整理
-                    </button>
                   </div>
                 ))}
               </div>

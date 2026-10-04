@@ -48,6 +48,7 @@ export function InspectorResizer({ width, onChange }: { width: number; onChange:
   return (
     <div
       className="inspector-resizer"
+      data-keep-panel=""
       role="separator"
       aria-orientation="vertical"
       aria-label="调整详情面板宽度"

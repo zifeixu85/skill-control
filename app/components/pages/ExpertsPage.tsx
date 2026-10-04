@@ -2,43 +2,43 @@
 
 import { useScrollMemory } from "../../hooks/useScrollMemory";
 import { errorMessage } from "../../lib/api";
+import { countChip, type ChipSpec } from "../../lib/chips";
 import type { Capability } from "../../lib/types";
 import { capabilityKindLabel } from "../drawers/ExpertDrawer";
 import { useData } from "../providers/DataProvider";
 import { useNav } from "../providers/NavProvider";
 import { AgentAvatar, ExpertAvatar } from "../ui/Avatar";
 import { EmptyState, Loading, SectionHeading, TopBar } from "../ui/basics";
+import { ChipRow, ItemText } from "../ui/Item";
+
+/** Status (使用中, 已打包) → kind (专家, model) → counts (技能, 用过 N 次). */
+export function expertChips(capability: Capability): ChipSpec[] {
+  const chips: ChipSpec[] = [];
+  if (capability.inUse) chips.push({ id: "in-use", kind: "status", text: "使用中" });
+  if (capability.origin === "mine" && capability.packaged) chips.push({ id: "packaged", kind: "status", tone: "info", text: "已打包，可分发" });
+  chips.push({ id: "kind", kind: "kind", text: capabilityKindLabel(capability) });
+  if (capability.model) chips.push({ id: "model", kind: "kind", text: capability.model, title: capability.model });
+  if (capability.skillCount) chips.push(countChip("skills", capability.skillCount, " 个技能"));
+  if (capability.used?.count) chips.push(countChip("used", capability.used.count, " 次", "用过 "));
+  return chips;
+}
 
 export function ExpertCard({ capability }: { capability: Capability }) {
   const { openDrawer } = useNav();
-  const tags: { label: string; tone: string }[] = [{ label: capabilityKindLabel(capability), tone: "mute" }];
-  if (capability.skillCount) tags.push({ label: `${capability.skillCount} 个技能`, tone: "mute" });
-  if (capability.used?.count) tags.push({ label: `用过 ${capability.used.count} 次`, tone: "" });
-  if (capability.inUse) tags.push({ label: "使用中", tone: "" });
-  if (capability.origin === "mine" && capability.packaged) tags.push({ label: "已打包，可分发", tone: "info" });
-  if (capability.model) tags.push({ label: capability.model, tone: "mute" });
+  const chips = expertChips(capability);
+  const status = chips[0]?.kind === "status" ? chips[0] : null;
   return (
-    <button type="button" className="pcard" onClick={() => openDrawer({ kind: "expert", id: capability.id })}>
-      <div className="pcard-h">
+    <button type="button" className="pcard card" data-detail-trigger="" onClick={() => openDrawer({ kind: "expert", id: capability.id })}>
+      <div className="card-head">
         <ExpertAvatar capability={capability} />
-        <div className="pcard-name">
-          <b>{capability.displayName || capability.name}</b>
-          <span>{capability.profession || capability.productName}</span>
-        </div>
-        {capability.version ? (
-          <span className="state">
-            <span className="tag mute">v{capability.version}</span>
-          </span>
-        ) : null}
+        <ItemText
+          title={capability.displayName || capability.name}
+          meta={[capability.profession || capability.productName, capability.version ? `v${capability.version}` : ""].filter(Boolean).join(" · ")}
+        />
+        {status ? <span className={`tag card-status ${status.tone || ""}`}>{status.text}</span> : <span />}
       </div>
-      <p>{capability.description || "没有介绍"}</p>
-      <div className="inside">
-        {tags.map((tag) => (
-          <span key={tag.label} className={`tag ${tag.tone}`}>
-            {tag.label}
-          </span>
-        ))}
-      </div>
+      <p className="card-desc">{capability.description || "没有介绍"}</p>
+      <ChipRow className="card-foot" chips={status ? chips.slice(1) : chips} max={4} />
     </button>
   );
 }

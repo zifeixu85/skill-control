@@ -114,16 +114,18 @@ export function PluginDrawer({ pluginKey, onClose }: { pluginKey: string; onClos
       subtitle={`${agentName(plugin.agentId)} · ${plugin.id}`}
       onClose={onClose}
       wide={tab === "config"}
+      tabs={
+        <Tabs
+          tabs={[
+            { id: "overview", label: "概览" },
+            { id: "config", label: "配置详情" },
+          ]}
+          value={tab}
+          onChange={setTab}
+          label="插件详情"
+        />
+      }
     >
-      <Tabs
-        tabs={[
-          { id: "overview", label: "概览" },
-          { id: "config", label: "配置详情" },
-        ]}
-        value={tab}
-        onChange={setTab}
-        label="插件详情"
-      />
       <div role="tabpanel" className="insp-body">
         {tab === "overview" ? (
           <Overview plugin={plugin} variants={variants} />

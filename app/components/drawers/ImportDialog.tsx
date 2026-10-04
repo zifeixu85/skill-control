@@ -4,6 +4,7 @@ import { useMemo, useState, type DragEvent } from "react";
 import { refreshAfterWrite } from "../../hooks/refresh";
 import { noop, useEscape } from "../../hooks/useEscape";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
+import { Scrim } from "../ui/Scrim";
 import { api, assetUrl, errorMessage } from "../../lib/api";
 import { applyFailureMessage, classifyApplyError } from "../../lib/plan-flow";
 import { formatBytes } from "../../lib/format";
@@ -111,7 +112,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <div className="scrim">
+    <Scrim onDismiss={onClose} busy={busy}>
       <div className={`sheet ${imported ? "wide" : ""}`} role="dialog" aria-modal="true" aria-labelledby="import-title" ref={ref} tabIndex={-1}>
         <h2 id="import-title">导入技能</h2>
         {step.name === "pick" ? (
@@ -216,6 +217,6 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
           </span>
         </div>
       </div>
-    </div>
+    </Scrim>
   );
 }

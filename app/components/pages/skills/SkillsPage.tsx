@@ -94,7 +94,7 @@ export function SkillsPage() {
   const shown = list.slice(0, limit);
   const pendingAgent = pending && selected && pending.skillId === selected.id ? pending.agentId : null;
 
-  useEscape(Boolean(selected), () => nav.selectSkill(null));
+  // The inspector handles its own Esc and outside presses (PanelShell); this layer sits on top.
   useEscape(Boolean(pendingAgent), () => setPending(null));
 
   // Arriving from another page with a skill to show: bring its row into view once.

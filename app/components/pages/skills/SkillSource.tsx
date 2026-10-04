@@ -24,7 +24,7 @@ export function SkillSource({ view }: { view: SkillView }) {
           <StatusTag unit={unit} />
           <VersionLine unit={unit} />
         </div>
-        <button type="button" className={`btn sm ${attention ? "primary" : ""}`} onClick={() => openDrawer({ kind: "update", id: unit.unitKey })}>
+        <button type="button" className={`btn sm ${attention ? "primary" : ""}`} data-detail-trigger="" onClick={() => openDrawer({ kind: "update", id: unit.unitKey })}>
           {attention ? "有新版本，去看看" : "查看来源"}
         </button>
       </div>

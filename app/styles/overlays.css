@@ -98,7 +98,7 @@
   box-shadow: var(--shadow-lg);
   border-left: 1px solid var(--line);
   z-index: 15;
-  overflow: auto;
+  overflow: hidden;
   animation: slide 0.22s var(--ease) both;
   transition: width 0.22s var(--ease);
 }

@@ -12,6 +12,7 @@ import { useData } from "../../providers/DataProvider";
 import { useNav } from "../../providers/NavProvider";
 import { AgentAvatar } from "../../ui/Avatar";
 import { EmptyState, Loading, SectionHeading, Segmented, TopBar } from "../../ui/basics";
+import { ItemText } from "../../ui/Item";
 import { IndexProgress } from "./IndexProgress";
 import { UsageAgentCard } from "./UsageAgentCard";
 
@@ -46,15 +47,21 @@ function TopSkillsTable({ skills, agentIds }: { skills: TopSkill[]; agentIds: st
             const view = byName.get(skill.name.toLowerCase()) || byName.get(shortName.toLowerCase());
             return (
               <tr key={skill.name}>
-                <th scope="row">
-                  {view ? (
-                    <button type="button" className="link-btn" onClick={() => go("skills", { skillId: view.id })}>
-                      {view.title}
-                    </button>
-                  ) : (
-                    <span>{skill.name}</span>
-                  )}
-                  {view && view.title !== skill.name ? <small className="tech"> {skill.name}</small> : null}
+                <th scope="row" className="cell-main">
+                  <ItemText
+                    title={
+                      view ? (
+                        <button type="button" className="link-btn" onClick={() => go("skills", { skillId: view.id })}>
+                          {view.title}
+                        </button>
+                      ) : (
+                        skill.name
+                      )
+                    }
+                    titleText={view?.title || skill.name}
+                    meta={view && view.title !== skill.name ? skill.name : null}
+                    mono
+                  />
                 </th>
                 {agentIds.map((agentId) => {
                   const confidence = skill.confidenceByAgent[agentId];

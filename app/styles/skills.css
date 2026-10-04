@@ -96,6 +96,8 @@ body.resizing .inspector-resizer::after {
 
 .table {
   --slot-w: 118px;
+  --tag-w: 78px;
+  --use-w: 84px;
   background: var(--panel);
   border-radius: var(--r-card);
   box-shadow: 0 0 0 1px var(--line-2);
@@ -103,25 +105,50 @@ body.resizing .inspector-resizer::after {
 .thead,
 .row {
   display: grid;
-  grid-template-columns: minmax(240px, 1fr) var(--cols) 88px;
+  grid-template-columns: minmax(220px, 1fr) var(--tag-w) var(--cols) var(--use-w);
   align-items: center;
 }
-/* A narrow list first drops the description line and slims the Agent columns, keeping names readable. */
+/* A narrow list first slims the Agent columns, then drops the description line; names stay readable. */
 @container (max-width: 720px) {
   .table {
-    --slot-w: 64px;
+    --slot-w: 60px;
+    --use-w: 76px;
   }
   .thead .agname {
     display: none;
   }
 }
-@container (max-width: 620px) {
-  .row .desc {
+@container (max-width: 560px) {
+  .row .it-desc {
     display: none;
   }
   .thead,
   .row {
-    grid-template-columns: minmax(200px, 1fr) var(--cols) 64px;
+    grid-template-columns: minmax(150px, 1fr) var(--tag-w) var(--cols) var(--use-w);
+  }
+}
+/* Very narrow (inspector open on a small window): the tag column folds away; a copy count
+   still shows on the Agent slot. Cells stay in the grid so columns don't shift. */
+@container (max-width: 440px) {
+  .table {
+    --tag-w: 0px;
+    --slot-w: 46px;
+    --use-w: 66px;
+  }
+  .row > .cell-tags,
+  .thead > .th-tags {
+    visibility: hidden;
+    padding: 0;
+    overflow: hidden;
+  }
+  .thead,
+  .row {
+    grid-template-columns: minmax(130px, 1fr) var(--tag-w) var(--cols) var(--use-w);
+  }
+  .row > div,
+  .thead > div {
+    padding-left: 10px;
+    padding-right: 10px;
   }
 }
 .thead {
@@ -151,6 +178,10 @@ body.resizing .inspector-resizer::after {
   justify-content: flex-end;
   padding-right: 14px;
 }
+.thead > .th-tags {
+  justify-content: flex-start;
+  padding-left: 4px;
+}
 .row {
   border-bottom: 1px solid var(--line-2);
   cursor: pointer;
@@ -173,40 +204,17 @@ body.resizing .inspector-resizer::after {
   padding: 10px 14px;
   min-width: 0;
 }
-.row .title {
-  font-weight: 600;
-  font-size: 14px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-}
-.row .title-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.row .tech {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  color: var(--ink-3);
-}
-.row .desc {
-  font-size: 12.5px;
-  color: var(--ink-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.row > .cell-tags {
+  padding: 10px 4px;
 }
 .row .slotcell {
   display: flex;
   justify-content: center;
+  padding-left: 4px;
+  padding-right: 4px;
 }
-.row .usage {
-  text-align: right;
-  font-size: 12.5px;
-  color: var(--ink-2);
-  font-variant-numeric: tabular-nums;
+.row > .usage {
+  padding-left: 4px;
 }
 .none {
   color: var(--ink-3);
@@ -336,7 +344,7 @@ body.resizing .inspector-resizer::after {
   }
   .thead,
   .row {
-    grid-template-columns: minmax(0, 1fr) repeat(var(--n), 48px);
+    grid-template-columns: minmax(0, 1fr) 64px repeat(var(--n), 48px);
   }
   .thead .agname {
     display: none;

@@ -8,7 +8,9 @@ import { mergePlugins, PLUGIN_SOURCE_NOTES, pluginInside, pluginState, type Plug
 import { persistentStore } from "../../lib/storage";
 import { useData } from "../providers/DataProvider";
 import { useNav } from "../providers/NavProvider";
+import type { ChipSpec } from "../../lib/chips";
 import { AgentAvatar, PluginLogo } from "../ui/Avatar";
+import { ChipRow, ItemText } from "../ui/Item";
 import { EmptyState, Loading, SectionHeading, Segmented, TopBar } from "../ui/basics";
 
 export const pluginAgentStore = persistentStore<string>("plugins-agent", "codex", (value) => /^[a-z0-9._-]{1,64}$/i.test(value));
@@ -16,34 +18,22 @@ export const pluginAgentStore = persistentStore<string>("plugins-agent", "codex"
 export function PluginCard({ plugin }: { plugin: PluginView }) {
   const { openDrawer } = useNav();
   const state = pluginState(plugin);
-  const inside = pluginInside(plugin);
+  const chips: ChipSpec[] = [...pluginInside(plugin)];
+  if (plugin.scope === "local" || plugin.scope === "project") {
+    chips.unshift({ id: "project", kind: "status", tone: "warn", text: `仅项目 ${baseName(plugin.projectPath) || "内"}` });
+  }
   return (
-    <button type="button" className="pcard" onClick={() => openDrawer({ kind: "plugin", id: plugin.key })}>
-      <div className="pcard-h">
+    <button type="button" className="pcard card" data-detail-trigger="" onClick={() => openDrawer({ kind: "plugin", id: plugin.key })}>
+      <div className="card-head">
         <PluginLogo plugin={plugin} />
-        <div className="pcard-name">
-          <b>{plugin.displayName || plugin.name}</b>
-          <span>{[plugin.developerName, plugin.category].filter(Boolean).join(" · ") || plugin.marketplace}</span>
-        </div>
-        <span className="state">
-          <span className={`tag ${state.tone === "ok" ? "" : state.tone}`}>{state.label}</span>
-        </span>
+        <ItemText
+          title={plugin.displayName || plugin.name}
+          meta={[plugin.developerName, plugin.category].filter(Boolean).join(" · ") || plugin.marketplace}
+        />
+        <span className={`tag card-status ${state.tone === "ok" ? "" : state.tone}`}>{state.label}</span>
       </div>
-      <p>{plugin.shortDescription || plugin.longDescription || "没有介绍"}</p>
-      <div className="inside">
-        {inside.length ? (
-          inside.map((tag) => (
-            <span key={tag.label} className={`tag ${tag.tone}`}>
-              {tag.label}
-            </span>
-          ))
-        ) : (
-          <span className="tag mute">只有配置</span>
-        )}
-        {plugin.scope === "local" || plugin.scope === "project" ? (
-          <span className="tag warn">仅项目 {baseName(plugin.projectPath) || "内"}</span>
-        ) : null}
-      </div>
+      <p className="card-desc">{plugin.shortDescription || plugin.longDescription || "没有介绍"}</p>
+      <ChipRow className="card-foot" chips={chips} max={4} />
     </button>
   );
 }

@@ -62,23 +62,28 @@ function FindingRow({ finding }: { finding: HealthFinding }) {
       <span className={`sev ${TONE[finding.severity]}`} role="img" aria-label={SEVERITY_LABELS[finding.severity]}>
         {finding.severity === "info" ? <InfoIcon /> : <WarnIcon />}
       </span>
+      {/* title / explanation / Agent + path / 建议 — each on its own line */}
       <div className="finding-main">
-        <b>{finding.title}</b>
-        {finding.detail ? <p>{finding.detail}</p> : null}
-        <div className="finding-meta">
-          {finding.agentId ? (
-            <span className="meta-agent">
-              <AgentAvatar id={finding.agentId} size="xs" />
-              {agentName(finding.agentId)}
-            </span>
-          ) : null}
-          {finding.path ? <code title={finding.path}>{finding.path}</code> : null}
-          {finding.fix ? <span className="fix-label">建议：{finding.fix.label}</span> : null}
+        <div className="it-title" title={finding.title}>
+          {finding.title}
         </div>
+        {finding.detail ? <div className="it-desc l2">{finding.detail}</div> : null}
+        {finding.agentId || finding.path ? (
+          <div className="finding-where">
+            {finding.agentId ? (
+              <span className="meta-agent">
+                <AgentAvatar id={finding.agentId} size="xs" />
+                {agentName(finding.agentId)}
+              </span>
+            ) : null}
+            {finding.path ? <code title={finding.path}>{finding.path}</code> : null}
+          </div>
+        ) : null}
+        {finding.fix ? <div className="finding-fix">建议：{finding.fix.label}</div> : null}
       </div>
-      <div className="finding-acts">
+      <div className="finding-acts it-acts">
         {action ? (
-          <button type="button" className="btn sm" onClick={action.run}>
+          <button type="button" className="btn sm" data-detail-trigger="" onClick={action.run}>
             {action.label}
           </button>
         ) : null}

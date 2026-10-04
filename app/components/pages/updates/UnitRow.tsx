@@ -7,9 +7,11 @@ import { api } from "../../../lib/api";
 import { isLibraryPath } from "../../../lib/library";
 import { formatRelative } from "../../../lib/format";
 import { shortRevision, STATUS_LABELS, STATUS_TONES, type UpdateUnit } from "../../../lib/updates";
+import type { ChipSpec } from "../../../lib/chips";
 import { useData } from "../../providers/DataProvider";
 import { useNav } from "../../providers/NavProvider";
 import { AgentAvatar } from "../../ui/Avatar";
+import { ItemText, TagStack } from "../../ui/Item";
 
 export function StatusTag({ unit }: { unit: UpdateUnit }) {
   const tone = STATUS_TONES[unit.status];
@@ -39,9 +41,8 @@ export function VersionLine({ unit }: { unit: UpdateUnit }) {
   );
 }
 
-/** One update unit (a source shared by one or more installed copies). */
-/** "库内一份，N 个 Agent 共用" when the unit's copy lives in ~/.agents/skills. */
-export function LibraryShare({ unit }: { unit: UpdateUnit }) {
+/** "库内一份，N 个 Agent 共用" when the unit's copy lives in ~/.agents/skills, else null. */
+export function useLibraryShare(unit: UpdateUnit): string | null {
   const library = useResource("library", () => api.library());
   const root = library.data?.root || "~/.agents/skills";
   const inLibrary = unit.instances.find((instance) => isLibraryPath(instance.path, root));
@@ -51,13 +52,30 @@ export function LibraryShare({ unit }: { unit: UpdateUnit }) {
   const viewers = entry
     ? Object.values(entry.fanout).filter((fanout) => fanout.state === "visible").length
     : new Set(unit.instances.map((instance) => instance.agentId)).size;
-  return <span className="tag info">库内一份，{viewers} 个 Agent 共用</span>;
+  return `库内一份，${viewers} 个 Agent 共用`;
 }
 
+export function LibraryShare({ unit }: { unit: UpdateUnit }) {
+  const text = useLibraryShare(unit);
+  return text ? <span className="tag info">{text}</span> : null;
+}
+
+/** Status first, then how the copy is shared and anything stale about it. */
+function unitChips(unit: UpdateUnit, share: string | null): ChipSpec[] {
+  const tone = STATUS_TONES[unit.status];
+  const chips: ChipSpec[] = [{ id: "status", kind: "status", text: STATUS_LABELS[unit.status], tone: tone === "ok" ? "ok" : (tone as ChipSpec["tone"]) }];
+  if (share) chips.push({ id: "share", kind: "kind", tone: "info", text: share });
+  if (unit.lockDrift) chips.push({ id: "lock", kind: "kind", text: "锁记录落后" });
+  if (unit.stale) chips.push({ id: "stale", kind: "kind", text: "结果可能过期" });
+  return chips;
+}
+
+/** One update unit: title / source · versions / explanation | tags | where + checked | action. */
 export function UnitRow({ unit }: { unit: UpdateUnit }) {
   const { agentName } = useData();
   const { openDrawer } = useNav();
   const now = useNow();
+  const share = useLibraryShare(unit);
   const open = () => openDrawer({ kind: "update", id: unit.unitKey });
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
@@ -66,35 +84,41 @@ export function UnitRow({ unit }: { unit: UpdateUnit }) {
     }
   };
   const agents = [...new Set(unit.instances.map((instance) => instance.agentId))];
+  const actionable = unit.action.kind !== "none" && (unit.status === "update-available" || unit.status === "conflict" || unit.action.kind === "guide");
   return (
-    <div className="urow" role="button" tabIndex={0} onClick={open} onKeyDown={onKeyDown} aria-label={`${unit.title}，${STATUS_LABELS[unit.status]}`}>
-      <div className="urow-main">
-        <div className="urow-title">
-          <b>{unit.title}</b>
-          <StatusTag unit={unit} />
-          {unit.lockDrift ? <span className="tag mute">锁记录落后</span> : null}
-          {unit.stale ? <span className="tag mute">结果可能过期</span> : null}
-          <LibraryShare unit={unit} />
-        </div>
-        <div className="urow-meta">
-          <span>{unit.sourceLabel || unit.sourceType}</span>
-          <VersionLine unit={unit} />
-          {unit.error ? <span className="danger-text">{unit.error.message}</span> : null}
-          {!unit.error && unit.reason ? <span>{unit.reason}</span> : null}
-        </div>
+    <div
+      className="urow"
+      role="button"
+      tabIndex={0}
+      data-detail-trigger=""
+      onClick={open}
+      onKeyDown={onKeyDown}
+      aria-label={`${unit.title}，${STATUS_LABELS[unit.status]}`}
+    >
+      <ItemText
+        title={unit.title}
+        meta={
+          <>
+            {unit.sourceLabel || unit.sourceType}
+            {unit.current || unit.latest ? <span className="sep">·</span> : null}
+            <VersionLine unit={unit} />
+          </>
+        }
+        desc={unit.error ? <span className="danger-text">{unit.error.message}</span> : unit.reason || null}
+      />
+      <div className="urow-tags">
+        <TagStack chips={unitChips(unit, share)} />
       </div>
-      <div className="urow-agents" title={unit.instances.map((instance) => `${agentName(instance.agentId)}：${instance.path}`).join("\n")}>
-        {agents.slice(0, 4).map((agentId) => (
-          <AgentAvatar key={agentId} id={agentId} size="sm" />
-        ))}
-        {unit.instances.length ? <span className="muted small">{unit.instances.length} 处</span> : null}
+      <div className="urow-where metric" title={unit.instances.map((instance) => `${agentName(instance.agentId)}：${instance.path}`).join("\n")}>
+        <span className="urow-agents">
+          {agents.slice(0, 4).map((agentId) => (
+            <AgentAvatar key={agentId} id={agentId} size="xs" />
+          ))}
+          {unit.instances.length ? <span>{unit.instances.length} 处</span> : null}
+        </span>
+        {unit.checkedAt && now ? <small>{formatRelative(unit.checkedAt, now)}检查</small> : null}
       </div>
-      <div className="urow-side">
-        {unit.checkedAt && now ? <span className="muted small">{formatRelative(unit.checkedAt, now)}检查</span> : null}
-        {unit.action.kind !== "none" && (unit.status === "update-available" || unit.status === "conflict" || unit.action.kind === "guide") ? (
-          <span className="btn sm">{actionButtonLabel(unit)}</span>
-        ) : null}
-      </div>
+      <div className="it-acts">{actionable ? <span className="btn sm">{actionButtonLabel(unit)}</span> : null}</div>
     </div>
   );
 }

@@ -155,17 +155,19 @@ export function ExpertDrawer({ capabilityId, onClose }: { capabilityId: string; 
       subtitle={capability.profession || `${capability.productName} · ${capabilityKindLabel(capability)}`}
       onClose={onClose}
       wide={tab !== "overview"}
+      tabs={
+        <Tabs
+          tabs={[
+            { id: "overview", label: "概览" },
+            { id: "files", label: "文件" },
+            { id: "config", label: "配置详情" },
+          ]}
+          value={tab}
+          onChange={setTab}
+          label="专家详情"
+        />
+      }
     >
-      <Tabs
-        tabs={[
-          { id: "overview", label: "概览" },
-          { id: "files", label: "文件" },
-          { id: "config", label: "配置详情" },
-        ]}
-        value={tab}
-        onChange={setTab}
-        label="专家详情"
-      />
       <div role="tabpanel" className="insp-body">
         {tab === "overview" ? <Overview capability={capability} /> : null}
         {tab === "files" ? <FileBrowser source={source} /> : null}

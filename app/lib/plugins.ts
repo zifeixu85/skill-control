@@ -1,3 +1,4 @@
+import { countChip, type ChipSpec } from "./chips";
 import type { Connector, Plugin, PluginComponents } from "./types";
 
 /** Components with every list present, whatever the scanner returned. */
@@ -63,22 +64,19 @@ export function pluginState(plugin: Plugin): { label: string; tone: PluginStateT
   return { label: "未确认启用", tone: "mute" };
 }
 
-export interface InsideTag {
-  label: string;
-  tone: "mute" | "info";
-}
-
-export function pluginInside(plugin: Plugin): InsideTag[] {
+/** What a plugin brings, as card chips: kinds (连接器, MCP, Hook) then counts. */
+export function pluginInside(plugin: Plugin): ChipSpec[] {
   const components = componentsOf(plugin);
-  const tags: InsideTag[] = [];
-  if (components.skills.length) tags.push({ label: `${components.skills.length} 个技能`, tone: "mute" });
-  if (components.apps.length) tags.push({ label: "连接器", tone: "info" });
-  if (components.mcpServers.length) tags.push({ label: "MCP", tone: "mute" });
-  if (components.hooks) tags.push({ label: "Hook", tone: "mute" });
-  if (components.agents.length) tags.push({ label: `${components.agents.length} 个子代理`, tone: "mute" });
-  if (components.commands.length) tags.push({ label: `${components.commands.length} 个命令`, tone: "mute" });
-  if (components.channels.length) tags.push({ label: `${components.channels.length} 个频道`, tone: "mute" });
-  return tags;
+  const chips: ChipSpec[] = [];
+  if (components.apps.length) chips.push({ id: "apps", kind: "kind", tone: "info", text: "连接器" });
+  if (components.mcpServers.length) chips.push({ id: "mcp", kind: "kind", text: "MCP" });
+  if (components.hooks) chips.push({ id: "hooks", kind: "kind", text: "Hook" });
+  if (components.skills.length) chips.push(countChip("skills", components.skills.length, " 个技能"));
+  if (components.agents.length) chips.push(countChip("agents", components.agents.length, " 个子代理"));
+  if (components.commands.length) chips.push(countChip("commands", components.commands.length, " 个命令"));
+  if (components.channels.length) chips.push(countChip("channels", components.channels.length, " 个频道"));
+  if (!chips.length) chips.push({ id: "config-only", kind: "kind", text: "只有配置" });
+  return chips;
 }
 
 export function pluginConnectors(plugin: Plugin, connectors: Connector[]): Connector[] {

@@ -12,7 +12,7 @@ import { Switch } from "../../ui/basics";
 import { UninstallDialog } from "../../drawers/UninstallDialog";
 import { InstallPlan } from "./InstallPlan";
 import { LibraryActions } from "./LibraryActions";
-import { SkillActions, useReveal } from "./SkillActions";
+import { useReveal } from "./SkillActions";
 import { SkillSource } from "./SkillSource";
 import { SkillUsage } from "./SkillUsage";
 
@@ -166,7 +166,6 @@ export function SkillOverview({
           <span>{view.skill.fileCount} 个文件 · 查看 SKILL.md 和全部文件</span>
         </button>
       </section>
-      <SkillActions view={view} />
       {removing ? (
         <UninstallDialog skillId={view.id} skillTitle={view.title} agentId={removing} onClose={() => setRemoving(null)} />
       ) : null}

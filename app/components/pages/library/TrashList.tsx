@@ -38,25 +38,29 @@ function TrashRow({ item, now }: { item: TrashEntry; now: number }) {
   };
 
   return (
-    <div aria-busy={busy}>
-      <span className="trash-main">
-        <b>{item.name}</b>
-        <code title={item.originalPath}>{item.originalPath}</code>
+    <div className="lrow" aria-busy={busy}>
+      <div className="it-main">
+        <div className="it-title" title={item.name}>
+          {item.name}
+        </div>
+        <div className="it-meta mono" title={item.originalPath}>
+          {item.originalPath}
+        </div>
+        <div className="it-desc">
+          {TRASH_SOURCE_LABELS[item.source] || item.source}
+          {item.agentId ? ` · ${agentName(item.agentId)}` : ""}
+          {item.kind === "link" ? " · 链接" : ""}
+          {item.links.length ? ` · 连同 ${item.links.length} 个链接` : ""}
+        </div>
         {error ? (
-          <span className="form-error small" role="alert">
+          <div className="form-error small" role="alert">
             {error}
-          </span>
+          </div>
         ) : null}
-      </span>
-      <em>
-        {TRASH_SOURCE_LABELS[item.source] || item.source}
-        {item.agentId ? ` · ${agentName(item.agentId)}` : ""}
-        {item.kind === "link" ? " · 链接" : ""}
-        {item.links.length ? ` · 连同 ${item.links.length} 个链接` : ""}
-      </em>
-      <em>{item.removedAt && now ? formatRelative(item.removedAt, now) : ""}</em>
+      </div>
+      <div className="metric">{item.removedAt && now ? formatRelative(item.removedAt, now) : ""}</div>
       {confirming ? (
-        <span className="inline-confirm">
+        <span className="it-acts">
           <button type="button" className="btn sm primary" disabled={busy} onClick={() => void restore()}>
             {busy ? "正在恢复…" : "确认放回"}
           </button>
@@ -65,9 +69,11 @@ function TrashRow({ item, now }: { item: TrashEntry; now: number }) {
           </button>
         </span>
       ) : (
-        <button type="button" className="btn sm" onClick={() => setConfirming(true)} title={`放回 ${item.originalPath}`}>
-          恢复
-        </button>
+        <span className="it-acts">
+          <button type="button" className="btn sm" onClick={() => setConfirming(true)} title={`放回 ${item.originalPath}`}>
+            恢复
+          </button>
+        </span>
       )}
     </div>
   );
@@ -88,7 +94,7 @@ export function TrashList() {
   if (!trash.data) return <p className="muted small">正在读取回收站…</p>;
   if (!trash.data.length) return <p className="muted small">回收站是空的。</p>;
   return (
-    <div className="copies trash">
+    <div className="lrows">
       {trash.data.map((item) => (
         <TrashRow key={item.trashId} item={item} now={now} />
       ))}
