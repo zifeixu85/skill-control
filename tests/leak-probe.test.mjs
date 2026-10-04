@@ -23,6 +23,7 @@ import {
   createQClawHome,
 } from "./fixtures/claw-hermes.mjs";
 import { createAgentFilesHome, createTranscriptsHome } from "./fixtures/insights.mjs";
+import { createLarkCliHome, createLibraryHome } from "./fixtures/library.mjs";
 import { createUpdatesHome } from "./fixtures/updates.mjs";
 import { startTestServer } from "./fixtures/server.mjs";
 import { writeFixtureFile } from "./fixtures/smartorder.mjs";
@@ -308,6 +309,44 @@ test("update routes: offline checks, plans need confirmation, nothing leaks", { 
   assert.equal(crossSite.status, 403);
   const foreign = await request("/api/updates/check", { method: "POST", body: "{}", headers: { Origin: "https://evil.example.test" } });
   assert.equal(foreign.status, 403);
+});
+
+test("library and CLI tool routes: plans, confirmed writes in the sandbox, nothing leaks", { timeout: 60_000 }, async (context) => {
+  const home = await mkdtemp(path.join(tmpdir(), "leak-library-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  await createLibraryHome(home);
+  await createLarkCliHome(home);
+  const { request } = await startTestServer(context, home);
+  const bodies = [];
+  const call = async (label, pathname, options = {}) => {
+    const response = await request(pathname, options);
+    const body = await response.text();
+    bodies.push({ label, body });
+    return { status: response.status, json: JSON.parse(body) };
+  };
+  const post = (label, pathname, payload, headers = {}) => call(label, pathname, { method: "POST", body: JSON.stringify(payload), headers });
+
+  const library = await call("library", "/api/library");
+  assert.equal(library.status, 200);
+  assert.ok(library.json.entries.length >= 6);
+  const tools = await call("cli-tools", "/api/cli-tools");
+  assert.equal(tools.json.tools[0].id, "lark-cli");
+  const plan = await post("library:plan", "/api/library/plan", { action: "batch" });
+  assert.equal(plan.status, 200);
+  assert.ok(plan.json.items.some((item) => item.id === "adopt-link:rev-1"));
+  assert.equal((await post("library:apply:no-header", "/api/library/apply", { planId: plan.json.planId, confirm: true })).status, 400);
+  const applied = await post("library:apply", "/api/library/apply", { planId: plan.json.planId, confirm: true }, { "x-skill-manager-confirm": "yes" });
+  assert.equal(applied.status, 200);
+  assert.ok(applied.json.results.some((item) => item.id === "adopt-link:rev-1" && item.status === "applied"));
+  const guide = await post("cli:plan:guide", "/api/cli-tools/plan", { toolId: "lark-cli", fixId: "workspace-binding" });
+  assert.deepEqual([guide.status, guide.json.kind], [200, "guide"]);
+  await call("health", "/api/health-report?force=1");
+  assert.deepEqual(bodies.filter((item) => /ZZ9/u.test(item.body)).map((item) => item.label), []);
+  assert.deepEqual(bodies.filter((item) => item.body.includes(home)).map((item) => item.label), []);
+  for (const pathname of ["/api/library/plan", "/api/cli-tools/apply"]) {
+    assert.equal((await request(pathname, { method: "POST", body: "{}", headers: { "Sec-Fetch-Site": "cross-site" } })).status, 403);
+  }
+  assert.equal((await request("/api/library", { headers: { Origin: "https://evil.example.test" } })).status, 403);
 });
 
 test("refuses cross-site reads of configuration and assets", async (context) => {

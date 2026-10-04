@@ -162,3 +162,37 @@ test("health report adds cached update results and Codex temp clone leftovers", 
   assert.match(leftovers.title, /残留 2 个，2 MB/u);
   assert.equal(leftovers.path, "~/.codex/.tmp");
 });
+
+test("health report adds library drift, external links and CLI readiness findings", async (context) => {
+  const home = await mkdtemp(path.join(tmpdir(), "health-library-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  const report = await buildHealthReport({
+    scan: { agents: [], skills: [] },
+    library: {
+      root: "~/.agents/skills",
+      issues: [
+        { id: "library-external-link", severity: "warn", title: "库中有 2 个链接指向库外", detail: "OpenClaw 会隐藏。", names: ["rev-1", "cindy"] },
+        { id: "library-drift", severity: "info", agentId: "claude", title: "Claude Code 有 3 个与库相同的独立副本", detail: "可改为链接。", names: ["a", "b", "c"] },
+      ],
+    },
+    cliTools: [{
+      name: "飞书 CLI（lark-cli）",
+      binaries: [{ path: "~/.nvm/x/lark-cli", version: "1.0.97" }, { path: "~/.hermes/node/bin/lark-cli", version: "1.0.56" }],
+      agents: [
+        { agentId: "openclaw", pathSource: "图形界面默认 PATH", resolves: null, workspace: "openclaw", workspaceConfigured: false },
+        { agentId: "codex", pathSource: "shell snapshot", resolves: { path: "~/.nvm/x/lark-cli", version: "1.0.97" }, workspace: "local", workspaceConfigured: true },
+      ],
+    }],
+    homeDirectory: home,
+    homes: [home],
+    searchDirectories: [],
+    env: {},
+  });
+  const categories = report.categories;
+  assert.equal(categories["library-external-link"], 1);
+  assert.equal(categories["library-drift"], 1);
+  assert.equal(categories["cli-version-skew"], 1);
+  assert.equal(categories["cli-not-on-agent-path"], 1);
+  assert.equal(categories["cli-workspace-unconfigured"], 1);
+  assert.match(report.findings.find((finding) => finding.category === "cli-version-skew").detail, /1\.0\.97.*1\.0\.56/u);
+});

@@ -1,6 +1,6 @@
 # 统一技能库、更新检测与 CLI 工具 / Library, Updates and CLI Tools
 
-状态：设计已定，待实现。日期：2026-10-04。依据：本机只读实测 + 官方文档 + 9 个同类工具源码调研（vercel-labs/skills、cc-switch、xingkongliang/skills-manager、runkids/skillshare、qufei1993/skills-hub、HarnessKit、getsentry/dotagents、openskills、skillport）。
+状态：第 1–3 节已实现（接口与实现细节见 `docs/ARCHITECTURE.md`“更新检测与执行”“统一技能库与 CLI 工具卡片”）。未实现：WorkBuddy `skillOverrides` 与 Trae `disabledSkills` 停用开关（格式未核实，只给指引）、含注释的 OpenClaw 配置自动编辑、项目级 `skills-lock.json` 扫描。日期：2026-10-04。依据：本机只读实测 + 官方文档 + 9 个同类工具源码调研（vercel-labs/skills、cc-switch、xingkongliang/skills-manager、runkids/skillshare、qufei1993/skills-hub、HarnessKit、getsentry/dotagents、openskills、skillport）。
 
 ## 1. 统一技能库
 

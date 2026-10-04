@@ -98,6 +98,14 @@ Electron renderer 使用 `contextIsolation: true`、`nodeIntegration: false` 和
 | `server/update-check.mjs` | 各来源的检查器与三方判定（本地 ↔ 基线 ↔ 上游），离线与限流时保留上次结果 |
 | `server/update-apply.mjs` | 更新执行：计划（10 分钟有效、单次）→ 确认 → 下载校验 → 备份 → 原子替换 → 改写锁；委托宿主 CLI 执行并返回脱敏输出 |
 | `server/update-service.mjs` | 更新接口的状态、缓存文件、后台检查任务与公开视图 |
+| `server/home-guard.mjs` | 写入保护：沙箱或测试环境中拒绝写入账户真实主目录 |
+| `server/fs-links.mjs` | `lstat` 分类、内容哈希、相对链接；Windows 依次尝试 symlink → junction → 复制 |
+| `server/library-agents.mjs` | 各 Agent 的分发档位（原生读取 / 配置目录 / 逐技能链接）与停用开关读取 |
+| `server/library.mjs` | 技能库只读视图：条目类型、哈希、来源、按各产品规则的可见性模拟、问题列表 |
+| `server/library-plan.mjs` / `library-ops.mjs` | 收编、链接、取消链接、停用、移除与批量整理的计划；可回滚的文件操作；回收站与恢复 |
+| `server/library-switches.mjs` / `library-lock.mjs` | 各 Agent 原生停用开关的写入；`library-lock.json`（键排序） |
+| `server/library-service.mjs` / `manage-routes.mjs` | 技能库与 CLI 工具的接口 |
+| `server/cli-tools.mjs` / `cli-fixes.mjs` | CLI 工具卡片的检测（描述表驱动）与修复计划 |
 | `scripts/local-runner.mjs` | 源码模式下同时管理 Web 与本地服务 |
 | `desktop/main.mjs` | Electron 生命周期、本地服务、窗口和导航安全 |
 | `desktop/preload.cjs` | 受控的 renderer-to-main API |
@@ -715,7 +723,8 @@ Hermes：静态解析的全部工具集（`enabled` 表示配置启用或被其�
     category: "broken-link" | "missing-skill-md" | "frontmatter" | "name-mismatch" | "oversize" | "differing-copies"
             | "hidden-by-product" | "shadowed" | "disabled" | "archived" | "missing-bin" | "missing-env" | "nvm-only"
             | "mcp-command-missing" | "mcp-literal-secret" | "plugin-state" | "shared-root"
-            | "update-available" | "locally-modified" | "lock-drift" | "codex-tmp-leftovers",
+            | "update-available" | "locally-modified" | "lock-drift" | "codex-tmp-leftovers"
+            | "library-drift" | "library-external-link" | "cli-version-skew" | "cli-workspace-unconfigured" | "cli-not-on-agent-path",
     title: string, detail: string,            // 中文
     agentId?: string, skillName?: string, path?: string,   // path 为 "~/…"
     fix: { kind: "none" | "open" | "reinstall" | "remove-link" | "enable" | "configure", label: string },
@@ -850,6 +859,117 @@ delegate：`{ ..., kind: "delegate", ok, commands: [{ command, exitCode, stdout,
 体检报告读取缓存的更新结果（不联网），新增类别 `update-available`、`locally-modified`（只针对有来源的单元）、
 `lock-drift`，以及 `codex-tmp-leftovers`（`~/.codex/.tmp/git-*` 的数量与体积，统计有时间与条目上限）。
 
+## 统一技能库与 CLI 工具卡片
+
+设计见 `docs/LIBRARY-UPDATES-CLI.md` 第 1、3 节。
+
+**写入保护**：所有技能库与 CLI 写入先经过 `home-guard.mjs`：服务的主目录不是账户真实主目录（`os.userInfo()`，不看
+`$HOME`）时，拒绝写入真实主目录下的任何路径；测试运行器在场（`NODE_TEST_CONTEXT` 或 `SKILL_CONTROL_TEST=1`）时，
+即使配置的就是真实主目录也一律拒绝。删除一律是移动到 `~/.agent-skill-manager/backups/<时间>/` 或 `trash/`，
+从不 `rm -rf` 实体目录。
+
+**分发档位与可见性**（`library-agents.mjs`）：原生读取 = Codex、Gemini CLI、Cursor、Copilot、OpenCode、Windsurf、
+Amp、OpenClaw、QClaw；配置目录 = Hermes（`skills.external_dirs`）；逐技能相对链接 = Claude Code、Kiro、CodeBuddy、
+WorkBuddy、Trae；其余 Agent 只用自己的副本。可见性按产品规则模拟：OpenClaw/QClaw 隐藏真实路径越出根目录的
+链接，库（个人目录）覆盖自有目录里的同名副本；Codex 不合并同名技能（自有目录的同名副本标“重复”，与库条目是
+同一物理目录时不算）；Hermes 本地同名优先，内容不同则标重复；链接档位看自有目录里是否是指向库的链接；停用开关
+读取 Codex `[[skills.config]]`（`name` / `path` + `enabled = false`）、Gemini `skills.disabled`、OpenClaw/QClaw
+`skills.entries.<名称>.enabled`、Hermes `skills.disabled`。git 检出（如 gstack）与应用目录里的技能标为外部托管，
+不计算内容哈希、不搬动。
+
+`GET /api/library`
+
+```ts
+{
+  root: "~/.agents/skills", realRoot: string | null, exists: boolean,
+  owner?: { kind: "symlink", realPath, manager: string | null, appInstalled: boolean | null },
+  entries: Array<{
+    name, kind: "real" | "link-internal" | "link-external" | "broken", target?: string /* ~/… */,
+    hash: string | null /* 16 位 */, externalManaged?: "git",
+    sourceFromLocks?: { source, sourceType, file }, recorded?: { adoptedFrom, updatedAt },
+    fanout: Record<agentId, { tier: "native" | "config" | "link" | "none",
+      state: "visible" | "hidden" | "missing" | "duplicate" | "private-copy" | "none", reason: string | null, path?: string }>,
+  }>,
+  agents: Array<{ agentId, name, tier, primary, collapsed /* 非常用 Agent 默认折叠 */, notes, directories: string[] }>,
+  issues: Array<{ id: "library-external-link" | "library-broken-link" | "library-drift" | "library-owner-missing", severity, title, detail, agentId?, names? }>,
+  trash: Array<{ trashId, name, removedAt, links }>,
+}
+```
+
+涉及的 Agent：常用 Agent（未设置时用扫描得出的有效常用 Agent）、所有存在技能目录的 Agent，以及原生读取的 Agent。
+
+`POST /api/library/plan` `{ action: "adopt" | "link" | "unlink" | "disable" | "remove" | "batch", skill?, agents?, choice?, choices?: Record<itemId, choice>, from? }` →
+
+```ts
+{
+  planId: string | null, action, expiresAt?, needsChoice: number, message?,
+  summary: Record<kind, number>,
+  items: Array<{
+    id: string,               // 例如 "adopt-link:rev-1"、"dedupe:codex:x"、"conflict:claude:x"、"external:gstack"
+    title, kind: "adopt" | "link" | "dedupe" | "conflict" | "external" | "config" | "unlink" | "disable" | "remove" | "instructions",
+    skill, agentId?, choices?: string[], choice, requiresChoice?: true,
+    steps: Array<{ type: "backup" | "move" | "stash" | "unlink" | "link" | "write" | "command", path?, from?, to?, target?, command?, diff? }>,
+  }>,
+}
+```
+
+写入前用 `lstat` 分类目标：absent / link-to-library / foreign-link / broken-link / real-dir / real-file。规则：
+- 收编（adopt）：库里指向某个 Agent 自有目录的链接 → 先备份，再把真实目录移入库（跨卷时复制 + 校验后把原目录
+  移到备份），原先指向旧位置的其他链接改为指向库的相对链接，原位置按档位处理（链接档位回链，原生读取的不留
+  链接，Hermes 未配置外部目录时回链）。Agent 独有、库里没有的技能也可单独收编。
+- 同名副本：内容相同 → 链接档位改为相对链接、原生读取的移到备份；内容不同 → 冲突，必须选择
+  `keep-library` / `use-this` / `save-as`（存为 `<名称>@<agent>`）/ `skip`，默认 `skip`；外部链接（指向 git
+  检出或应用目录）不处理。
+- 批量整理（batch）：收编全部反向链接、git 检出与应用目录里的技能标外部托管、常用 Agent 中与库相同的副本改为
+  链接或移除、冲突逐项选择；Hermes 是常用 Agent 时附加 `skills.external_dirs` 配置项（默认不选），优先运行
+  `hermes config set skills.external_dirs '<JSON 列表>'`，没有 hermes 命令时才直接编辑 YAML（先备份，注释不保留）。
+- 停用：Codex 在 `config.toml` 末尾追加 `[[skills.config]]` 块；Gemini / OpenClaw（标准 JSON 时）改 JSON；
+  OpenClaw 配置含注释时只给指引；Hermes 用 `hermes config set skills.disabled`；链接档位移除链接。
+- 移除：撤掉所有指向库的链接，把条目移到 `~/.agent-skill-manager/trash/<id>/` 并写清单。
+
+`POST /api/library/apply` `{ planId, confirm: true }` + `x-skill-manager-confirm: yes` →
+`{ planId, results: [{ id, title, status: "applied" | "failed" | "rolled-back", error?, trashId? }], backups, visibility: Record<skill, fanout>, historyEntry }`。
+每个条目是一个事务：任一步失败即按相反顺序撤销本条目已完成的步骤；全部执行后重新做一次可见性体检，预期 Agent
+看不到技能的条目自动回滚。成功后更新 `library-lock.json`（来源只读导入自 `~/.agents/.skill-lock.json`，键排序）
+并写入历史。`POST /api/library/restore` `{ trashId, confirm: true }`（同样需要确认头）→ `{ trashId, name, path, links }`。
+
+**CLI 工具卡片**：描述表（`CLI_DESCRIPTORS`）驱动，目前完整描述 lark-cli，gh、uv 只检测二进制与各 Agent 能否
+找到。版本从 npm 包的 `package.json` 读取，从不执行 CLI；只在生产环境运行 `launchctl getenv PATH` 这一个只读
+探测。各 Agent 的 PATH 来源：Codex / Claude Code / WorkBuddy 读各自最新的 shell snapshot（支持 `export PATH=…` 与
+zsh `export -T PATH path=( … )`）；Hermes 读 `~/Library/LaunchAgents/ai.hermes.gateway.plist` 的 PATH，并据
+`HERMES_HOME` 判断改用 hermes 工作区；OpenClaw / QClaw 用图形界面默认 PATH（openclaw 工作区）；Gemini / Cursor /
+OpenCode 参考最新 shell snapshot。工作区是否配置只看 `config.json` 是否存在、`appSecret` 的来源类型（如 keychain），
+从不读取密钥；Codex 处于沙箱且凭据在钥匙串、没有 `master.key.file` 时为 `needs-downgrade`。
+
+`GET /api/cli-tools` →
+
+```ts
+{ tools: Array<{
+  id: "lark-cli" | "gh" | "uv", name,
+  binaries: Array<{ path, version: string | null, kind: "npm-global" | "bundled" | "manual" | "wrapper", via: "PATH" | "nvm" | "bundled", target? }>,
+  latest: string | null, versionSkew: boolean,
+  agents: Array<{
+    agentId, pathSource: string, resolves: { path, version } | null,
+    // 仅 lark-cli：
+    workspace?: "local" | "hermes" | "openclaw", workspaceConfigured?: boolean, secretSource?: string | null,
+    keychainReachable?: "yes" | "needs-downgrade" | "unknown", skill?: { name, inLibrary, visible },
+    allowRule?: "present" | "missing" | "n/a", sandboxNetwork?: "ok" | "blocked" | "n/a", plist?: string,
+  }>,
+  fixes: Array<{ id: "wrapper" | "allow-rules" | "hermes-path" | "workspace-binding" | "keychain-downgrade", label, kind: "self" | "guide", applicable, reason?, instructions? }>,
+}> }
+```
+
+`POST /api/cli-tools/plan` `{ toolId, fixId, agents? }` → `{ planId, kind: "self", steps: [{ type: "write", path, backup, diff }], notes, skipped, expiresAt }`
+或 `{ planId: null, kind: "guide" | "none", instructions?, message? }`；`POST /api/cli-tools/apply` `{ planId, confirm: true }` +
+确认头 → `{ changed: [{ path, backup }], historyEntry }`。写入的修复只有两项：`~/.local/bin/lark-cli` 启动脚本
+（`#!/bin/sh` + `exec "<原生程序真实路径>" "$@"`，已有文件先备份）和放行规则（Claude `permissions.allow`
+`Bash(lark-cli *)`、Codex `~/.codex/rules/default.rules` 追加 `prefix_rule(pattern=["lark-cli"], decision="allow")`、
+Gemini `tools.allowed`、已有配置的 Cursor CLI `permissions.allow` 与 OpenCode `permission.bash`；JSON 编辑保留其他键，
+非标准 JSON 不改）。Hermes 网关 PATH、工作区绑定（`lark-cli config bind --source hermes|openclaw`）与钥匙串降级
+（`lark-cli config keychain-downgrade`）只给指引，不改 launchd 配置，不碰机器人凭据。
+
+体检报告新增 `library-drift`、`library-external-link`、`cli-version-skew`、`cli-workspace-unconfigured`、`cli-not-on-agent-path`。
+
 ## 本地服务防护（新增）
 
 - 除 Origin 检查外，所有请求的 `Host` 必须是 `127.0.0.1:<端口>`、`localhost:<端口>`
@@ -886,6 +1006,8 @@ delegate：`{ ..., kind: "delegate", ok, commands: [{ command, exitCode, stdout,
 | `GET /api/agent-icon` | 见“洞察接口 · 应用图标” |
 | `GET /api/updates`、`/api/updates/check-status`、`/api/updates/changes`；`POST /api/updates/check`、`/api/updates/plan`、`/api/updates/apply` | 见“更新检测与执行” |
 | `GET/PUT /api/config` | 新增 `updates: { useGhAuth: boolean }`（默认 false） |
+| `GET /api/library`；`POST /api/library/plan`、`/api/library/apply`、`/api/library/restore` | 见“统一技能库与 CLI 工具卡片” |
+| `GET /api/cli-tools`；`POST /api/cli-tools/plan`、`/api/cli-tools/apply` | 同上 |
 | `POST /api/sync`、`/api/import-install` | 动作新增 `realDestination`、`viaSymlink`、`reason`、`sharedWithAgentId`、`alsoVisibleTo`、`skippedLinks`；计划新增 `sharedDestinations`、`warnings` |
 
 ## 已知架构限制
