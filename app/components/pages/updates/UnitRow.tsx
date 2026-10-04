@@ -13,6 +13,12 @@ export function StatusTag({ unit }: { unit: UpdateUnit }) {
   return <span className={`tag ${tone === "ok" ? "" : tone}`}>{STATUS_LABELS[unit.status]}</span>;
 }
 
+/** Short text for the row button; long guidance stays in the drawer. */
+export function actionButtonLabel(unit: UpdateUnit): string {
+  if (unit.action.kind === "guide") return "查看步骤";
+  return unit.action.label && unit.action.label.length <= 12 ? unit.action.label : "更新";
+}
+
 export function VersionLine({ unit }: { unit: UpdateUnit }) {
   const current = shortRevision(unit.current);
   const latest = shortRevision(unit.latest);
@@ -20,7 +26,7 @@ export function VersionLine({ unit }: { unit: UpdateUnit }) {
   return (
     <span className="versions">
       <code>{current || "未知"}</code>
-      {latest && latest !== current ? (
+      {latest && latest !== current && (unit.status === "update-available" || unit.status === "conflict") ? (
         <>
           {" → "}
           <code className="latest">{latest}</code>
@@ -63,12 +69,12 @@ export function UnitRow({ unit }: { unit: UpdateUnit }) {
         {agents.slice(0, 4).map((agentId) => (
           <AgentAvatar key={agentId} id={agentId} size="sm" />
         ))}
-        <span className="muted small">{unit.instances.length} 处</span>
+        {unit.instances.length ? <span className="muted small">{unit.instances.length} 处</span> : null}
       </div>
       <div className="urow-side">
         {unit.checkedAt && now ? <span className="muted small">{formatRelative(unit.checkedAt, now)}检查</span> : null}
         {unit.action.kind !== "none" && (unit.status === "update-available" || unit.status === "conflict" || unit.action.kind === "guide") ? (
-          <span className="btn sm">{unit.action.label || "查看"}</span>
+          <span className="btn sm">{actionButtonLabel(unit)}</span>
         ) : null}
       </div>
     </div>

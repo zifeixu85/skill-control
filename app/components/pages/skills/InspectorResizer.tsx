@@ -6,7 +6,7 @@ export const INSPECTOR_DEFAULT = 440;
 export const INSPECTOR_MIN = 360;
 export const INSPECTOR_MAX = 820;
 /** The list keeps at least this much room so skill names stay readable. */
-const LIST_MIN = 480;
+const LIST_MIN = 500;
 
 export function clampInspector(value: number, available = Number.POSITIVE_INFINITY): number {
   const width = Number.isFinite(value) && value > 0 ? value : INSPECTOR_DEFAULT;

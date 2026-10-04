@@ -90,20 +90,22 @@ export function UpdateDrawer({ unitKey, onClose }: { unitKey: string; onClose: (
             {unit.error.resetAt ? `（${formatMonthDay(unit.error.resetAt)} 后可重试）` : ""}
           </p>
         ) : null}
+        {unit.instances.length ? (
+          <section>
+            <h3>装在 {unit.instances.length} 个位置</h3>
+            <div className="copies">
+              {unit.instances.map((instance) => (
+                <div key={`${instance.agentId}-${instance.path}`}>
+                  <code title={instance.path}>{instance.path}</code>
+                  <em>{agentName(instance.agentId)}</em>
+                  <em />
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
         <section>
-          <h3>装在 {unit.instances.length} 个位置</h3>
-          <div className="copies">
-            {unit.instances.map((instance) => (
-              <div key={`${instance.agentId}-${instance.path}`}>
-                <code title={instance.path}>{instance.path}</code>
-                <em>{agentName(instance.agentId)}</em>
-                <em />
-              </div>
-            ))}
-          </div>
-        </section>
-        <section>
-          <h3>来源</h3>
+          <h3>详情</h3>
           <KvTable
             rows={[
               { label: "来源", value: unit.sourceLabel || unit.sourceType },

@@ -9,7 +9,7 @@ test("inspector width is clamped and always leaves room for the list", () => {
   assert.equal(resizer.clampInspector(Number.NaN), resizer.INSPECTOR_DEFAULT);
   assert.equal(resizer.clampInspector(100), resizer.INSPECTOR_MIN);
   assert.equal(resizer.clampInspector(5000), resizer.INSPECTOR_MAX);
-  assert.equal(resizer.clampInspector(700, 1000), 520, "list keeps 480 px");
+  assert.equal(resizer.clampInspector(700, 1000), 500, "list keeps 500 px");
   assert.equal(resizer.clampInspector(700, 600), resizer.INSPECTOR_MIN);
 });
 

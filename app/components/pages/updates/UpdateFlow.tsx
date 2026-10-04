@@ -13,6 +13,7 @@ import {
   type UpdateUnit,
 } from "../../../lib/updates";
 import { CopyPathButton } from "../../files/ConfigDetailView";
+import { CodeView } from "../../ui/CodeView";
 import { useData } from "../../providers/DataProvider";
 import { useToast } from "../../providers/ToastProvider";
 import { UPDATES_KEY } from "./UpdatesPage";
@@ -118,8 +119,8 @@ function ResultView({ result }: { result: ApplyResult }) {
             <span className={`tag ${command.exitCode === 0 ? "" : "danger"}`}>退出码 {command.exitCode ?? "未知"}</span>
             <code>{command.command}</code>
           </div>
-          {command.stdout ? <pre className="code wrap">{command.stdout}</pre> : null}
-          {command.stderr ? <pre className="code wrap stderr">{command.stderr}</pre> : null}
+          {command.stdout ? <CodeView text={command.stdout} language="text" wrap label="命令输出" /> : null}
+          {command.stderr ? <CodeView text={command.stderr} language="text" wrap label="错误输出" /> : null}
         </div>
       ))}
     </div>
@@ -157,7 +158,8 @@ export function UpdateFlow({ unit }: { unit: UpdateUnit }) {
     const canPlan = unit.action.kind !== "none";
     return (
       <div className="confirm quiet">
-        <b>{unit.action.label || "更新"}</b>
+        <b>{unit.action.kind === "guide" ? "在来源产品里更新" : unit.action.label || "更新"}</b>
+        {unit.action.kind === "guide" && unit.action.label ? <p>{unit.action.label}</p> : null}
         <p>
           {unit.action.kind === "delegate"
             ? "会调用这个来源自己的命令完成更新，先给你看要运行的命令。"
