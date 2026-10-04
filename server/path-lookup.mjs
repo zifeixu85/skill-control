@@ -27,6 +27,7 @@ export async function defaultSearchDirectories({ homeDirectory = homedir(), envP
     path.join(homeDirectory, ".volta", "bin"),
     path.join(homeDirectory, ".npm-global", "bin"),
     path.join(homeDirectory, "Library", "pnpm"),
+    path.join(homeDirectory, ".claude", "local"),
   ];
   const nvmRoot = path.join(homeDirectory, ".nvm", "versions", "node");
   let nvm = [];
@@ -77,4 +78,20 @@ export function createCommandLookup(directories) {
     cache.set(command, result);
     return result;
   };
+}
+
+/**
+ * Absolute path of a command for running it with execFile: the first match outside nvm,
+ * else the first nvm match. Returns null when the name is not a plain command name.
+ */
+export async function findCommand(command, directories) {
+  if (typeof command !== "string" || !BIN_NAME.test(command)) return null;
+  let fallback = null;
+  for (const { directory, nvm } of directories) {
+    const candidate = path.join(directory, command);
+    if (!(await isExecutable(candidate))) continue;
+    if (!nvm) return candidate;
+    fallback ||= candidate;
+  }
+  return fallback;
 }

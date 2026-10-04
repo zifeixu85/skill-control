@@ -304,6 +304,76 @@ function checkPlugins(plugins, context) {
   }
 }
 
+/** Update results cached by the last manual check (never fetched here). */
+function checkUpdates(updates, context) {
+  const sourced = new Set(["skills-cli", "lark-cli", "workbuddy-skillhub", "clawhub"]);
+  for (const unit of updates || []) {
+    const base = { agentId: unit.instances?.[0]?.agentId, skillName: unit.title, path: unit.instances?.[0]?.path };
+    if (["update-available", "conflict"].includes(unit.status)) {
+      context.add({
+        ...base,
+        severity: "info",
+        category: "update-available",
+        title: `有可用更新：${unit.title}`,
+        detail: [unit.current && unit.latest ? `${unit.current} → ${unit.latest}` : "", unit.sourceLabel].filter(Boolean).join("，"),
+        fix: unit.action?.kind === "self" || unit.action?.kind === "delegate" ? { kind: "reinstall", label: unit.action.label } : FIX.none,
+      });
+    }
+    // Edits to skills without a source are normal; only report copies that have one.
+    if ((unit.status === "conflict" || unit.status === "locally-modified") && sourced.has(unit.sourceType)) {
+      context.add({
+        ...base,
+        severity: unit.status === "conflict" ? "warn" : "info",
+        category: "locally-modified",
+        title: `本地修改过：${unit.title}`,
+        detail: unit.status === "conflict" ? "上游也有更新，直接更新会覆盖本地修改。" : "与安装时的版本不同。",
+        fix: FIX.open,
+      });
+    }
+    if (unit.lockDrift) {
+      context.add({ ...base, severity: "info", category: "lock-drift", title: `锁记录落后：${unit.title}`, detail: "内容已是上游最新，但 .skill-lock.json 里记的是旧哈希。", fix: FIX.none });
+    }
+  }
+}
+
+/** Leftover temporary git clones from Codex (~/.codex/.tmp/git-*), with their size. */
+async function checkCodexTemp(context) {
+  const root = path.join(context.homeDirectory, ".codex", ".tmp");
+  let entries;
+  try {
+    entries = (await readdir(root, { withFileTypes: true })).filter((entry) => entry.isDirectory() && entry.name.startsWith("git-"));
+  } catch {
+    return;
+  }
+  if (!entries.length) return;
+  let bytes = 0;
+  let visited = 0;
+  let truncated = false;
+  const deadline = Date.now() + 3_000;
+  const walk = async (directory) => {
+    if (truncated) return;
+    for (const entry of await readdir(directory, { withFileTypes: true }).catch(() => [])) {
+      if ((visited += 1) > 300_000 || Date.now() > deadline) {
+        truncated = true;
+        return;
+      }
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) await walk(full);
+      else if (entry.isFile()) bytes += (await lstat(full).catch(() => ({ size: 0 }))).size;
+    }
+  };
+  for (const entry of entries) await walk(path.join(root, entry.name));
+  const size = bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
+  context.add({
+    severity: "info",
+    category: "codex-tmp-leftovers",
+    title: `Codex 临时克隆残留 ${entries.length} 个，${truncated ? "至少 " : ""}${size}`,
+    detail: "~/.codex/.tmp/git-* 是 Codex 安装插件时留下的临时仓库，确认 Codex 未在运行后可以删除。",
+    path: root,
+    fix: FIX.open,
+  });
+}
+
 function checkSharedRoots(scan, context) {
   for (const shared of scan.sharedRoots || []) {
     context.add({
@@ -321,6 +391,7 @@ export async function buildHealthReport({
   scan,
   plugins = [],
   mcpEntries = [],
+  updates = [],
   homeDirectory = homedir(),
   homes = [homeDirectory],
   searchDirectories = null,
@@ -336,6 +407,8 @@ export async function buildHealthReport({
   await checkMcp(mcpEntries, context);
   checkPlugins(plugins, context);
   checkSharedRoots(scan, context);
+  checkUpdates(updates, context);
+  await checkCodexTemp(context);
   const findings = collector.finish();
   const order = { error: 0, warn: 1, info: 2 };
   findings.sort((left, right) => order[left.severity] - order[right.severity] || left.category.localeCompare(right.category));

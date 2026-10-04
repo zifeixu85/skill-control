@@ -23,6 +23,7 @@ import {
   createQClawHome,
 } from "./fixtures/claw-hermes.mjs";
 import { createAgentFilesHome, createTranscriptsHome } from "./fixtures/insights.mjs";
+import { createUpdatesHome } from "./fixtures/updates.mjs";
 import { startTestServer } from "./fixtures/server.mjs";
 import { writeFixtureFile } from "./fixtures/smartorder.mjs";
 
@@ -253,6 +254,60 @@ test("no planted secret or message text leaks from agent files, tools, usage, he
     const crossSite = await request(pathname, { headers: { "Sec-Fetch-Site": "cross-site" } });
     assert.equal(crossSite.status, 403, pathname);
   }
+});
+
+test("update routes: offline checks, plans need confirmation, nothing leaks", { timeout: 60_000 }, async (context) => {
+  const home = await mkdtemp(path.join(tmpdir(), "leak-updates-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  await createUpdatesHome(home);
+  const { request } = await startTestServer(context, home);
+  const bodies = [];
+  const call = async (label, pathname, options = {}) => {
+    const response = await request(pathname, options);
+    const body = await response.text();
+    bodies.push({ label, body });
+    return { status: response.status, json: JSON.parse(body) };
+  };
+  const post = (label, pathname, payload, headers = {}) =>
+    call(label, pathname, { method: "POST", body: JSON.stringify(payload), headers });
+
+  const first = await call("updates", "/api/updates");
+  assert.equal(first.status, 200);
+  assert.ok(first.json.units.length >= 10);
+  assert.equal(first.json.checkedAt, null);
+  const started = await post("check", "/api/updates/check", {});
+  assert.equal(started.status, 200);
+  let job = started.json;
+  for (let attempt = 0; attempt < 100 && job.state === "running"; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    job = (await call("check-status", "/api/updates/check-status")).json;
+  }
+  assert.equal(job.state, "done");
+  const view = (await call("updates:after", "/api/updates")).json;
+  const unit = (title) => view.units.find((item) => item.title === title);
+  assert.equal(unit("old-skill").status, "check-failed", "offline test servers never reach the network");
+  assert.equal(unit("gmail").status, "update-available", "Codex's local catalog needs no request");
+  assert.equal((await call("changes", `/api/updates/changes?unitKey=${encodeURIComponent(unit("old-skill").unitKey)}`)).status, 200);
+  const unchecked = await post("plan:unchecked", "/api/updates/plan", { unitKey: unit("old-skill").unitKey });
+  assert.deepEqual([unchecked.status, unchecked.json.planId, unchecked.json.kind], [200, null, "none"], "nothing to run before a successful check");
+  const lark = view.units.find((item) => item.sourceType === "lark-cli");
+  const plan = await post("plan:lark", "/api/updates/plan", { unitKey: lark.unitKey });
+  assert.equal(plan.status, 200);
+  assert.equal(plan.json.kind, "delegate");
+  assert.equal((await post("apply:no-header", "/api/updates/apply", { planId: plan.json.planId, confirm: true })).status, 400);
+  const applied = await post("apply", "/api/updates/apply", { planId: plan.json.planId, confirm: true }, { "x-skill-manager-confirm": "yes" });
+  assert.equal(applied.status, 200);
+  assert.equal(applied.json.commands[0].exitCode, 0);
+  assert.equal((await post("apply:again", "/api/updates/apply", { planId: plan.json.planId, confirm: true }, { "x-skill-manager-confirm": "yes" })).status, 404);
+  const health = await call("health", "/api/health-report?force=1");
+  assert.ok(health.json.findings.some((finding) => finding.category === "update-available"));
+
+  assert.deepEqual(bodies.filter((item) => /ZZ9/u.test(item.body)).map((item) => item.label), []);
+  assert.deepEqual(bodies.filter((item) => item.body.includes(home)).map((item) => item.label), []);
+  const crossSite = await request("/api/updates/check", { method: "POST", body: "{}", headers: { "Sec-Fetch-Site": "cross-site" } });
+  assert.equal(crossSite.status, 403);
+  const foreign = await request("/api/updates/check", { method: "POST", body: "{}", headers: { Origin: "https://evil.example.test" } });
+  assert.equal(foreign.status, 403);
 });
 
 test("refuses cross-site reads of configuration and assets", async (context) => {
