@@ -74,7 +74,11 @@ export function AgentCard({ agentId }: { agentId: string }) {
       <div className="acard-head">
         <AgentAvatar id={agentId} size="lg" />
         <div>
-          <h2>{meta.name}</h2>
+          <h2>
+            <button type="button" className="acard-name" onClick={() => go("agent", { agentId })} title={`查看 ${meta.name} 的详情`}>
+              {meta.name}
+            </button>
+          </h2>
           <div className="meta">{activityLine(activityById.get(agentId))}</div>
         </div>
         <span className="tag" style={{ marginLeft: "auto" }}>

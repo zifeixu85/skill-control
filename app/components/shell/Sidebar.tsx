@@ -147,6 +147,7 @@ export function Sidebar() {
             type="button"
             className={route.page === "settings" ? "on" : ""}
             aria-current={route.page === "settings" ? "page" : undefined}
+            title="设置"
             onClick={() => go("settings")}
           >
             <SettingsIcon />

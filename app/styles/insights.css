@@ -67,6 +67,10 @@
   margin-top: 2px;
 }
 .conf {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 11px;
   padding: 0 6px;
   border-radius: 999px;
@@ -443,6 +447,12 @@
 @media (max-width: 880px) {
   .ugrid {
     grid-template-columns: 1fr;
+  }
+  .ucard-title {
+    flex-basis: calc(100% - 44px);
+  }
+  .ucard-head .seg {
+    margin-left: 40px;
   }
   .ustats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
