@@ -10,6 +10,7 @@ import { AgentAvatar } from "../../ui/Avatar";
 import { Switch } from "../../ui/basics";
 import { InstallPlan } from "./InstallPlan";
 import { SkillActions, useReveal } from "./SkillActions";
+import { SkillUsage } from "./SkillUsage";
 
 function whereText(view: SkillView, slot: SlotState, now: number): string {
   if (slot.kind !== "installed") return slot.reason || "没有安装";
@@ -84,7 +85,6 @@ export function SkillOverview({
   const now = useNow();
   const reveal = useReveal();
   const copies = groupCopies(view, primary);
-  const usageAgents = primary.filter((agentId) => view.usage[agentId] !== undefined);
 
   return (
     <>
@@ -142,22 +142,8 @@ export function SkillOverview({
         </section>
       ) : null}
       <section>
-        <h3>最近 30 天</h3>
-        {usageAgents.length ? (
-          <div className="usebox">
-            {usageAgents.map((agentId) => (
-              <div key={agentId}>
-                <AgentAvatar id={agentId} />
-                <div>
-                  <b>{view.usage[agentId] || 0}</b>
-                  <span>次使用</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="muted small">常用 Agent 里还没有这个技能的使用记录。</p>
-        )}
+        <h3>使用情况</h3>
+        <SkillUsage view={view} />
       </section>
       {view.otherAgents.length ? (
         <section>
