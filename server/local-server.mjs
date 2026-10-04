@@ -656,6 +656,8 @@ export function sanitizeConfig(input) {
     visibleAgentIds,
     primaryAgentIds,
     dismissedAgentIds,
+    // Update checks may read `gh auth token` only after the user turned this on.
+    updates: { useGhAuth: input?.updates?.useGhAuth === true },
   };
 }
 
@@ -2842,6 +2844,28 @@ function applicationDirectories() {
   return configured.length ? configured : defaultApplicationDirectories(HOME_DIRECTORY);
 }
 
+/** Agents with every root they load (adapter roots included), as absolute paths. */
+async function updateTargetAgents() {
+  const config = await loadConfig();
+  const scan = await getScan();
+  const scanned = new Map(scan.agents.map((agent) => [agent.id, agent]));
+  return config.agents.map((agent) => ({
+    ...agent,
+    paths: [...new Set([...agent.paths, ...(scanned.get(agent.id)?.roots || []).map((root) => root.path).filter(Boolean)])].map(expandHome),
+  }));
+}
+
+/**
+ * SKILL_MANAGER_COMMAND_DIRS pins where commands may be found and run (tests point it at
+ * fixture folders); without it the normal PATH and well-known install folders are used.
+ */
+function commandDirectories() {
+  const configured = String(process.env.SKILL_MANAGER_COMMAND_DIRS || "")
+    .split(path.delimiter)
+    .filter((entry) => entry && path.isAbsolute(entry));
+  return configured.length ? configured.map((directory) => ({ directory, nvm: false })) : null;
+}
+
 let insightRoutes = null;
 function getInsightRoutes() {
   insightRoutes ||= createInsightRoutes({
@@ -2849,9 +2873,18 @@ function getInsightRoutes() {
     homes: [HOME_DIRECTORY, REAL_HOME_DIRECTORY],
     stateDirectory: STATE_DIRECTORY,
     applicationDirectories: applicationDirectories(),
+    backupDirectory: BACKUP_DIRECTORY,
+    historyFile: HISTORY_FILE,
     getScan: () => getScan(),
     getIntegrations: () => integrationsLoader.get(),
+    getConfig: () => loadConfig(),
+    getAgents: updateTargetAgents,
     listCapabilityLinks,
+    materialize: materializeSkillDirectory,
+    readBody: readRequestBody,
+    afterWrite: invalidateScanCache,
+    updatesOffline: process.env.SKILL_MANAGER_UPDATES_OFFLINE === "1",
+    commandDirectories: commandDirectories(),
     json: jsonResponse,
     image: imageResponse,
   });

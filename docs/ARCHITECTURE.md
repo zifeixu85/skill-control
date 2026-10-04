@@ -97,6 +97,13 @@ Electron renderer 使用 `contextIsolation: true`、`nodeIntegration: false` 和
 | `server/usage-service.mjs` / `server/usage-worker.mjs` | 在后台线程分片建立索引并报告进度 |
 | `server/health-report.mjs` / `server/path-lookup.mjs` | 体检报告；不执行任何命令的 PATH 查找（含 nvm 识别） |
 | `server/agent-icons.mjs` | 用 `sips` 把已安装 macOS 应用的图标转换为 128 px PNG 并缓存 |
+| `server/git-tree.mjs` | 不依赖 git 计算目录的 git 树哈希（与 `skillFolderHash` 一致）、从 GitHub 树列表重建目录哈希、`skills-lock.json` v1 的 SHA-256 目录哈希 |
+| `server/update-sources.mjs` | 只读本地来源事实：`.skill-lock.json`、lark-cli 安装与状态、Claude/Codex/WorkBuddy 插件登记、技能目录内的 SkillHub/ClawHub 元数据、git 检出 |
+| `server/provenance.mjs` | 把技能副本、插件和 CLI 解析成“更新单元”（按真实路径与来源去重），并为无基线的来源记录首次快照 |
+| `server/update-transport.mjs` | 更新检查的网络访问：主机白名单、请求预算、超时与大小上限、GitHub 额度跟踪、无 shell 的 `git ls-remote` |
+| `server/update-check.mjs` | 各来源的检查器与三方判定（本地 ↔ 基线 ↔ 上游），离线与限流时保留上次结果 |
+| `server/update-apply.mjs` | 更新执行：计划（10 分钟有效、单次）→ 确认 → 下载校验 → 备份 → 原子替换 → 改写锁；委托宿主 CLI 执行并返回脱敏输出 |
+| `server/update-service.mjs` | 更新接口的状态、缓存文件、后台检查任务与公开视图 |
 | `scripts/local-runner.mjs` | 源码模式下同时管理 Web 与本地服务 |
 | `desktop/main.mjs` | Electron 生命周期、本地服务、窗口和导航安全 |
 | `desktop/preload.cjs` | 受控的 renderer-to-main API |
@@ -716,7 +723,8 @@ Hermes：静态解析的全部工具集（`enabled` 表示配置启用或被其�
     severity: "error" | "warn" | "info",
     category: "broken-link" | "missing-skill-md" | "frontmatter" | "name-mismatch" | "oversize" | "differing-copies"
             | "hidden-by-product" | "shadowed" | "disabled" | "archived" | "missing-bin" | "missing-env" | "nvm-only"
-            | "mcp-command-missing" | "mcp-literal-secret" | "plugin-state" | "shared-root",
+            | "mcp-command-missing" | "mcp-literal-secret" | "plugin-state" | "shared-root"
+            | "update-available" | "locally-modified" | "lock-drift" | "codex-tmp-leftovers",
     title: string, detail: string,            // 中文
     agentId?: string, skillName?: string, path?: string,   // path 为 "~/…"
     fix: { kind: "none" | "open" | "reinstall" | "remove-link" | "enable" | "configure", label: string },
@@ -743,6 +751,113 @@ cursor、trae、hermes、qclaw、lumiclaw、moticlaw、smartorder、kiro、winds
 图标文件必须位于应用包内且不超过 20 MB；用 `/usr/bin/sips`（参数数组，不经 shell，10 秒超时）转换，
 结果须是 ≤ 512 KB 的 PNG，缓存在 `~/.agent-skill-manager/icons/<id>-<摘要>.png`，应用更新后自动重新转换。
 测试通过 `SKILL_MANAGER_APPLICATION_DIRS` 指向临时目录，从不读取真实的 `/Applications`。
+
+## 更新检测与执行
+
+设计见 `docs/LIBRARY-UPDATES-CLI.md` 第 2 节，这里记录实现与接口。
+
+**更新单元**：`provenance.mjs` 先按真实路径合并同一物理目录的多个 Agent 视图，再按来源聚合。判定顺序：
+宿主托管目录（Codex `.system` 与插件缓存、Mirasim、Hermes 内置/组织、OpenClaw 内置、QClaw 同步与 SkillHub、
+订单来了）→ `~/.agents/.skill-lock.json`（只读；github 条目成为 `skills-cli` 单元，`open.feishu.cn` 的 well-known
+条目并入 `lark-cli` 单元）→ 技能目录内的 `_skillhub_meta.json` / `.clawhub/origin.json` → git 检出（`.git` 位于某个
+Agent 技能根目录之内）→ frontmatter `homepage` / `repository` 中的 GitHub 地址（只作 `possibleSource`，不自动绑定）
+→ 来源未知。另有来自插件登记的单元：Claude Code 插件、Codex git 插件市场与远程插件、WorkBuddy zip 插件市场。
+内容相同的同名副本并入对应的 `skills-cli` 单元。单元键不含路径（git 单元用检出目录的摘要）。
+
+**哈希与基线**：`skills-cli` 用 git 树哈希（排除 `.git`、`__pycache__`、`__pypackages__`、`metadata.json`，与 vercel
+`skills` 安装器一致），基线是锁里的 `skillFolderHash`；GitHub 树接口按提交 SHA 请求时返回的 `sha` 是提交而不是
+树，所以目录哈希一律由列表重建。没有基线的来源（未知、SkillHub、ClawHub、lark-cli 官方技能）在首次解析时把扫描
+指纹记入 `~/.agent-skill-manager/update-baselines.json`；带版本的来源在版本变化时重记。
+
+**检查**（`POST /api/updates/check`，手动触发，后台执行）：每个仓库先 `git ls-remote` 取 HEAD，HEAD 变化时才请求一次
+`api.github.com/repos/<o>/<r>/git/trees/<sha>?recursive=1`（列表被截断时经父目录内容接口取子树）；lark-cli 读 npm
+`@larksuite/cli/latest` 与 `open.feishu.cn/.well-known/skills/index.json`（新技能名差集）；Claude 插件读
+`raw.githubusercontent.com/<repo>/HEAD/.claude-plugin/marketplace.json`，条目无版本时读插件的 `plugin.json`，再无版本
+时用条目里固定的 `source.sha` 或 ls-remote 比较提交，插件在上游改名时按相同来源路径匹配；Codex git 市场与 git
+检出用 ls-remote；Codex 远程插件只比较 Codex 自己缓存的远程目录（不发请求）；WorkBuddy zip 市场用 `HEAD` +
+`If-None-Match`；SkillHub 与 ClawHub 读各自注册表的 `latestVersion`，ClawHub 绝不跨注册表回退，`AMBIGUOUS_SKILL_SLUG`
+视为检查失败。每次检查默认最多 80 个请求，超出的单元保留上次结果并说明原因；GitHub 返回额度耗尽时记录
+`x-ratelimit-reset`，在重置前不再请求 GitHub 接口；网络失败时保留上次的上游事实并标 `stale`。结果写入
+`~/.agent-skill-manager/update-cache.json`（只存上游事实，不存令牌）。状态在每次读取时由“当前本地内容 + 缓存事实”
+计算，修改技能后无需重新检查。允许访问的主机：api.github.com、github.com、raw.githubusercontent.com、
+registry.npmjs.org、open.feishu.cn、clawhub.ai、api.skillhub.cn、download.codebuddy.cn。
+
+配置 `updates.useGhAuth: true`（“使用 gh 登录提升额度”）后，检查开始时以参数数组运行 `gh auth token`，令牌只在本次
+检查的内存中、只附加到 api.github.com 请求，不写入缓存、日志或响应。检查阶段从不调用 `npx skills check`。
+
+**三方判定**：本地 = 上游 → `up-to-date`（锁记录落后时 `lockDrift: true`）；本地 = 基线 ≠ 上游 → `update-available`；
+本地 ≠ 基线 = 上游 → `locally-modified`；三者都不同 → `conflict`。其他状态：`managed-by-host`、`unknown-source`
+（未知来源内容自首次记录后变化时为 `locally-modified`）、`check-failed`、`unchecked`（尚未检查）。
+
+### 接口
+
+`GET /api/updates`（只读缓存，不联网）
+
+```ts
+{
+  checkedAt: string | null, hosts: string[] /* 上次检查访问过的主机 */, allowedHosts: string[],
+  github: { remaining: number | null, resetAt: string } | null,
+  counts: Record<Status, number>,
+  units: Array<{
+    unitKey: string, title: string, sourceType: "skills-cli" | "well-known" | "lark-cli" | "claude-plugin" | "codex-marketplace"
+      | "codex-remote-plugin" | "workbuddy-marketplace" | "workbuddy-skillhub" | "clawhub" | "hermes-hub" | "host" | "git" | "unknown",
+    sourceLabel: string, owner: "skill-control" | `host:${string}` | "unknown", confidence: "exact" | "none",
+    instances: Array<{ agentId, path /* ~/… */ }>, instanceCount: number,
+    status: "up-to-date" | "update-available" | "locally-modified" | "conflict" | "managed-by-host" | "unknown-source" | "check-failed" | "unchecked",
+    current: string | null, latest: string | null,       // 版本，或 7 位提交/哈希
+    changes?: Array<{ title: string }>,                   // 新增官方技能、注册表 changelog
+    lockDrift?: true, localModified?: true, reason?: string, stale?: true,
+    checkedAt: string | null, error?: { kind, message, resetAt? },
+    action: { kind: "self" | "delegate" | "guide" | "none", label: string, command?: string /* 仅用于展示 */ },
+    binaries?: Array<{ path, version, hermes }>,          // lark-cli 的每一份二进制
+    pluginPath?: string, possibleSource?: string,
+  }>,
+  job: CheckJob,
+}
+```
+
+`POST /api/updates/check` `{ unitKeys?: string[] }` → `CheckJob`；`GET /api/updates/check-status` → `CheckJob`：
+`{ state: "idle" | "running" | "done" | "error", startedAt, finishedAt, done, total, requests, hosts, error }`。
+
+`GET /api/updates/changes?unitKey=` → `{ unitKey, source: "github" | "local", changes: Array<{ sha?, title, date? }>, error? }`：
+`skills-cli` 用 commits 接口（限定目录、自安装时间起），插件与 git 单元用 compare 接口（已装提交…最新提交），各 1 个请求。
+
+`POST /api/updates/plan` `{ unitKey, choice?: "keep-local" | "overwrite" | "save-as" }` →
+
+```ts
+| { requiresChoice: true, unitKey, status, choices: string[], message }          // 本地修改过：必须先选
+| { planId: string, unitKey, kind: "self" | "delegate" | "none", expiresAt,
+    steps: Array<{ type: "download" | "save-as" | "replace" | "lock" | "keep-local" | "command", description?, path?, backup?, agentId?, alsoVisibleTo?, command? }>,
+    changes?: { added: string[], modified: string[], removed: string[] },        // self：文件级差异
+    notes?: string[] }
+| { planId: null, unitKey, kind: "guide" | "none", steps: [], instructions, command }
+```
+
+`POST /api/updates/apply` `{ planId, confirm: true }`，必须带请求头 `x-skill-manager-confirm: yes` →
+self：`{ planId, unitKey, kind: "self", changed: [{ agentId, path, backup }], lockBackup, savedAs, historyEntry }`；
+delegate：`{ ..., kind: "delegate", ok, commands: [{ command, exitCode, stdout, stderr }], historyEntry }`（输出只保留末尾
+4 KB，脱敏并压缩主目录）。计划只能由本进程在 10 分钟内生成、只能执行一次；跨站请求与外部 Origin 返回 403。
+
+**自更新（skills-cli GitHub）**：按检查时缓存的提交，从 `raw.githubusercontent.com/<repo>/<commit>/<path>` 下载目录内
+文件（≤ 1,500 个、单个 ≤ 25 MB、合计 ≤ 100 MB，上游含软链接或子模块时拒绝），逐个校验 git blob 哈希，暂存目录的
+树哈希必须等于上游；执行前再次确认本地内容与锁条目未在计划后变化。写入沿用同步的计划模型：经写入跟踪器按真实
+路径去重（共享目录只写一次、目标必须在 Agent 技能根目录内），逐个备份到 `~/.agent-skill-manager/backups/<时间>/`、
+原子替换，写后复核树哈希，失败则从备份恢复全部已写目录；成功后先备份 `.skill-lock.json`，再原子改写该条目的
+`skillFolderHash`（上游原始目录哈希）与 `updatedAt`。冲突时：`keep-local` 不改动；`overwrite` 先备份再覆盖；
+`save-as` 先把本地版本复制为同级的 `<名称>@local` 再更新。
+
+**委托执行**：lark-cli `update --json`（Hermes 自带的那份不会被更新，会在计划中说明）；Claude
+`plugin marketplace update <市场>` + `plugin update <插件>@<市场> --json [-s 作用域]`（需重启）；Codex
+`plugin marketplace upgrade <市场> --json`；Hermes `skills update <名称>`；git 检出在 `status --porcelain` 为空时
+`-C <目录> pull --ff-only`。二进制用 PATH 与常见安装目录解析为绝对路径，`execFile` 参数数组、5 分钟超时，环境变量加
+`DO_NOT_TRACK=1`、`DISABLE_TELEMETRY=1`、`NO_COLOR=1`、`GIT_TERMINAL_PROMPT=0`。gstack 只给出 `/gstack-upgrade`
+指引；WorkBuddy、Codex 远程插件、SkillHub、ClawHub 只给出指引。
+
+测试与本地调试：`SKILL_MANAGER_UPDATES_OFFLINE=1` 让检查不联网；`SKILL_MANAGER_COMMAND_DIRS` 固定可查找与可执行
+命令的目录，设置后目录之外的二进制一律拒绝执行（测试服务器两者都设置，PATH 只保留系统目录）。
+
+体检报告读取缓存的更新结果（不联网），新增类别 `update-available`、`locally-modified`（只针对有来源的单元）、
+`lock-drift`，以及 `codex-tmp-leftovers`（`~/.codex/.tmp/git-*` 的数量与体积，统计有时间与条目上限）。
 
 ## 本地服务防护（新增）
 
@@ -778,6 +893,8 @@ cursor、trae、hermes、qclaw、lumiclaw、moticlaw、smartorder、kiro、winds
 | `GET /api/usage/summary`、`/api/usage/skill`、`/api/usage/agent`、`/api/usage/status` | 见“洞察接口 · 用量分析” |
 | `GET /api/health-report` | 见“洞察接口 · 体检报告” |
 | `GET /api/agent-icon` | 见“洞察接口 · 应用图标” |
+| `GET /api/updates`、`/api/updates/check-status`、`/api/updates/changes`；`POST /api/updates/check`、`/api/updates/plan`、`/api/updates/apply` | 见“更新检测与执行” |
+| `GET/PUT /api/config` | 新增 `updates: { useGhAuth: boolean }`（默认 false） |
 | `POST /api/sync`、`/api/import-install` | 动作新增 `realDestination`、`viaSymlink`、`reason`、`sharedWithAgentId`、`alsoVisibleTo`、`skippedLinks`；计划新增 `sharedDestinations`、`warnings` |
 
 ## 已知架构限制

@@ -133,3 +133,32 @@ test("command lookup never runs anything and flags nvm-only tools", async (conte
   if (POSIX) assert.deepEqual(await lookup("notexec"), { found: false, nvmOnly: false, checked: true });
   assert.deepEqual(await lookup("$(touch pwned)"), { found: false, nvmOnly: false, checked: false });
 });
+
+test("health report adds cached update results and Codex temp clone leftovers", async (context) => {
+  const home = await mkdtemp(path.join(tmpdir(), "health-updates-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  await writeFixtureFile(home, ".codex/.tmp/git-abc123/objects/pack", "x".repeat(2_000_000));
+  await writeFixtureFile(home, ".codex/.tmp/git-def456/README", "y");
+  await writeFixtureFile(home, ".codex/.tmp/other/keep", "z");
+  const unit = (title, sourceType, status, extra = {}) => ({ title, sourceType, status, sourceLabel: sourceType, instances: [{ agentId: "codex", path: `~/.agents/skills/${title}` }], action: { kind: "self", label: "用 Skill Control 更新" }, ...extra });
+  const report = await buildHealthReport({
+    scan: { agents: [], skills: [] },
+    updates: [
+      unit("old-skill", "skills-cli", "update-available", { current: "abc1234", latest: "def5678" }),
+      unit("both-skill", "skills-cli", "conflict"),
+      unit("my-own-skill", "unknown", "locally-modified"),
+      unit("drift-skill", "skills-cli", "up-to-date", { lockDrift: true }),
+    ],
+    homeDirectory: home,
+    homes: [home],
+    searchDirectories: [],
+    env: {},
+  });
+  const titles = (category) => report.findings.filter((finding) => finding.category === category).map((finding) => finding.title);
+  assert.deepEqual(titles("update-available").sort(), ["有可用更新：both-skill", "有可用更新：old-skill"]);
+  assert.deepEqual(titles("locally-modified"), ["本地修改过：both-skill"], "edits to skills without a source are not reported");
+  assert.deepEqual(titles("lock-drift"), ["锁记录落后：drift-skill"]);
+  const leftovers = report.findings.find((finding) => finding.category === "codex-tmp-leftovers");
+  assert.match(leftovers.title, /残留 2 个，2 MB/u);
+  assert.equal(leftovers.path, "~/.codex/.tmp");
+});

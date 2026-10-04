@@ -60,6 +60,11 @@ export async function startTestServer(context, home) {
       SKILL_MANAGER_ORIGINS: TEST_ORIGIN,
       // App icons are looked up in the synthetic home only, never in /Applications.
       SKILL_MANAGER_APPLICATION_DIRS: path.join(home, "Applications"),
+      // Update checks never reach the network from a test server, and commands are only
+      // looked up and run inside the synthetic home: never a real lark-cli, claude or git.
+      SKILL_MANAGER_UPDATES_OFFLINE: "1",
+      SKILL_MANAGER_COMMAND_DIRS: [path.join(home, "npm", "bin"), path.join(home, "bin")].join(path.delimiter),
+      PATH: "/usr/bin:/bin",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

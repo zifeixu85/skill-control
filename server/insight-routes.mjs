@@ -5,6 +5,7 @@ import { listAgentTools } from "./agent-tools.mjs";
 import { createCachedLoader } from "./cached-loader.mjs";
 import { buildHealthReport } from "./health-report.mjs";
 import { readMcpSources } from "./mcp-inventory.mjs";
+import { createUpdateService } from "./update-service.mjs";
 import { createUsageService } from "./usage-service.mjs";
 import { clampDays, usageForAgent, usageForSkill, usageSummary } from "./usage-query.mjs";
 
@@ -23,11 +24,26 @@ export const INSIGHT_ROUTES = [
   "/api/usage/status",
   "/api/health-report",
   "/api/agent-icon",
+  "/api/updates",
+  "/api/updates/check",
+  "/api/updates/check-status",
+  "/api/updates/changes",
+  "/api/updates/plan",
+  "/api/updates/apply",
 ];
 
 const HEALTH_CACHE_TTL = 5 * 60_000;
 const AGENT_ID = /^[a-z0-9][a-z0-9-]{0,39}$/u;
 const NAME = /^[\w.@-]{1,64}$/u;
+
+// Offline mode (SKILL_MANAGER_UPDATES_OFFLINE=1): checks fail fast, nothing is sent.
+const offlineFetch = async () => {
+  throw new TypeError("offline");
+};
+const offlineLsRemote = async () => {
+  const { TransportError } = await import("./update-transport.mjs");
+  throw new TransportError("offline", "离线模式，未连接仓库。");
+};
 
 class RouteError extends Error {
   constructor(statusCode, message) {
@@ -47,26 +63,44 @@ const optionalName = (value) => {
 };
 
 /**
- * `context`: { homeDirectory, homes, stateDirectory, applicationDirectories,
- *   getScan(), getIntegrations(), listCapabilityLinks(agentId), json(response, status, body, origin),
- *   image(response, asset, origin) }
+ * `context`: { homeDirectory, homes, stateDirectory, backupDirectory, historyFile,
+ *   applicationDirectories, getScan(), getIntegrations(), getConfig(), getAgents(),
+ *   listCapabilityLinks(agentId), materialize(options), readBody(request), afterWrite(),
+ *   json(response, status, body, origin), image(response, asset, origin) }
  */
 export function createInsightRoutes(context) {
   const usage = createUsageService({
     homeDirectory: context.homeDirectory,
     indexPath: path.join(context.stateDirectory, "usage-index.json"),
   });
+  const updates = createUpdateService({
+    homeDirectory: context.homeDirectory,
+    homes: context.homes,
+    stateDirectory: context.stateDirectory,
+    backupDirectory: context.backupDirectory,
+    historyFile: context.historyFile,
+    getScan: context.getScan,
+    getAgents: context.getAgents,
+    getConfig: context.getConfig,
+    materialize: context.materialize,
+    ...(context.updatesOffline ? { fetchImpl: offlineFetch, lsRemoteImpl: offlineLsRemote } : {}),
+    ...(context.commandDirectories ? { searchDirectories: context.commandDirectories, restrictCommands: true } : {}),
+  });
   const healthLoader = createCachedLoader(
     async () => {
-      const [scan, integrations, mcp] = await Promise.all([
+      const [scan, integrations, mcp, updateStatuses] = await Promise.all([
         context.getScan(),
         context.getIntegrations(),
         readMcpSources(context.homeDirectory),
+        // Cached update results only: the health report never makes requests.
+        updates.cachedStatuses().catch(() => []),
       ]);
       return buildHealthReport({
         scan,
         plugins: integrations.payload.plugins,
         mcpEntries: mcp.entries,
+        updates: updateStatuses,
+        ...(context.commandDirectories ? { searchDirectories: context.commandDirectories } : {}),
         homeDirectory: context.homeDirectory,
         homes: context.homes,
       });
@@ -115,10 +149,47 @@ export function createInsightRoutes(context) {
     async "/api/health-report"(url) {
       return healthLoader.get(url.searchParams.get("force") === "1");
     },
+    async "/api/updates"() {
+      return updates.view();
+    },
+    async "/api/updates/check-status"() {
+      return updates.checkStatus();
+    },
+    async "/api/updates/changes"(url) {
+      const unitKey = String(url.searchParams.get("unitKey") || "");
+      if (!unitKey || unitKey.length > 600) throw new RouteError(400, "缺少更新单元。");
+      return updates.changes(unitKey);
+    },
+  };
+
+  const postRoutes = {
+    async "/api/updates/check"(body) {
+      const unitKeys = Array.isArray(body.unitKeys) ? body.unitKeys.filter((key) => typeof key === "string").slice(0, 500) : null;
+      return updates.startCheck({ unitKeys });
+    },
+    async "/api/updates/plan"(body) {
+      if (typeof body.unitKey !== "string" || !body.unitKey) throw new RouteError(400, "缺少更新单元。");
+      const choice = ["keep-local", "overwrite", "save-as"].includes(body.choice) ? body.choice : null;
+      return updates.plan({ unitKey: body.unitKey, choice });
+    },
+    async "/api/updates/apply"(body, request) {
+      // Same confirmation model as sync: header + explicit confirm, plan id from this process.
+      if (request.headers["x-skill-manager-confirm"] !== "yes" || body.confirm !== true) {
+        throw new RouteError(400, "需要明确确认后才能执行更新。");
+      }
+      const result = await updates.apply({ planId: body.planId, confirm: true });
+      context.afterWrite?.();
+      return result;
+    },
   };
 
   /** Returns true when the request was handled. */
   async function handle(request, url, response, origin) {
+    if (request.method === "POST" && postRoutes[url.pathname]) {
+      const body = await context.readBody(request);
+      context.json(response, 200, await postRoutes[url.pathname](body && typeof body === "object" ? body : {}, request), origin);
+      return true;
+    }
     if (request.method !== "GET") return false;
     if (url.pathname === "/api/agent-icon") {
       const icon = await readAgentIcon(agentParam(url.searchParams.get("id")), {
@@ -136,5 +207,5 @@ export function createInsightRoutes(context) {
     return true;
   }
 
-  return { handle, usage };
+  return { handle, usage, updates };
 }

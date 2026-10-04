@@ -82,6 +82,18 @@ on Keep a Changelog and the project follows Semantic Versioning.
   literal MCP secrets and plugin state.
 - App icons (`GET /api/agent-icon`): installed macOS app icons converted once
   with `sips` and cached.
+- Update detection (`GET /api/updates`, `POST /api/updates/check`,
+  `/api/updates/check-status`, `/api/updates/changes`): provenance for every
+  skill copy, plugin and CLI (skills CLI lock, lark-cli, Claude and Codex
+  plugin registries, WorkBuddy, SkillHub, ClawHub, Hermes, git checkouts),
+  three-way local ↔ baseline ↔ upstream states with git tree hashes, a request
+  budget, rate-limit back-off and offline results.
+- Update execution (`POST /api/updates/plan`, `/api/updates/apply`): skills CLI
+  GitHub skills are updated by Skill Control with download verification,
+  backups, atomic replacement and a lock rewrite; other sources are delegated
+  to their own CLI with a confirmed plan; local edits require a choice.
+- Health report categories `update-available`, `locally-modified`,
+  `lock-drift` and `codex-tmp-leftovers`.
 
 ### Changed
 
@@ -114,6 +126,10 @@ on Keep a Changelog and the project follows Semantic Versioning.
 - TypeScript checking is now an explicit local, CI, and release quality gate.
 
 ### Security
+
+- Update checks only contact listed hosts; an optional `gh auth token` is used
+  for api.github.com only and never stored. Delegated commands run without a
+  shell, with telemetry off, and only from a plan confirmed within ten minutes.
 
 - Home paths are now redacted wherever they end before a non-name character
   (backticks, CJK punctuation …), not only before separators and quotes.
