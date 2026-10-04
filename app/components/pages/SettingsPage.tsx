@@ -3,12 +3,14 @@
 import { usePersistent } from "../../hooks/usePersistent";
 import { useScrollMemory } from "../../hooks/useScrollMemory";
 import { errorMessage } from "../../lib/api";
-import { formatDateTime, joinNames } from "../../lib/format";
+import { joinNames } from "../../lib/format";
 import { persistentStore } from "../../lib/storage";
 import type { ManagerConfig, SyncMode } from "../../lib/types";
 import { useData } from "../providers/DataProvider";
 import { useToast } from "../providers/ToastProvider";
+import { useNav } from "../providers/NavProvider";
 import { AgentPicker } from "../shell/AgentPicker";
+import { HistoryList } from "./settings/HistoryList";
 import { AgentAvatar } from "../ui/Avatar";
 import { Loading, TopBar } from "../ui/basics";
 
@@ -71,12 +73,15 @@ function Choice<T extends string>({
 
 export function SettingsPage() {
   const { config, scan, agents, primary, agentName, integrations } = useData();
+  const { go } = useNav();
   const toast = useToast();
   const { write, saving } = useConfigWriter();
   const [theme, setTheme] = usePersistent(themeStore);
   const scrollRef = useScrollMemory<HTMLDivElement>("settings");
   const mode: SyncMode = config.data?.syncMode || "copy";
   const visible = config.data?.visibleAgentIds || [];
+  // Until the user customizes it, every detected Agent is read.
+  const customized = config.data?.visibleCustomized !== false;
 
   return (
     <section className="page" aria-labelledby="page-title">
@@ -131,13 +136,16 @@ export function SettingsPage() {
             </section>
             <section className="set-block" aria-labelledby="set-visible">
               <h2 id="set-visible">读取哪些 Agent 的技能</h2>
-              <p>没勾选的 Agent 只统计数量，不读取技能内容，也不会出现在技能列表里。常用 Agent 总会读取。</p>
+              <p>
+                没勾选的 Agent 只统计数量，不读取技能内容，也不会出现在技能列表里。常用 Agent 总会读取。
+                {customized ? "" : "目前读取全部检测到的 Agent。"}
+              </p>
               <div className="check-grid">
                 {agents
                   .filter((agent) => agent.available)
                   .map((agent) => {
                     const locked = primary.includes(agent.id);
-                    const on = locked || visible.includes(agent.id);
+                    const on = locked || !customized || visible.includes(agent.id);
                     return (
                       <label key={agent.id} className={locked ? "locked" : ""}>
                         <input
@@ -145,10 +153,14 @@ export function SettingsPage() {
                           checked={on}
                           disabled={locked || saving}
                           onChange={(event) => {
+                            const shown = customized ? visible : agents.filter((item) => item.available).map((item) => item.id);
                             const next = event.target.checked
-                              ? [...new Set([...visible, agent.id])]
-                              : visible.filter((id) => id !== agent.id);
-                            void write({ visibleAgentIds: next }, event.target.checked ? `开始读取 ${agent.name} 的技能` : `不再读取 ${agent.name} 的技能`);
+                              ? [...new Set([...shown, agent.id])]
+                              : shown.filter((id) => id !== agent.id);
+                            void write(
+                              { visibleAgentIds: next, visibleCustomized: true },
+                              event.target.checked ? `开始读取 ${agent.name} 的技能` : `不再读取 ${agent.name} 的技能`,
+                            );
                           }}
                         />
                         <AgentAvatar id={agent.id} size="sm" />
@@ -198,26 +210,12 @@ export function SettingsPage() {
               </section>
             ) : null}
             <section className="set-block" aria-labelledby="set-history">
-              <h2 id="set-history">备份与记录</h2>
+              <h2 id="set-history">历史与撤销</h2>
               <p>
-                每次替换前的旧版本都保存在 <code>~/.agent-skill-manager/backups</code>。
+                每次安装、导入、更新、移除和整理都会记录下来。替换前的旧版本保存在 <code>~/.agent-skill-manager/backups</code>，
+                移除的技能在 <button type="button" className="link-btn" onClick={() => go("library")}>技能库 → 回收站</button>。
               </p>
-              {scan.data.history.length ? (
-                <div className="copies">
-                  {scan.data.history.slice(0, 12).map((entry) => (
-                    <div key={entry.id}>
-                      <code>{entry.skillName}</code>
-                      <em>
-                        装到 {joinNames(entry.targets)} · {entry.mode === "symlink" ? "软链接" : "复制"}
-                        {entry.backups ? ` · 备份 ${entry.backups} 份` : ""}
-                      </em>
-                      <em>{formatDateTime(entry.createdAt)}</em>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="muted small">还没有安装记录。</p>
-              )}
+              <HistoryList />
             </section>
             <section className="set-block" aria-labelledby="set-privacy">
               <h2 id="set-privacy">数据与隐私</h2>

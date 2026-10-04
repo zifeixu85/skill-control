@@ -2,6 +2,7 @@ import { normalizeAgentFile, normalizeAgentFiles, normalizeAgentTools } from "./
 import { resolveApiBase } from "./api-base";
 import { normalizeCliPlan, normalizeCliTools } from "./cli-tools";
 import { normalizeHealthReport } from "./health";
+import { normalizeHistory, normalizeRestorePlan, normalizeTrash, normalizeUninstallPlan } from "./history";
 import { normalizeLibrary, normalizeLibraryApply, normalizeLibraryPlan, type LibraryAction } from "./library";
 import {
   normalizeApply,
@@ -253,6 +254,18 @@ export const api = {
     normalizeLibraryApply(await sendJson<unknown>("POST", "/api/library/apply", { planId, confirm: true }, true)),
   libraryRestore: async (trashId: string) =>
     sendJson<{ trashId: string; name: string; path: string }>("POST", "/api/library/restore", { trashId, confirm: true }, true),
+  history: async (limit = 100) => normalizeHistory(await getJson<unknown>("/api/history", { limit })),
+  planRestore: async (historyId: string) =>
+    normalizeRestorePlan(await sendJson<unknown>("POST", "/api/history/plan-restore", { historyId })),
+  applyRestore: (planId: string) =>
+    sendJson<Record<string, unknown>>("POST", "/api/history/apply-restore", { planId, confirm: true }, true),
+  planUninstall: async (skillId: string, agentId: string) =>
+    normalizeUninstallPlan(await sendJson<unknown>("POST", "/api/skills/plan-uninstall", { skillId, agentId })),
+  applyUninstall: (planId: string) =>
+    sendJson<Record<string, unknown>>("POST", "/api/skills/apply-uninstall", { planId, confirm: true }, true),
+  trash: async () => normalizeTrash(await getJson<unknown>("/api/trash")),
+  restoreTrash: (trashId: string) =>
+    sendJson<{ trashId: string; name: string; path: string }>("POST", "/api/trash/restore", { trashId, confirm: true }, true),
   cliTools: async () => normalizeCliTools(await getJson<unknown>("/api/cli-tools")),
   cliPlan: async (toolId: string, fixId: string, agents?: string[]) =>
     normalizeCliPlan(await sendJson<unknown>("POST", "/api/cli-tools/plan", agents?.length ? { toolId, fixId, agents } : { toolId, fixId })),

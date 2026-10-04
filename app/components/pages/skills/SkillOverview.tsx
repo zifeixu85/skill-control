@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useNow } from "../../../hooks/useNow";
 import { formatMonthDay, joinNames } from "../../../lib/format";
 import { groupCopies, type SkillView, type SlotState } from "../../../lib/skill-model";
@@ -8,7 +9,9 @@ import { useData } from "../../providers/DataProvider";
 import { useNav } from "../../providers/NavProvider";
 import { AgentAvatar } from "../../ui/Avatar";
 import { Switch } from "../../ui/basics";
+import { UninstallDialog } from "../../drawers/UninstallDialog";
 import { InstallPlan } from "./InstallPlan";
+import { LibraryActions } from "./LibraryActions";
 import { SkillActions, useReveal } from "./SkillActions";
 import { SkillSource } from "./SkillSource";
 import { SkillUsage } from "./SkillUsage";
@@ -26,12 +29,12 @@ function WhereRow({
   view,
   slot,
   onInstall,
-  onLocked,
+  onUninstall,
 }: {
   view: SkillView;
   slot: SlotState;
   onInstall: () => void;
-  onLocked: (message: string) => void;
+  onUninstall: () => void;
 }) {
   const { agentName } = useData();
   const now = useNow();
@@ -57,11 +60,7 @@ function WhereRow({
         <Switch
           checked={slot.kind === "installed"}
           label={`在 ${name} 中启用`}
-          onChange={() =>
-            slot.kind === "installed"
-              ? onLocked(`Skill Control 不会删除技能。要从 ${name} 移除，请在访达里处理这个文件夹。`)
-              : onInstall()
-          }
+          onChange={() => (slot.kind === "installed" ? onUninstall() : onInstall())}
         />
       )}
     </div>
@@ -72,19 +71,18 @@ export function SkillOverview({
   view,
   pendingAgent,
   onPending,
-  onMessage,
   onShowFiles,
 }: {
   view: SkillView;
   pendingAgent: string | null;
   onPending: (agentId: string | null) => void;
-  onMessage: (message: string) => void;
   onShowFiles: () => void;
 }) {
   const { primary, agentName } = useData();
   const { go } = useNav();
   const now = useNow();
   const reveal = useReveal();
+  const [removing, setRemoving] = useState<string | null>(null);
   const copies = groupCopies(view, primary);
 
   return (
@@ -99,7 +97,7 @@ export function SkillOverview({
               view={view}
               slot={view.slots[agentId]}
               onInstall={() => onPending(agentId)}
-              onLocked={onMessage}
+              onUninstall={() => setRemoving(agentId)}
             />
           ))}
         </div>
@@ -143,6 +141,7 @@ export function SkillOverview({
         </section>
       ) : null}
       <SkillSource view={view} />
+      <LibraryActions view={view} />
       <section>
         <h3>使用情况</h3>
         <SkillUsage view={view} />
@@ -168,6 +167,9 @@ export function SkillOverview({
         </button>
       </section>
       <SkillActions view={view} />
+      {removing ? (
+        <UninstallDialog skillId={view.id} skillTitle={view.title} agentId={removing} onClose={() => setRemoving(null)} />
+      ) : null}
     </>
   );
 }

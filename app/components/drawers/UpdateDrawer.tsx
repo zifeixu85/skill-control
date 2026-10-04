@@ -6,7 +6,7 @@ import { useResource } from "../../hooks/useResource";
 import { api, errorMessage } from "../../lib/api";
 import { formatMonthDay, formatRelative } from "../../lib/format";
 import { STATUS_HINTS, type UnitChanges } from "../../lib/updates";
-import { StatusTag, VersionLine } from "../pages/updates/UnitRow";
+import { LibraryShare, StatusTag, VersionLine } from "../pages/updates/UnitRow";
 import { UpdateFlow } from "../pages/updates/UpdateFlow";
 import { UPDATES_KEY } from "../pages/updates/UpdatesPage";
 import { useData } from "../providers/DataProvider";
@@ -82,6 +82,7 @@ export function UpdateDrawer({ unitKey, onClose }: { unitKey: string; onClose: (
           <StatusTag unit={unit} />
           <VersionLine unit={unit} />
           {unit.lockDrift ? <span className="tag mute">锁记录落后于本地内容</span> : null}
+          <LibraryShare unit={unit} />
         </div>
         <p className="desc">{STATUS_HINTS[unit.status]}</p>
         {unit.error ? (

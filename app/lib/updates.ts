@@ -98,6 +98,7 @@ export interface ApplyResult {
   lockBackup: string | null;
   savedAs: string | null;
   commands: { command: string; exitCode: number | null; stdout: string; stderr: string }[];
+  historyId: string | null;
 }
 
 export interface UnitChanges {
@@ -316,6 +317,7 @@ export function normalizeApply(raw: unknown): ApplyResult {
     lockBackup: asOptionalString(record.lockBackup),
     savedAs: asOptionalString(record.savedAs),
     commands,
+    historyId: asOptionalString(asRecord(record.historyEntry).id),
   };
 }
 

@@ -80,6 +80,11 @@ export const CATEGORY_LABELS: Record<string, string> = {
   "locally-modified": "本地改过的技能",
   "lock-drift": "锁记录和本地不一致",
   "codex-tmp-leftovers": "Codex 临时文件残留",
+  "library-drift": "和技能库重复的独立副本",
+  "library-external-link": "技能库里指向库外的链接",
+  "cli-version-skew": "命令行工具版本不一致",
+  "cli-workspace-unconfigured": "命令行工具的工作区没配置",
+  "cli-not-on-agent-path": "Agent 找不到命令行工具",
 };
 
 export const FIX_KIND_LABELS: Record<string, string> = {

@@ -2,9 +2,10 @@
 
 import { useState } from "react";
 import { useNow } from "../../../hooks/useNow";
-import { invalidateResources } from "../../../hooks/useResource";
+import { invalidateResources, isUnsupported, useResource } from "../../../hooks/useResource";
 import { api, errorMessage } from "../../../lib/api";
 import { formatRelative } from "../../../lib/format";
+import { TRASH_SOURCE_LABELS } from "../../../lib/history";
 import {
   agentCounts,
   KIND_LABELS,
@@ -124,19 +125,25 @@ export function EntriesTable({ entries, agents }: { entries: LibraryEntry[]; age
   );
 }
 
-export function TrashList({ data }: { data: LibraryData }) {
+/** One trash for everything: library removals, per-Agent uninstalls and undo leftovers. */
+export function TrashList() {
+  const trash = useResource("trash", () => api.trash());
+  const { agentName } = useData();
   const toast = useToast();
   const now = useNow();
   const [confirming, setConfirming] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  if (!data.trash.length) return <p className="muted small">回收站是空的。</p>;
+  if (isUnsupported(trash.error)) return <p className="muted small">本地服务还没有提供回收站。</p>;
+  if (trash.status === "error" && !trash.data) return <p className="form-error">{errorMessage(trash.error, "读取回收站失败。")}</p>;
+  if (!trash.data) return <p className="muted small">正在读取回收站…</p>;
+  if (!trash.data.length) return <p className="muted small">回收站是空的。</p>;
   const restore = async (trashId: string, name: string) => {
     setBusy(true);
     try {
-      await api.libraryRestore(trashId);
-      toast.show(`已把 ${name} 恢复到技能库`);
+      await api.restoreTrash(trashId);
+      toast.show(`已把 ${name} 放回原位`);
       setConfirming(null);
-      await invalidateResources("library", "scan", "health-report");
+      await invalidateResources("trash", "library", "scan", "history", "health-report");
     } catch (error) {
       toast.show(errorMessage(error, "恢复失败。"), { tone: "error" });
     } finally {
@@ -144,23 +151,31 @@ export function TrashList({ data }: { data: LibraryData }) {
     }
   };
   return (
-    <div className="copies">
-      {data.trash.map((item) => (
+    <div className="copies trash">
+      {trash.data.map((item) => (
         <div key={item.trashId}>
-          <code>{item.name}</code>
-          <em>{item.removedAt && now ? `${formatRelative(item.removedAt, now)}移入` : ""}</em>
-          <em>{item.links.length ? `${item.links.length} 个链接会一起恢复` : ""}</em>
+          <span className="trash-main">
+            <b>{item.name}</b>
+            <code title={item.originalPath}>{item.originalPath}</code>
+          </span>
+          <em>
+            {TRASH_SOURCE_LABELS[item.source] || item.source}
+            {item.agentId ? ` · ${agentName(item.agentId)}` : ""}
+            {item.kind === "link" ? " · 链接" : ""}
+            {item.links.length ? ` · 连同 ${item.links.length} 个链接` : ""}
+          </em>
+          <em>{item.removedAt && now ? formatRelative(item.removedAt, now) : ""}</em>
           {confirming === item.trashId ? (
             <span className="inline-confirm">
               <button type="button" className="btn sm primary" disabled={busy} onClick={() => void restore(item.trashId, item.name)}>
-                {busy ? "正在恢复…" : "确认恢复"}
+                {busy ? "正在恢复…" : "确认放回"}
               </button>
               <button type="button" className="btn sm ghost" disabled={busy} onClick={() => setConfirming(null)}>
                 取消
               </button>
             </span>
           ) : (
-            <button type="button" className="btn sm" onClick={() => setConfirming(item.trashId)}>
+            <button type="button" className="btn sm" onClick={() => setConfirming(item.trashId)} title={`放回 ${item.originalPath}`}>
               恢复
             </button>
           )}

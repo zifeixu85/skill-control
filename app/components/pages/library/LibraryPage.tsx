@@ -95,8 +95,8 @@ export function LibraryPage() {
               <span><i className="vis private-copy" />自己另有一份</span>
               <span><i className="vis missing" />看不到</span>
             </div>
-            <SectionHeading title="回收站" note="移出技能库的技能，可以恢复" />
-            <TrashList data={data} />
+            <SectionHeading title="回收站" note="移出技能库、从 Agent 移除或撤销时移走的技能，都可以放回原位" />
+            <TrashList />
           </>
         )}
       </div>

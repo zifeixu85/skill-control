@@ -2,6 +2,9 @@
 
 import type { KeyboardEvent } from "react";
 import { useNow } from "../../../hooks/useNow";
+import { useResource } from "../../../hooks/useResource";
+import { api } from "../../../lib/api";
+import { isLibraryPath } from "../../../lib/library";
 import { formatRelative } from "../../../lib/format";
 import { shortRevision, STATUS_LABELS, STATUS_TONES, type UpdateUnit } from "../../../lib/updates";
 import { useData } from "../../providers/DataProvider";
@@ -37,6 +40,20 @@ export function VersionLine({ unit }: { unit: UpdateUnit }) {
 }
 
 /** One update unit (a source shared by one or more installed copies). */
+/** "库内一份，N 个 Agent 共用" when the unit's copy lives in ~/.agents/skills. */
+export function LibraryShare({ unit }: { unit: UpdateUnit }) {
+  const library = useResource("library", () => api.library());
+  const root = library.data?.root || "~/.agents/skills";
+  const inLibrary = unit.instances.find((instance) => isLibraryPath(instance.path, root));
+  if (!inLibrary) return null;
+  const name = inLibrary.path.slice(root.length + 1).split("/")[0];
+  const entry = library.data?.entries.find((item) => item.name === name);
+  const viewers = entry
+    ? Object.values(entry.fanout).filter((fanout) => fanout.state === "visible").length
+    : new Set(unit.instances.map((instance) => instance.agentId)).size;
+  return <span className="tag info">库内一份，{viewers} 个 Agent 共用</span>;
+}
+
 export function UnitRow({ unit }: { unit: UpdateUnit }) {
   const { agentName } = useData();
   const { openDrawer } = useNav();
@@ -57,6 +74,7 @@ export function UnitRow({ unit }: { unit: UpdateUnit }) {
           <StatusTag unit={unit} />
           {unit.lockDrift ? <span className="tag mute">锁记录落后</span> : null}
           {unit.stale ? <span className="tag mute">结果可能过期</span> : null}
+          <LibraryShare unit={unit} />
         </div>
         <div className="urow-meta">
           <span>{unit.sourceLabel || unit.sourceType}</span>

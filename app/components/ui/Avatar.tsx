@@ -44,10 +44,13 @@ function ImageWithFallback({
 
 export function AgentAvatar({ id, size, label }: { id: string; size?: AvatarSize; label?: boolean }) {
   const { agentsById } = useData();
-  const meta = agentMeta(id, agentsById.get(id));
+  const agent = agentsById.get(id);
+  const meta = agentMeta(id, agent);
+  // Older services do not report iconAvailable; then try the icon route anyway.
+  const hasIcon = agent?.iconAvailable !== false;
   return (
     <ImageWithFallback
-      src={assetUrl.agentIcon(id)}
+      src={hasIcon ? assetUrl.agentIcon(id) : null}
       fallback={meta.letter}
       className={`av ${size || ""}`}
       style={{ background: meta.color, color: inkOn(meta.color) }}
@@ -71,9 +74,11 @@ export function PluginLogo({ plugin, size }: { plugin: Plugin; size?: "lg" }) {
 
 export function ExpertAvatar({ capability, size }: { capability: Capability; size?: "sm" | "lg" }) {
   const fallbackColor = capability.productColor || "#2d67d2";
+  const { agentsById } = useData();
+  const productIcon = agentsById.get(capability.productId)?.iconAvailable !== false;
   const src = capability.avatar
     ? assetUrl.expertAvatar(capability.avatar)
-    : ["hermes", "qclaw", "openclaw"].includes(capability.productId)
+    : ["hermes", "qclaw", "openclaw"].includes(capability.productId) && productIcon
       ? assetUrl.agentIcon(capability.productId)
       : null;
   return (

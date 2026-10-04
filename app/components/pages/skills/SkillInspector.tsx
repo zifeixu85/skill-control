@@ -49,7 +49,6 @@ export function SkillInspector({
   pendingAgent,
   onPending,
   onClose,
-  onMessage,
 }: {
   view: SkillView;
   tab: InspectorTab;
@@ -57,7 +56,6 @@ export function SkillInspector({
   pendingAgent: string | null;
   onPending: (agentId: string | null) => void;
   onClose: () => void;
-  onMessage: (message: string) => void;
 }) {
   const { primary } = useData();
   const reveal = useReveal();
@@ -95,7 +93,6 @@ export function SkillInspector({
             view={view}
             pendingAgent={pendingAgent}
             onPending={onPending}
-            onMessage={onMessage}
             onShowFiles={() => onTab("files")}
           />
         ) : null}

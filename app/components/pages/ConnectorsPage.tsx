@@ -10,7 +10,10 @@ import type { Connector } from "../../lib/types";
 import { useData } from "../providers/DataProvider";
 import { useNav } from "../providers/NavProvider";
 import { AgentAvatar, LetterLogo, PluginLogo } from "../ui/Avatar";
-import { EmptyState, Loading, SectionHeading, TopBar } from "../ui/basics";
+import { EmptyState, Loading, SectionHeading, Segmented, TopBar } from "../ui/basics";
+import { usePersistent } from "../../hooks/usePersistent";
+import { persistentStore } from "../../lib/storage";
+import { CliTools } from "./cli/CliTools";
 
 function ConnectorRow({ connector }: { connector: Connector }) {
   const { integrations } = useData();
@@ -94,8 +97,11 @@ function McpMatrix() {
   );
 }
 
+export const connectorsTabStore = persistentStore<"mcp" | "cli">("connectors-tab", "mcp", (value) => value === "mcp" || value === "cli");
+
 export function ConnectorsPage() {
   const { integrations } = useData();
+  const [tab, setTab] = usePersistent(connectorsTabStore);
   const now = useNow();
   const scrollRef = useScrollMemory<HTMLDivElement>("connectors");
   const connectors = integrations.data?.connectors || [];
@@ -103,9 +109,24 @@ export function ConnectorsPage() {
   const tools = connectors.reduce((sum, connector) => sum + connector.toolCount, 0);
   return (
     <section className="page" aria-labelledby="page-title">
-      <TopBar title={<span id="page-title">连接器与 MCP</span>} sub="连接器是 Codex 通过账号接入的应用；MCP 服务写在各 Agent 的配置文件里" />
+      <TopBar
+        title={<span id="page-title">连接器与 MCP</span>}
+        sub={tab === "cli" ? "Agent 通过命令行调用的工具，比如 lark-cli：装在哪、各 Agent 能不能用" : "连接器是 Codex 通过账号接入的应用；MCP 服务写在各 Agent 的配置文件里"}
+      >
+        <Segmented
+          label="显示内容"
+          value={tab}
+          onChange={setTab}
+          items={[
+            { id: "mcp", label: "连接器与 MCP" },
+            { id: "cli", label: "命令行工具" },
+          ]}
+        />
+      </TopBar>
       <div className="scroll" ref={scrollRef}>
-        {integrations.status === "error" && !integrations.data ? (
+        {tab === "cli" ? (
+          <CliTools />
+        ) : integrations.status === "error" && !integrations.data ? (
           <EmptyState tone="error" title="读取失败">
             {errorMessage(integrations.error)}
           </EmptyState>

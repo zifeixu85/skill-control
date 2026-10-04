@@ -35,6 +35,9 @@ export interface Nav {
   setQuery: (query: string) => void;
   importOpen: boolean;
   setImportOpen: (open: boolean) => void;
+  /** History entry whose undo dialog is open. */
+  restoreHistoryId: string | null;
+  setRestoreHistoryId: (id: string | null) => void;
 }
 
 const NavContext = createContext<Nav | null>(null);
@@ -54,6 +57,7 @@ export function NavProvider({ children }: { children: ReactNode }) {
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [importOpen, setImportOpen] = useState(false);
+  const [restoreHistoryId, setRestoreHistoryId] = useState<string | null>(null);
 
   const go = useCallback(
     (page: PageId, options: GoOptions = {}) => {
@@ -86,8 +90,10 @@ export function NavProvider({ children }: { children: ReactNode }) {
       setQuery,
       importOpen,
       setImportOpen,
+      restoreHistoryId,
+      setRestoreHistoryId,
     }),
-    [routeText, go, drawer, skillFilter, setSkillFilter, selectedSkillId, query, importOpen],
+    [routeText, go, drawer, skillFilter, setSkillFilter, selectedSkillId, query, importOpen, restoreHistoryId],
   );
 
   return <NavContext.Provider value={value}>{children}</NavContext.Provider>;

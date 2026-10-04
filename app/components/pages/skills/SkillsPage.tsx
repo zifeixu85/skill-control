@@ -194,7 +194,6 @@ export function SkillsPage() {
                 pendingAgent={pendingAgent}
                 onPending={(agentId) => setPending(agentId ? { skillId: selected.id, agentId } : null)}
                 onClose={() => nav.selectSkill(null)}
-                onMessage={(message) => toast.show(message)}
               />
             </>
           ) : null}

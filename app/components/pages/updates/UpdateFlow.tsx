@@ -15,7 +15,7 @@ import {
 import { CopyPathButton } from "../../files/ConfigDetailView";
 import { CodeView } from "../../ui/CodeView";
 import { useData } from "../../providers/DataProvider";
-import { useToast } from "../../providers/ToastProvider";
+import { useUndoToast } from "../../../hooks/useUndoToast";
 import { UPDATES_KEY } from "./UpdatesPage";
 
 type Phase =
@@ -129,7 +129,7 @@ function ResultView({ result }: { result: ApplyResult }) {
 
 /** Plan → explicit confirm → apply → result. Nothing runs without the confirm click. */
 export function UpdateFlow({ unit }: { unit: UpdateUnit }) {
-  const toast = useToast();
+  const undoToast = useUndoToast();
   const [phase, setPhase] = useState<Phase>({ name: "idle" });
 
   const plan = async (choice?: ConflictChoice) => {
@@ -146,7 +146,12 @@ export function UpdateFlow({ unit }: { unit: UpdateUnit }) {
     try {
       const result = await api.applyUpdate(current.planId);
       setPhase({ name: "done", result });
-      toast.show(result.ok ? `已更新 ${unit.title}` : `${unit.title} 没有全部完成，请查看输出`, { tone: result.ok ? "default" : "error" });
+      // Only self-updates keep backups the service can put back.
+      undoToast(
+        result.ok ? `已更新 ${unit.title}` : `${unit.title} 没有全部完成，请查看输出`,
+        result.kind === "self" ? result.historyId : null,
+        result.ok ? "default" : "error",
+      );
       primeResource(UPDATES_KEY, await api.updates());
       void invalidateResources("scan", "files:", "file:", "detail:", "health-report", "usage:skill:", "integrations");
     } catch (error) {

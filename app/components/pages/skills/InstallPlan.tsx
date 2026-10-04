@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { invalidateResources } from "../../../hooks/useResource";
+import { useUndoToast } from "../../../hooks/useUndoToast";
 import { api, errorMessage } from "../../../lib/api";
 import { formatMonthDay, joinNames } from "../../../lib/format";
 import { isReadOnlyInstance, pickSourceInstance, type SkillView } from "../../../lib/skill-model";
@@ -57,6 +58,7 @@ export function ActionDetail({ action, agentName }: { action: SyncAction; agentN
 export function InstallPlan({ view, agentId, onDone }: { view: SkillView; agentId: string; onDone: () => void }) {
   const { config, agentName, agentsById, primary } = useData();
   const toast = useToast();
+  const undoToast = useUndoToast();
   const candidates = view.skill.instances.filter((instance) => instance.agentId !== agentId);
   const initial = pickSourceInstance(view, agentId, primary);
   const [sourceId, setSourceId] = useState(initial?.id || "");
@@ -84,9 +86,10 @@ export function InstallPlan({ view, agentId, onDone }: { view: SkillView; agentI
       // Execute exactly what the shown plan was generated for.
       const result = await api.executeSync({ sourceInstanceId: state.sourceId, targetAgentIds: [agentId], mode: state.mode });
       const done = result.actions.filter((action) => action.result === "completed");
-      toast.show(done.length ? `已装到 ${agentName(agentId)}：${view.title}` : `${agentName(agentId)} 里已经是这一份，没有改动`);
+      if (done.length) undoToast(`已装到 ${agentName(agentId)}：${view.title}`, result);
+      else toast.show(`${agentName(agentId)} 里已经是这一份，没有改动`);
       onDone();
-      await invalidateResources("scan", "files:skill:", "file:skill:", "detail:skill", "usage:skill:", "health-report", "updates");
+      await invalidateResources("scan", "files:skill:", "file:skill:", "detail:skill", "usage:skill:", "health-report", "updates", "history", "library");
     } catch (error) {
       setState({ status: "error", message: errorMessage(error, "安装失败，没有写入任何文件。") });
     } finally {

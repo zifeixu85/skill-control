@@ -10,7 +10,7 @@ import type { ImportedSkill, SyncPlan } from "../../lib/types";
 import { FileBrowser, type FileSource } from "../files/FileBrowser";
 import { ActionDetail } from "../pages/skills/InstallPlan";
 import { useData } from "../providers/DataProvider";
-import { useToast } from "../providers/ToastProvider";
+import { useUndoToast } from "../../hooks/useUndoToast";
 import { AgentAvatar } from "../ui/Avatar";
 
 type Step =
@@ -21,7 +21,7 @@ type Step =
 /** .skill import: read the package → choose Agents → review the plan → confirm. */
 export function ImportDialog({ onClose }: { onClose: () => void }) {
   const { agents, primary, agentName } = useData();
-  const toast = useToast();
+  const undoToast = useUndoToast();
   const ref = useFocusTrap<HTMLDivElement>();
   const [step, setStep] = useState<Step>({ name: "pick", busy: false });
   const installable = agents.filter((agent) => agent.available && !agent.refuseInstall);
@@ -87,10 +87,10 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
     setWorking(true);
     setError("");
     try {
-      await api.executeImport(skill.importId, targets);
-      toast.show(`已安装 ${skill.displayName || skill.name}`);
+      const result = await api.executeImport(skill.importId, targets);
+      undoToast(`已安装 ${skill.displayName || skill.name}`, result);
       onClose();
-      await invalidateResources("scan", "health-report", "updates");
+      await invalidateResources("scan", "health-report", "updates", "history", "library");
     } catch (installError) {
       setError(errorMessage(installError, "安装失败，没有写入任何文件。"));
     } finally {

@@ -12,6 +12,7 @@ import { CopyPathButton } from "../files/ConfigDetailView";
 import { useData } from "../providers/DataProvider";
 import { useNav } from "../providers/NavProvider";
 import { useToast } from "../providers/ToastProvider";
+import { connectorsTabStore } from "./ConnectorsPage";
 import { AgentAvatar } from "../ui/Avatar";
 import { EmptyState, Loading, SectionHeading, TopBar } from "../ui/basics";
 
@@ -19,6 +20,7 @@ const TONE: Record<SeverityLevel, string> = { high: "danger", medium: "warn", lo
 
 const MCP_NAME = /MCP「([^」]+)」/;
 const UPDATE_CATEGORIES = new Set(["update-available", "locally-modified", "lock-drift"]);
+const LIBRARY_CATEGORIES = new Set(["library-drift", "library-external-link"]);
 
 function FindingRow({ finding }: { finding: HealthFinding }) {
   const { views, agentName } = useData();
@@ -34,7 +36,17 @@ function FindingRow({ finding }: { finding: HealthFinding }) {
     : null;
   const view = skillName ? views.find((item) => item.techName.toLowerCase() === skillName) : null;
   const mcpName = finding.category.startsWith("mcp") || finding.category === "nvm-only" ? finding.title.match(MCP_NAME)?.[1] : null;
-  const action = UPDATE_CATEGORIES.has(finding.category)
+  const action = LIBRARY_CATEGORIES.has(finding.category)
+    ? { label: "打开技能库", run: () => go("library") }
+    : finding.category.startsWith("cli-")
+      ? {
+          label: "查看命令行工具",
+          run: () => {
+            connectorsTabStore.set("cli");
+            go("connectors");
+          },
+        }
+      : UPDATE_CATEGORIES.has(finding.category)
     ? unit
       ? { label: "查看更新", run: () => openDrawer({ kind: "update", id: unit.unitKey }) }
       : { label: "打开更新", run: () => go("updates") }

@@ -32,6 +32,8 @@ export interface ScanAgent {
   archivedCount?: number;
   managedBy?: string[] | null;
   productVersion?: string | null;
+  /** Newer services: only request /api/agent-icon when true. */
+  iconAvailable?: boolean;
 }
 
 export interface InstanceUsage {
@@ -203,6 +205,8 @@ export interface ManagerConfig {
   visibleAgentIds: string[];
   primaryAgentIds?: string[] | null;
   dismissedAgentIds: string[];
+  /** False until the user first changes which Agents are visible (all detected ones show). */
+  visibleCustomized?: boolean;
 }
 
 export interface PluginApp {
