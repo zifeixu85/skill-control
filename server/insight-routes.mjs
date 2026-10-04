@@ -88,18 +88,22 @@ export function createInsightRoutes(context) {
   });
   const healthLoader = createCachedLoader(
     async () => {
-      const [scan, integrations, mcp, updateStatuses] = await Promise.all([
+      const [scan, integrations, mcp, updateStatuses, library, cliTools] = await Promise.all([
         context.getScan(),
         context.getIntegrations(),
         readMcpSources(context.homeDirectory),
         // Cached update results only: the health report never makes requests.
         updates.cachedStatuses().catch(() => []),
+        context.getLibrary ? context.getLibrary().catch(() => null) : null,
+        context.getCliTools ? context.getCliTools().catch(() => []) : [],
       ]);
       return buildHealthReport({
         scan,
         plugins: integrations.payload.plugins,
         mcpEntries: mcp.entries,
         updates: updateStatuses,
+        library,
+        cliTools,
         ...(context.commandDirectories ? { searchDirectories: context.commandDirectories } : {}),
         homeDirectory: context.homeDirectory,
         homes: context.homes,

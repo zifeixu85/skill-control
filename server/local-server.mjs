@@ -28,6 +28,7 @@ import { parseFrontmatter } from "./frontmatter.mjs";
 import { ACTIVITY_WINDOW_DAYS, scanAgentActivity } from "./agents-activity.mjs";
 import { defaultApplicationDirectories } from "./agent-icons.mjs";
 import { createInsightRoutes, INSIGHT_ROUTES } from "./insight-routes.mjs";
+import { createManageRoutes, MANAGE_ROUTES } from "./manage-routes.mjs";
 import { applyPrecedence, detectionPaths, SKILL_ADAPTERS } from "./agent-adapters.mjs";
 import { isSensitiveCapabilityPath, scanWorkBuddyExperts } from "./workbuddy-experts.mjs";
 import { readWorkBuddyExpertUsage } from "./workbuddy-usage.mjs";
@@ -2713,6 +2714,7 @@ const SAME_SITE_ONLY_ROUTES = new Set([
   "/api/plugin-asset",
   "/api/expert-avatar",
   ...INSIGHT_ROUTES,
+  ...MANAGE_ROUTES,
 ]);
 
 function crossSiteBlocked(request, pathname) {
@@ -2866,6 +2868,31 @@ function commandDirectories() {
   return configured.length ? configured.map((directory) => ({ directory, nvm: false })) : null;
 }
 
+/** Config for the library: primary Agents as chosen, else the effective ones from the scan. */
+async function libraryConfig() {
+  const config = await loadConfig();
+  if (config.primaryAgentIds?.length) return config;
+  const scan = await getScan().catch(() => null);
+  return { ...config, primaryAgentIds: scan?.effectivePrimaryAgentIds || [] };
+}
+
+let manageRoutes = null;
+function getManageRoutes() {
+  manageRoutes ||= createManageRoutes({
+    homeDirectory: HOME_DIRECTORY,
+    homes: [HOME_DIRECTORY, REAL_HOME_DIRECTORY],
+    stateDirectory: STATE_DIRECTORY,
+    backupDirectory: BACKUP_DIRECTORY,
+    historyFile: HISTORY_FILE,
+    getConfig: libraryConfig,
+    commandDirectories: commandDirectories(),
+    readBody: readRequestBody,
+    afterWrite: invalidateScanCache,
+    json: jsonResponse,
+  });
+  return manageRoutes;
+}
+
 let insightRoutes = null;
 function getInsightRoutes() {
   insightRoutes ||= createInsightRoutes({
@@ -2885,6 +2912,8 @@ function getInsightRoutes() {
     afterWrite: invalidateScanCache,
     updatesOffline: process.env.SKILL_MANAGER_UPDATES_OFFLINE === "1",
     commandDirectories: commandDirectories(),
+    getLibrary: () => getManageRoutes().libraryInternal(),
+    getCliTools: () => getManageRoutes().detectTools(),
     json: jsonResponse,
     image: imageResponse,
   });
@@ -2964,6 +2993,7 @@ export async function handleRequest(request, response) {
       jsonResponse(response, 403, { error: "不允许跨站读取本地配置或资源。" }, origin);
       return;
     }
+    if (await getManageRoutes().handle(request, requestUrl, response, origin)) return;
     if (await getInsightRoutes().handle(request, requestUrl, response, origin)) return;
     if (request.method === "GET" && requestUrl.pathname === "/api/health") {
       jsonResponse(

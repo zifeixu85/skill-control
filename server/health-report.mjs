@@ -336,6 +336,31 @@ function checkUpdates(updates, context) {
   }
 }
 
+/** Library hygiene and CLI tool readiness (computed elsewhere, read here). */
+function checkLibraryAndCli(library, cliTools, context) {
+  for (const issue of library?.issues || []) {
+    if (issue.id === "library-drift") {
+      context.add({ severity: "info", category: "library-drift", agentId: issue.agentId, title: issue.title, detail: `${issue.detail}${issue.names?.length ? ` 例如：${issue.names.slice(0, 8).join("、")}` : ""}`, fix: { kind: "configure", label: "在技能库中批量改为链接" } });
+    } else if (issue.id === "library-external-link") {
+      context.add({ severity: "warn", category: "library-external-link", title: issue.title, detail: `${issue.detail} ${issue.names.slice(0, 8).join("、")}`, path: library.root, fix: { kind: "configure", label: "在技能库中收编" } });
+    }
+  }
+  for (const tool of cliTools || []) {
+    const versions = [...new Set((tool.binaries || []).map((binary) => binary.version).filter(Boolean))];
+    if (versions.length > 1) {
+      context.add({ severity: "warn", category: "cli-version-skew", title: `${tool.name} 有 ${versions.length} 个不同版本`, detail: (tool.binaries || []).map((binary) => `${binary.path} ${binary.version || "未知"}`).join("；"), fix: FIX.configure });
+    }
+    for (const agent of tool.agents || []) {
+      if (tool.binaries?.length && agent.resolves === null) {
+        context.add({ severity: "warn", category: "cli-not-on-agent-path", agentId: agent.agentId, title: `${agent.agentId} 找不到 ${tool.name}`, detail: `按 ${agent.pathSource} 的 PATH 查找不到这个命令。`, fix: FIX.configure });
+      }
+      if (agent.workspace && agent.workspace !== "local" && agent.workspaceConfigured === false) {
+        context.add({ severity: "warn", category: "cli-workspace-unconfigured", agentId: agent.agentId, title: `${agent.agentId} 使用的 ${tool.name} 工作区未配置`, detail: `该 Agent 运行时会改用 ${agent.workspace} 工作区，需要单独绑定（lark-cli config bind --source ${agent.workspace}）。`, fix: FIX.configure });
+      }
+    }
+  }
+}
+
 /** Leftover temporary git clones from Codex (~/.codex/.tmp/git-*), with their size. */
 async function checkCodexTemp(context) {
   const root = path.join(context.homeDirectory, ".codex", ".tmp");
@@ -392,6 +417,8 @@ export async function buildHealthReport({
   plugins = [],
   mcpEntries = [],
   updates = [],
+  library = null,
+  cliTools = [],
   homeDirectory = homedir(),
   homes = [homeDirectory],
   searchDirectories = null,
@@ -408,6 +435,7 @@ export async function buildHealthReport({
   checkPlugins(plugins, context);
   checkSharedRoots(scan, context);
   checkUpdates(updates, context);
+  checkLibraryAndCli(library, cliTools, context);
   await checkCodexTemp(context);
   const findings = collector.finish();
   const order = { error: 0, warn: 1, info: 2 };

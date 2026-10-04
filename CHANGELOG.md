@@ -94,6 +94,19 @@ on Keep a Changelog and the project follows Semantic Versioning.
   to their own CLI with a confirmed plan; local edits require a choice.
 - Health report categories `update-available`, `locally-modified`,
   `lock-drift` and `codex-tmp-leftovers`.
+- Shared skill library (`GET /api/library`, `POST /api/library/plan`,
+  `/api/library/apply`, `/api/library/restore`): per-Agent visibility
+  simulated with each product's own rules, adoption of reverse links and Agent
+  copies, relative links per tier, native disable switches, uninstall to a
+  restorable trash, a one-plan batch clean-up with per-item choices, rollback
+  on failure or failed re-verification, and `library-lock.json`.
+- CLI tool cards (`GET /api/cli-tools`, `POST /api/cli-tools/plan`,
+  `/api/cli-tools/apply`): lark-cli copies and versions, which copy each Agent
+  finds through its own PATH source, workspace and keychain readiness, allow
+  rules and sandbox network, with a stable `~/.local/bin` launcher and allow
+  rule fixes; gh and uv are detected through the same descriptor table.
+- Health report categories `library-drift`, `library-external-link`,
+  `cli-version-skew`, `cli-workspace-unconfigured`, `cli-not-on-agent-path`.
 
 ### Changed
 
@@ -126,6 +139,10 @@ on Keep a Changelog and the project follows Semantic Versioning.
 - TypeScript checking is now an explicit local, CI, and release quality gate.
 
 ### Security
+
+- Library and CLI writes are refused under the account's real home whenever the
+  service runs with another home or under a test runner; removals move folders
+  to backups or the trash, never delete them.
 
 - Update checks only contact listed hosts; an optional `gh auth token` is used
   for api.github.com only and never stored. Delegated commands run without a
