@@ -5,8 +5,12 @@ import { useNow } from "../../hooks/useNow";
 import { formatRelative } from "../../lib/format";
 import type { MainPage } from "../../lib/navigation";
 import { mergePlugins } from "../../lib/plugins";
+import { actionableCount } from "../../lib/updates";
+import { useResource } from "../../hooks/useResource";
+import { api } from "../../lib/api";
 import {
   ConnectorsIcon,
+  UpdateIcon,
   ExpertsIcon,
   HealthIcon,
   HomeIcon,
@@ -19,7 +23,14 @@ import { useData } from "../providers/DataProvider";
 import { useNav } from "../providers/NavProvider";
 import { AgentAvatar } from "../ui/Avatar";
 
-type NavItem = { id: MainPage; label: string; Icon: ComponentType<SVGProps<SVGSVGElement>>; count?: number };
+type NavItem = {
+  id: MainPage;
+  label: string;
+  Icon: ComponentType<SVGProps<SVGSVGElement>>;
+  count?: number;
+  /** Count shown as an attention badge rather than a plain total. */
+  badge?: boolean;
+};
 
 function BrandMark() {
   return (
@@ -53,6 +64,7 @@ function ScanState() {
 
 export function Sidebar() {
   const { views, integrations, capabilities, primary, agents, activityById } = useData();
+  const updates = useResource("updates", () => api.updates());
   const { route, go } = useNav();
   const plugins = mergePlugins(integrations.data?.plugins || []);
   // Grouped so later sections (统一技能库、更新) slot into "管理" without reshuffling.
@@ -72,6 +84,7 @@ export function Sidebar() {
       Icon: ConnectorsIcon,
       count: (integrations.data?.connectors.length || 0) + (integrations.data?.mcpMatrix.length || 0) || undefined,
     },
+    { id: "updates", label: "更新", Icon: UpdateIcon, count: actionableCount(updates.data) || undefined, badge: true },
   ];
   const insight: NavItem[] = [
     { id: "usage", label: "数据", Icon: UsageIcon },
@@ -84,19 +97,19 @@ export function Sidebar() {
         (activityById.get(right.id)?.weight30d || 0) - (activityById.get(left.id)?.weight30d || 0) ||
         right.skillCount - left.skillCount,
     );
-  const navButton = ({ id, label, Icon, count }: NavItem) => (
+  const navButton = ({ id, label, Icon, count, badge }: NavItem) => (
     <button
       key={id}
       type="button"
       className={route.page === id ? "on" : ""}
       aria-current={route.page === id ? "page" : undefined}
-      aria-label={count ? `${label}，${count} 个` : label}
+      aria-label={count ? `${label}，${count} 个${badge ? "待处理" : ""}` : label}
       title={label}
       onClick={() => go(id)}
     >
       <Icon />
       <span>{label}</span>
-      {count ? <span className="count">{count}</span> : null}
+      {count ? <span className={badge ? "count badge" : "count"}>{count}</span> : null}
     </button>
   );
   const agentButton = (id: string, name: string, count: number, dim: boolean) => (

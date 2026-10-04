@@ -17,16 +17,16 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
-export function CopyPathButton({ path }: { path: string }) {
+export function CopyPathButton({ path, label = "复制路径" }: { path: string; label?: string }) {
   const toast = useToast();
   return (
     <button
       type="button"
       className="btn sm"
-      onClick={async () => toast.show((await copyText(path)) ? "已复制路径" : "复制失败，可以手动选中路径")}
+      onClick={async () => toast.show((await copyText(path)) ? `已${label.replace(/^复制/, "复制")}` : "复制失败，可以手动选中")}
     >
       <CopiesIcon />
-      复制路径
+      {label}
     </button>
   );
 }

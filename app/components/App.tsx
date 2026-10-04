@@ -12,6 +12,7 @@ import { HomePage } from "./pages/HomePage";
 import { PluginsPage } from "./pages/PluginsPage";
 import { SettingsPage, themeStore } from "./pages/SettingsPage";
 import { SkillsPage } from "./pages/skills/SkillsPage";
+import { UpdatesPage } from "./pages/updates/UpdatesPage";
 import { UsagePage } from "./pages/usage/UsagePage";
 import { DataProvider, useData } from "./providers/DataProvider";
 import { NavProvider, useNav } from "./providers/NavProvider";
@@ -47,6 +48,8 @@ function CurrentPage() {
       return <ExpertsPage />;
     case "connectors":
       return <ConnectorsPage />;
+    case "updates":
+      return <UpdatesPage />;
     case "usage":
       return <UsagePage />;
     case "health":

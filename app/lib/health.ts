@@ -76,6 +76,10 @@ export const CATEGORY_LABELS: Record<string, string> = {
   "mcp-literal-secret": "MCP 配置里有明文密钥",
   "plugin-state": "插件状态",
   "shared-root": "共用的技能文件夹",
+  "update-available": "有新版本",
+  "locally-modified": "本地改过的技能",
+  "lock-drift": "锁记录和本地不一致",
+  "codex-tmp-leftovers": "Codex 临时文件残留",
 };
 
 export const FIX_KIND_LABELS: Record<string, string> = {

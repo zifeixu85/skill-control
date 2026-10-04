@@ -1,6 +1,14 @@
 import { normalizeAgentFile, normalizeAgentFiles, normalizeAgentTools } from "./agent-extras";
 import { resolveApiBase } from "./api-base";
 import { normalizeHealthReport } from "./health";
+import {
+  normalizeApply,
+  normalizeChanges,
+  normalizeCheckJob,
+  normalizePlan,
+  normalizeUpdates,
+  type ConflictChoice,
+} from "./updates";
 import type {
   AgentActivity,
   CapabilityCatalog,
@@ -222,6 +230,15 @@ export const api = {
   usageAgent: async (id: string, days = 90) =>
     normalizeAgentUsage(await getJson<unknown>("/api/usage/agent", { id, days }), id),
   usageStatus: async () => normalizeUsageStatus(await getJson<unknown>("/api/usage/status")),
+  updates: async () => normalizeUpdates(await getJson<unknown>("/api/updates")),
+  checkUpdates: async (unitKeys?: string[]) =>
+    normalizeCheckJob(await sendJson<unknown>("POST", "/api/updates/check", unitKeys?.length ? { unitKeys } : {})),
+  checkStatus: async () => normalizeCheckJob(await getJson<unknown>("/api/updates/check-status")),
+  updateChanges: async (unitKey: string) => normalizeChanges(await getJson<unknown>("/api/updates/changes", { unitKey })),
+  planUpdate: async (unitKey: string, choice?: ConflictChoice) =>
+    normalizePlan(await sendJson<unknown>("POST", "/api/updates/plan", choice ? { unitKey, choice } : { unitKey })),
+  applyUpdate: async (planId: string) =>
+    normalizeApply(await sendJson<unknown>("POST", "/api/updates/apply", { planId, confirm: true }, true)),
   healthReport: async (refresh?: boolean) =>
     normalizeHealthReport(await getJson<unknown>("/api/health-report", force(refresh))),
 };

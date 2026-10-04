@@ -138,3 +138,9 @@ export const InfoIcon = (props: IconProps) => (
     <path d="M10 9v4.2M10 6.6v.01" />
   </Icon>
 );
+export const UpdateIcon = (props: IconProps) => (
+  <Icon strokeWidth={1.6} {...props}>
+    <path d="M10 3.5v8.5M6.5 8.5 10 12l3.5-3.5" />
+    <path d="M4 14.5v1a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-1" />
+  </Icon>
+);

@@ -1,0 +1,235 @@
+/* 更新: unit list, plan steps, conflict choices, command output, skill panel source box. */
+
+.ulist {
+  display: grid;
+  gap: 6px;
+}
+.urow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 14px;
+  align-items: center;
+  background: var(--panel);
+  border-radius: var(--r-card);
+  padding: 11px 14px;
+  box-shadow: 0 0 0 1px var(--line-2);
+  cursor: pointer;
+}
+.urow:hover {
+  box-shadow: 0 0 0 1px var(--line), var(--shadow-sm);
+}
+.urow:focus-visible {
+  border-radius: var(--r-card);
+}
+.urow-main {
+  min-width: 0;
+}
+.urow-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+.urow-title b {
+  font-size: 14px;
+  font-weight: 650;
+}
+.urow-meta {
+  display: flex;
+  gap: 4px 12px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  margin-top: 2px;
+}
+.urow-agents {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.urow-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.versions code {
+  font-size: 11.5px;
+  background: var(--hover);
+  border-radius: 5px;
+  padding: 0 5px;
+}
+.versions .latest {
+  background: var(--info-wash);
+  color: var(--info);
+}
+.danger-text {
+  color: var(--danger);
+}
+.first-check {
+  margin: 0 0 14px;
+}
+.updates-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  font-size: 12px;
+  color: var(--ink-3);
+  margin-top: 22px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line-2);
+}
+
+.steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+}
+.steps li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--window);
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+.steps p {
+  color: var(--ink-2);
+}
+.steps code {
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.command {
+  display: block;
+  font-size: 12px;
+  background: var(--code);
+  border-radius: 8px;
+  padding: 6px 10px;
+  overflow-wrap: anywhere;
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+.command-copy {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+.file-changes {
+  display: grid;
+  gap: 6px;
+}
+.file-changes summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  margin-bottom: 4px;
+}
+.choices {
+  display: grid;
+  gap: 8px;
+}
+.choice {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--window);
+  box-shadow: 0 0 0 1px var(--line);
+}
+.choice:hover {
+  box-shadow: 0 0 0 1.5px var(--accent);
+}
+.choice b {
+  font-size: 13.5px;
+}
+.choice span {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.command-result {
+  display: grid;
+  gap: 6px;
+}
+.command-result .code {
+  max-height: 220px;
+}
+.command-result .stderr {
+  color: var(--warn);
+}
+.change-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+.change-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: baseline;
+}
+.change-list code {
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+.change-list em {
+  font-style: normal;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.source-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+.source-box > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.source-box.attention {
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--info) 45%, transparent);
+  background: color-mix(in oklab, var(--info-wash) 60%, var(--panel));
+}
+.source-label {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.nav .count.badge {
+  color: #fff;
+  background: var(--info);
+  border-radius: 999px;
+  padding: 0 7px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+@media (max-width: 880px) {
+  .nav .count.badge {
+    display: inline-block;
+    margin-left: 4px;
+  }
+  .urow {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .urow-side {
+    grid-column: 1 / -1;
+    justify-content: space-between;
+  }
+}

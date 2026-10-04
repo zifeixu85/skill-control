@@ -18,14 +18,27 @@ import { EmptyState, Loading, SectionHeading, TopBar } from "../ui/basics";
 const TONE: Record<SeverityLevel, string> = { high: "danger", medium: "warn", low: "info", info: "mute" };
 
 const MCP_NAME = /MCP「([^」]+)」/;
+const UPDATE_CATEGORIES = new Set(["update-available", "locally-modified", "lock-drift"]);
 
 function FindingRow({ finding }: { finding: HealthFinding }) {
   const { views, agentName } = useData();
   const { go, openDrawer } = useNav();
+  const updates = useResource("updates", () => api.updates());
   const skillName = finding.skillName?.toLowerCase();
+  const unit = UPDATE_CATEGORIES.has(finding.category)
+    ? updates.data?.units.find(
+        (item) =>
+          (finding.path && item.instances.some((instance) => instance.path === finding.path)) ||
+          (skillName && item.title.toLowerCase() === skillName),
+      )
+    : null;
   const view = skillName ? views.find((item) => item.techName.toLowerCase() === skillName) : null;
   const mcpName = finding.category.startsWith("mcp") || finding.category === "nvm-only" ? finding.title.match(MCP_NAME)?.[1] : null;
-  const action = mcpName
+  const action = UPDATE_CATEGORIES.has(finding.category)
+    ? unit
+      ? { label: "查看更新", run: () => openDrawer({ kind: "update", id: unit.unitKey }) }
+      : { label: "打开更新", run: () => go("updates") }
+    : mcpName
     ? { label: "查看配置", run: () => openDrawer({ kind: "mcp", id: mcpName }) }
     : view
       ? { label: "查看技能", run: () => go("skills", { skillId: view.id }) }

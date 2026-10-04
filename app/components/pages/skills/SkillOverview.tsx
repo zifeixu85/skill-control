@@ -10,6 +10,7 @@ import { AgentAvatar } from "../../ui/Avatar";
 import { Switch } from "../../ui/basics";
 import { InstallPlan } from "./InstallPlan";
 import { SkillActions, useReveal } from "./SkillActions";
+import { SkillSource } from "./SkillSource";
 import { SkillUsage } from "./SkillUsage";
 
 function whereText(view: SkillView, slot: SlotState, now: number): string {
@@ -141,6 +142,7 @@ export function SkillOverview({
           ) : null}
         </section>
       ) : null}
+      <SkillSource view={view} />
       <section>
         <h3>使用情况</h3>
         <SkillUsage view={view} />

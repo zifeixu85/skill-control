@@ -4,6 +4,7 @@ export const MAIN_PAGES = [
   "plugins",
   "experts",
   "connectors",
+  "updates",
   "usage",
   "health",
   "settings",
@@ -23,6 +24,7 @@ export const PAGE_TITLES: Record<PageId, string> = {
   plugins: "插件",
   experts: "专家与 Agent",
   connectors: "连接器与 MCP",
+  updates: "更新",
   usage: "数据",
   health: "体检",
   settings: "设置",
@@ -51,4 +53,5 @@ export function isValidRoute(value: string): boolean {
 export type DrawerTarget =
   | { kind: "plugin"; id: string }
   | { kind: "expert"; id: string }
-  | { kind: "mcp"; id: string };
+  | { kind: "mcp"; id: string }
+  | { kind: "update"; id: string };
