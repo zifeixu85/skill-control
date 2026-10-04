@@ -942,7 +942,8 @@ WorkBuddy、Trae；其余 Agent 只用自己的副本。可见性按产品规则
 - 移除：撤掉所有指向库的链接，把条目移到 `~/.agent-skill-manager/trash/<id>/` 并写清单。
 
 `POST /api/library/apply` `{ planId, confirm: true }` + `x-skill-manager-confirm: yes` →
-`{ planId, results: [{ id, title, status: "applied" | "failed" | "rolled-back", error?, trashId? }], backups, visibility: Record<skill, fanout>, historyEntry }`。
+`{ planId, results: [{ id, title, status: "applied" | "failed" | "rolled-back", error?, trashId? }], backups, visibility: Record<skill, fanout>, historyEntry }`；
+`historyEntry.restorable` 为 true 表示至少一个已执行条目有可撤销的操作（或进了回收站），与历史列表的判断相同。
 每个条目是一个事务：任一步失败即按相反顺序撤销本条目已完成的步骤；全部执行后重新做一次可见性体检，预期 Agent
 看不到技能的条目自动回滚。成功后更新 `library-lock.json`（来源只读导入自 `~/.agents/.skill-lock.json`，键排序）
 并写入历史。`POST /api/library/restore` `{ trashId, confirm: true }`（同样需要确认头）→ `{ trashId, name, path, links }`。
@@ -976,7 +977,7 @@ OpenCode 参考最新 shell snapshot。工作区是否配置只看 `config.json`
 
 `POST /api/cli-tools/plan` `{ toolId, fixId, agents? }` → `{ planId, kind: "self", steps: [{ type: "write", path, backup, diff }], notes, agentIds, skipped: [{ agentId, agentName, reason }], expiresAt }`
 或 `{ planId: null, kind: "guide" | "none", instructions?, message? }`；`POST /api/cli-tools/apply` `{ planId, confirm: true }` +
-确认头 → `{ changed: [{ path, backup }], historyEntry }`。写入的修复只有两项：`~/.local/bin/lark-cli` 启动脚本
+确认头 → `{ changed: [{ path, backup }], historyEntry /* 含 restorable */ }`。写入的修复只有两项：`~/.local/bin/lark-cli` 启动脚本
 （`#!/bin/sh` + `exec "<原生程序真实路径>" "$@"`，已有文件先备份）和放行规则（Claude `permissions.allow`
 `Bash(lark-cli *)`、Codex `~/.codex/rules/default.rules` 追加 `prefix_rule(pattern=["lark-cli"], decision="allow")`、
 Gemini `tools.allowed`、已有配置的 Cursor CLI `permissions.allow` 与 OpenCode `permission.bash`；JSON 编辑保留其他键，
@@ -1012,7 +1013,8 @@ Gemini `tools.allowed`、已有配置的 Cursor CLI `permissions.allow` 与 Open
 `{ planId, historyId, steps: [{ type: "restore-backup" | "trash-created" | "restore-trash", agentId?, target, from?, precondition /* 当前内容指纹前 16 位，或 "absent" */, trashId? }], warnings, expiresAt }`；
 按单元撤销的记录另返回 `units: [{ id, title, selected, conflict?, unrestorable?, steps: [{ type, path, from? }] }]`：
 自那次操作后被改动过的路径（或原位置已被占用）标为 `conflict`，默认不选；在 `select` 中列出单元 id 才会恢复（覆盖前
-仍先备份当前内容）。没有可直接恢复的单元时 `planId` 为 null。
+仍先备份当前内容）。没有可直接恢复的单元时 `planId` 为 null。冲突说明只放在各自单元上：`warnings` 不逐条重复，
+只在选中了有冲突的单元时给一条汇总（“选中的 N 项……当前内容会先备份”）。
 replace 的反向是把备份放回原位（共享的真实目录只写一次），create 的反向是把创建出的目录移到回收站，卸载的反向是
 从回收站恢复。目标在那次写入之后又被修改过（`afterHash` 不同）会给出警告。
 
@@ -1027,7 +1029,8 @@ replace 的反向是把备份放回原位（共享的真实目录只写一次）
 链接只移除链接本身；实体目录移到 `~/.agent-skill-manager/trash/<id>/` 并写清单；只读或托管的实例（Codex 内置、
 插件缓存、Hermes 内置 / Hub、QClaw 同步等）拒绝并说明原因；目标必须在某个 Agent 技能目录或技能库内。
 `alsoAffects`：删除实体目录时，经同一真实目录看到它的其他 Agent；删除链接时，经同一路径（共享根目录）看到它的
-其他 Agent。`POST /api/skills/apply-uninstall` `{ planId, confirm: true }` + 确认头 → `{ planId, trashId, historyEntry }`。
+其他 Agent。`alsoAffects` 是 Agent id，`warning` 用展示名称（如“Claude Code 也会因此看不到这个技能。”）。
+`POST /api/skills/apply-uninstall` `{ planId, confirm: true }` + 确认头 → `{ planId, trashId, historyEntry }`。
 
 `GET /api/trash` → `{ items: [{ trashId, name, source: "library" | "uninstall" | "restore", agentId, kind: "real" | "link", originalPath, removedAt, links }] }`；
 `POST /api/trash/restore` `{ trashId, confirm: true }` + 确认头 → `{ trashId, name, path, links }`（原位置必须仍在某个 Agent
@@ -1040,6 +1043,31 @@ OpenClaw、QClaw；修改后按用户的选择保存。状态判断仍只看常�
 
 `GET /api/scan` 的每个 Agent 新增 `iconAvailable: boolean`：只检查已知应用包是否存在并核对 Bundle ID 与图标文件，
 不转换图标；前端只在为 true 时请求 `/api/agent-icon`（未知仍返回 404）。
+
+## 错误码
+
+所有错误响应为 `{ error: string /* 中文说明，主目录已压缩为 ~ */, code?: string }`。`code` 是机器可读的原因，界面按它
+分类，旧服务没有 `code` 时才回退到按状态码和文案判断（`app/lib/plan-flow.ts` 的 `classifyApplyError`）。
+计划保存在进程内存中（`server/plan-store.mjs`），10 分钟有效、只能执行一次。
+
+| code | 状态 | 含义 | 界面处理 |
+|---|---|---|---|
+| `stale-plan` | 409 | 生成计划后目标指纹或前提变了（恢复目标被改动、更新前本地内容或锁文件被改、技能库 / CLI 操作时目标已被占用或不再是链接、同步目标变成软链接） | 自动重新生成计划并提示再看一遍 |
+| `plan-expired` | 404 | 计划超过 10 分钟 | 同上 |
+| `plan-not-found` | 404 | 计划 id 不存在、已执行过或类型不符 | 同上 |
+| `updates-offline` | 409 | 离线模式下拒绝会联网的更新命令 | 显示错误 |
+| `refused` | 409 / 400 | 策略拒绝：托管或只读技能不能卸载、目标不在技能目录内、修复项不适用、记录没有可恢复的写入、来源不能由本工具更新 | 显示错误 |
+| `conflict` | 409 | 需要用户先处理的占用：另存目标已存在、回收站原位置已有同名条目、仓库有未提交的改动 | 显示错误 |
+| `up-to-date` / `check-required` / `unsupported` / `too-large` / `missing-command` | 409 | 更新计划的前置条件不满足 | 显示错误 |
+| `integrity` | 409 / 500 | 下载或写入后的校验失败，已停止并恢复 | 显示错误 |
+| `backup-missing` / `nothing-to-do` | 409 | 恢复所需的备份已不存在 / 没有需要恢复的内容 | 显示错误 |
+| `confirm-required` | 400 | 缺少 `confirm: true` 或确认头 | 显示错误 |
+| `invalid-request` | 400 | 参数无效 | 显示错误 |
+| `home-guard` / `command-not-allowed` / `forbidden` | 403 | 写入保护拒绝真实主目录 / 命令不在允许目录 / Host、Origin 或跨站检查不通过 | 显示错误 |
+| `not-found` / `route-missing` | 404 | 对象不存在 / 接口不存在（旧版本服务，界面据此做功能探测） | 显示错误 / 降级 |
+
+没有显式 `code` 的 403 / 404 / 409 分别默认为 `forbidden`、`not-found`、`conflict`；Node 的系统错误码（如 `ENOENT`）
+不会透出。`ApiError` 带 `code`（旧服务为 null）。
 
 ## 本地服务防护（新增）
 

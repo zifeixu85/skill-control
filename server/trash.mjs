@@ -11,9 +11,11 @@ import { assertSafeWrite } from "./home-guard.mjs";
  */
 
 export class TrashError extends Error {
-  constructor(statusCode, message) {
+  constructor(statusCode, message, code = null) {
     super(message);
     this.statusCode = statusCode;
+    // Machine-readable reason for the UI (see docs/ARCHITECTURE.md, "Error codes").
+    if (code) this.code = code;
   }
 }
 
@@ -44,11 +46,11 @@ export async function listTrash(stateDirectory, display = (value) => value) {
 }
 
 export async function readTrashManifest(stateDirectory, trashId) {
-  if (!TRASH_ID.test(String(trashId || ""))) throw new TrashError(400, "回收站条目无效。");
+  if (!TRASH_ID.test(String(trashId || ""))) throw new TrashError(400, "回收站条目无效。", "invalid-request");
   try {
     return JSON.parse(await readFile(path.join(trashRoot(stateDirectory), trashId, "manifest.json"), "utf8"));
   } catch {
-    throw new TrashError(404, "回收站中没有这个条目。");
+    throw new TrashError(404, "回收站中没有这个条目。", "not-found");
   }
 }
 
@@ -60,9 +62,9 @@ export async function restoreTrash({ trashId, stateDirectory, homeDirectory, all
   const manifest = await readTrashManifest(stateDirectory, trashId);
   const root = path.join(trashRoot(stateDirectory), trashId);
   if (!allowedRoots.some((allowed) => isStrictlyWithin(allowed, manifest.originalPath))) {
-    throw new TrashError(400, "原位置不在任何 Agent 技能目录或技能库内。");
+    throw new TrashError(400, "原位置不在任何 Agent 技能目录或技能库内。", "refused");
   }
-  if ((await classifyPath(manifest.originalPath, null)).kind !== "absent") throw new TrashError(409, "原位置已有同名条目，请先处理。");
+  if ((await classifyPath(manifest.originalPath, null)).kind !== "absent") throw new TrashError(409, "原位置已有同名条目，请先处理。", "conflict");
   await assertSafeWrite(manifest.originalPath, homeDirectory);
   if (manifest.kind === "real") await rename(path.join(root, manifest.name), manifest.originalPath);
   else if (manifest.linkTarget) await symlink(manifest.linkTarget, manifest.originalPath, "dir");

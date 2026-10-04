@@ -1,10 +1,11 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { appendFile, lstat, mkdir, readFile, readlink } from "node:fs/promises";
 import path from "node:path";
 import { contentHash } from "./fs-links.mjs";
 import { compactHomePath, homeVariants, isStrictlyWithin } from "./fs-safe.mjs";
 import { assertSafeWrite } from "./home-guard.mjs";
-import { fingerprint, LibraryError, recordOp, reverseOp, runOps } from "./library-ops.mjs";
+import { fingerprint, isReversible, LibraryError, recordOp, reverseOp, runOps } from "./library-ops.mjs";
+import { createPlanStore } from "./plan-store.mjs";
 import { listTrash, readTrashManifest, restoreTrash, trashOps } from "./trash.mjs";
 
 /**
@@ -19,7 +20,7 @@ const HISTORY_LIMIT = 500;
 const timestamp = (now) => new Date(now).toISOString().replace(/[:.]/gu, "-");
 
 export function createRestoreService({ homeDirectory, homes, stateDirectory, backupDirectory, historyFile, getScan, getAgents, materialize, now = () => Date.now() }) {
-  const plans = new Map();
+  const plans = createPlanStore({ ttlMs: RESTORE_PLAN_TTL_MS, now });
   let allHomes = homes;
   const homesReady = homeVariants(homeDirectory).then((variants) => {
     allHomes = [...new Set([...homes, ...variants])];
@@ -66,7 +67,8 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
     }
     const units = opUnits(entry);
     if (units) {
-      return { ...base, agents: base.agents, backups: [], units: units.map((unit) => ({ id: unit.id, title: unit.title })), restorable: units.length > 0, ...(units.length ? {} : { reason: "这次操作没有可撤销的改动。" }) };
+      const restorable = units.some((unit) => Boolean(unit.trashId) || unit.ops.some(isReversible));
+      return { ...base, agents: base.agents, backups: [], units: units.map((unit) => ({ id: unit.id, title: unit.title })), restorable, ...(restorable ? {} : { reason: "这次操作没有可撤销的改动。" }) };
     }
     if (!actions) {
       const reason =
@@ -140,16 +142,19 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
       unit.selected = !unit.unrestorable && (select ? select.includes(unit.id) : !unit.conflict);
     }
     if (!planned.some((unit) => unit.selected)) {
-      const reason = planned.find((unit) => unit.unrestorable)?.unrestorable || planned.find((unit) => unit.conflict)?.conflict || "没有可撤销的改动。";
-      return { planId: null, historyId: entry.id, units: planned.map(publicUnit), steps: [], warnings: [reason], message: "没有可以直接撤销的项目；有冲突的项目可以逐项选择后再生成计划。" };
+      // Each unit row carries its own conflict or reason; warnings never repeat them.
+      const explained = planned.some((unit) => unit.unrestorable || unit.conflict);
+      return { planId: null, historyId: entry.id, units: planned.map(publicUnit), steps: [], warnings: explained ? [] : ["没有可撤销的改动。"], message: "没有可以直接撤销的项目；有冲突的项目可以逐项选择后再生成计划。" };
     }
+    const overwritten = planned.filter((unit) => unit.selected && unit.conflict).length;
     const planId = remember({ kind: "restore", historyId: entry.id, entry, units: planned.filter((unit) => unit.selected), backupGroup });
     return {
       planId,
       historyId: entry.id,
       units: planned.map(publicUnit),
       steps: planned.filter((unit) => unit.selected).flatMap((unit) => unit.steps),
-      warnings: planned.filter((unit) => unit.conflict).map((unit) => `${unit.title}：${unit.conflict}${unit.selected ? "（已选择，仍会恢复，当前内容先备份）" : "（未选择）"}`),
+      // One summary for the plan; the per-unit conflict text lives on the unit only.
+      warnings: overwritten ? [`选中的 ${overwritten} 项在那次操作之后又被改动过，恢复会覆盖这些改动（当前内容会先备份）。`] : [],
       expiresAt: new Date(now() + RESTORE_PLAN_TTL_MS).toISOString(),
     };
   }
@@ -160,7 +165,7 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
     const done = [];
     for (const unit of stored.units) {
       for (const check of unit.checks) {
-        if ((await fingerprint(check.path)) !== check.current) throw new LibraryError(409, `${display(check.path)} 在生成计划后有变化，请重新生成恢复计划。`);
+        if ((await fingerprint(check.path)) !== check.current) throw new LibraryError(409, `${display(check.path)} 在生成计划后有变化，请重新生成恢复计划。`, "stale-plan");
       }
     }
     for (const unit of stored.units) {
@@ -191,22 +196,8 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
     return { entries: await Promise.all((await readEntries()).slice(0, count).map(normalize)) };
   }
 
-  function remember(stored) {
-    for (const [id, plan] of plans) if (now() - plan.createdAt > RESTORE_PLAN_TTL_MS) plans.delete(id);
-    const planId = randomUUID();
-    plans.set(planId, { ...stored, planId, createdAt: now() });
-    return planId;
-  }
-
-  function takePlan(planId, kind) {
-    const stored = plans.get(String(planId || ""));
-    if (!stored || stored.kind !== kind || now() - stored.createdAt > RESTORE_PLAN_TTL_MS) {
-      plans.delete(String(planId || ""));
-      throw new LibraryError(404, "计划不存在或已过期（10 分钟），请重新生成。");
-    }
-    plans.delete(stored.planId);
-    return stored;
-  }
+  const remember = (stored) => plans.remember(stored);
+  const takePlan = (planId, kind) => plans.take(planId, kind);
 
   async function allowedRoots() {
     const agents = await getAgents();
@@ -216,7 +207,7 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
   async function planRestore({ historyId, select = null }) {
     await homesReady;
     const entry = (await readEntries()).find((item) => item.id === historyId);
-    if (!entry) throw new LibraryError(404, "没有找到这条历史记录。");
+    if (!entry) throw new LibraryError(404, "没有找到这条历史记录。", "not-found");
     const units = opUnits(entry);
     if (units) return planOpRestore(entry, units, Array.isArray(select) ? select : null);
     if (entry.type === "uninstall" && entry.trashId) {
@@ -224,7 +215,7 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
       const planId = remember({ kind: "restore", historyId, trashId: entry.trashId, steps: [] });
       return { planId, historyId, steps: [{ type: "restore-trash", target: display(manifest.originalPath), trashId: entry.trashId }], warnings: [] };
     }
-    if (!Array.isArray(entry.actions) || !entry.actions.length) throw new LibraryError(409, "这条记录没有可恢复的写入（旧版本记录不含路径）。");
+    if (!Array.isArray(entry.actions) || !entry.actions.length) throw new LibraryError(409, "这条记录没有可恢复的写入（旧版本记录不含路径）。", "refused");
     const steps = [];
     const warnings = [];
     const seen = new Set();
@@ -236,13 +227,13 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
       if (action.afterHash && currentHash !== action.afterHash) warnings.push(`${display(target)} 在那次操作之后又被修改过，恢复会覆盖这些修改（当前内容会先备份）。`);
       if (action.action === "replace") {
         const backup = expand(action.backup);
-        if (!(await exists(backup))) throw new LibraryError(409, `备份 ${action.backup} 已不存在，无法恢复。`);
+        if (!(await exists(backup))) throw new LibraryError(409, `备份 ${action.backup} 已不存在，无法恢复。`, "backup-missing");
         steps.push({ type: "restore-backup", agentId: action.agentId, target, backup, currentHash });
       } else if (action.action === "create" && currentHash !== null) {
         steps.push({ type: "trash-created", agentId: action.agentId, target, currentHash });
       }
     }
-    if (!steps.length) throw new LibraryError(409, "没有需要恢复的内容。");
+    if (!steps.length) throw new LibraryError(409, "没有需要恢复的内容。", "nothing-to-do");
     const planId = remember({ kind: "restore", historyId, entry, steps });
     return {
       planId,
@@ -255,7 +246,7 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
 
   async function applyRestore({ planId, confirm }) {
     await homesReady;
-    if (confirm !== true) throw new LibraryError(400, "需要明确确认后才能恢复。");
+    if (confirm !== true) throw new LibraryError(400, "需要明确确认后才能恢复。", "confirm-required");
     const stored = takePlan(planId, "restore");
     if (stored.units) return applyOpRestore(stored);
     if (stored.trashId) {
@@ -266,7 +257,7 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
     // Preconditions first: nothing may have changed since the plan was made.
     for (const step of stored.steps) {
       const current = (await exists(step.target)) ? await contentHash(step.target) : null;
-      if (current !== step.currentHash) throw new LibraryError(409, `${display(step.target)} 在生成计划后有变化，请重新生成恢复计划。`);
+      if (current !== step.currentHash) throw new LibraryError(409, `${display(step.target)} 在生成计划后有变化，请重新生成恢复计划。`, "stale-plan");
     }
     const group = path.join(backupDirectory, `${timestamp(now())}-restore`);
     const actions = [];
@@ -303,16 +294,17 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
     const scan = await getScan();
     const skill = scan.skills.find((item) => item.id === skillId);
     const instance = skill?.instances.find((item) => item.agentId === agentId);
-    if (!instance) throw new LibraryError(404, "没有找到这个 Agent 中的技能。");
-    const agentName = scan.agents.find((agent) => agent.id === agentId)?.name || agentId;
+    if (!instance) throw new LibraryError(404, "没有找到这个 Agent 中的技能。", "not-found");
+    const nameOf = (id) => scan.agents.find((agent) => agent.id === id)?.name || id;
+    const agentName = nameOf(agentId);
     if (instance.readOnly || instance.managed) {
-      throw new LibraryError(409, `这是 ${agentName} 的${instance.sourceLabel || "托管"}技能，由 ${agentName} 或同步工具自己管理，不能在这里卸载。`);
+      throw new LibraryError(409, `这是 ${agentName} 的${instance.sourceLabel || "托管"}技能，由 ${agentName} 或同步工具自己管理，不能在这里卸载。`, "refused");
     }
     const target = expand(instance.path);
     const roots = await allowedRoots();
-    if (!roots.some((root) => isStrictlyWithin(root, target))) throw new LibraryError(409, "这个技能不在 Agent 的技能目录内，已拒绝卸载。");
+    if (!roots.some((root) => isStrictlyWithin(root, target))) throw new LibraryError(409, "这个技能不在 Agent 的技能目录内，已拒绝卸载。", "refused");
     const info = await lstat(target).catch(() => null);
-    if (!info) throw new LibraryError(404, "技能目录已不存在，请重新扫描。");
+    if (!info) throw new LibraryError(404, "技能目录已不存在，请重新扫描。", "not-found");
     const isLink = info.isSymbolicLink();
     // A real folder disappears for every Agent that reaches it; a link only for viewers of that path.
     const alsoAffects = [
@@ -334,14 +326,14 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
       kind: isLink ? "link" : "real",
       steps: [isLink ? { type: "unlink", path: display(target), description: "只移除链接，不动它指向的目录。" } : { type: "move-to-trash", path: display(target), to: display(path.join(stateDirectory, "trash", trashId, name)) }],
       alsoAffects,
-      ...(alsoAffects.length ? { warning: `${alsoAffects.join("、")} 也会因此看不到这个技能。` } : {}),
+      ...(alsoAffects.length ? { warning: `${alsoAffects.map(nameOf).join("、")} 也会因此看不到这个技能。` } : {}),
       expiresAt: new Date(now() + RESTORE_PLAN_TTL_MS).toISOString(),
     };
   }
 
   async function applyUninstall({ planId, confirm }) {
     await homesReady;
-    if (confirm !== true) throw new LibraryError(400, "需要明确确认后才能卸载。");
+    if (confirm !== true) throw new LibraryError(400, "需要明确确认后才能卸载。", "confirm-required");
     const stored = takePlan(planId, "uninstall");
     await runOps(stored.ops, { homeDirectory, display, backupGroup: path.join(backupDirectory, `${timestamp(now())}-uninstall`) });
     const record = { id: createHash("sha1").update(`${now()}:uninstall:${stored.trashId}`).digest("hex").slice(0, 12), type: "uninstall", skillName: stored.skillName, agentId: stored.agentId, trashId: stored.trashId, kind: stored.isLink ? "link" : "real", createdAt: new Date(now()).toISOString() };

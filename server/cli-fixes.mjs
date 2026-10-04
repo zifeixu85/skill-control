@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { appendFile, mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { compactHomePath, object } from "./fs-safe.mjs";
-import { LibraryError, recordOp, runOps } from "./library-ops.mjs";
+import { isReversible, LibraryError, recordOp, runOps } from "./library-ops.mjs";
+import { createPlanStore } from "./plan-store.mjs";
 
 /**
  * One-click fixes for CLI tool cards (docs §3.2). Only two fixes write files — the stable
@@ -148,18 +149,18 @@ export function fixesFor(tool, { homes }) {
 }
 
 export function createCliManager({ homeDirectory, homes, backupDirectory, historyFile, detect, platform, now = () => Date.now() }) {
-  const plans = new Map();
+  const plans = createPlanStore({ ttlMs: CLI_PLAN_TTL_MS, now });
   let displayHomes = homes;
   const display = (value) => compactHomePath(value, displayHomes);
 
   async function plan({ toolId, fixId, agents = null }) {
     const tool = (await detect()).find((item) => item.id === toolId);
     if (tool) displayHomes = tool.internal.displayHomes || homes;
-    if (!tool) throw new LibraryError(404, "没有找到这个 CLI 工具。");
+    if (!tool) throw new LibraryError(404, "没有找到这个 CLI 工具。", "not-found");
     const fix = fixesFor(tool, { homes }).find((item) => item.id === fixId);
-    if (!fix) throw new LibraryError(404, "没有这个修复项。");
+    if (!fix) throw new LibraryError(404, "没有这个修复项。", "not-found");
     if (fix.kind === "guide") return { planId: null, toolId, fixId, kind: "guide", instructions: fix.instructions, reason: fix.reason || null, agentIds: fix.agentIds || [] };
-    if (!fix.applicable) throw new LibraryError(409, fix.reason);
+    if (!fix.applicable) throw new LibraryError(409, fix.reason, "refused");
     const group = path.join(backupDirectory, `${timestamp(now())}-cli-${toolId}`);
     const ops = [];
     const notes = [];
@@ -185,9 +186,7 @@ export function createCliManager({ homeDirectory, homes, backupDirectory, histor
       }
     }
     if (!ops.length) return { planId: null, toolId, fixId, kind: "none", skipped, message: "没有需要写入的改动。" };
-    for (const [id, stored] of plans) if (now() - stored.createdAt > CLI_PLAN_TTL_MS) plans.delete(id);
-    const planId = randomUUID();
-    plans.set(planId, { planId, createdAt: now(), toolId, fixId, ops, group });
+    const planId = plans.remember({ toolId, fixId, ops, group });
     return {
       planId,
       toolId,
@@ -202,23 +201,20 @@ export function createCliManager({ homeDirectory, homes, backupDirectory, histor
   }
 
   async function apply({ planId, confirm }) {
-    if (confirm !== true) throw new LibraryError(400, "需要明确确认后才能执行。");
-    const stored = plans.get(String(planId || ""));
-    if (!stored || now() - stored.createdAt > CLI_PLAN_TTL_MS) {
-      plans.delete(String(planId || ""));
-      throw new LibraryError(404, "计划不存在或已过期（10 分钟），请重新生成。");
-    }
-    plans.delete(stored.planId);
+    if (confirm !== true) throw new LibraryError(400, "需要明确确认后才能执行。", "confirm-required");
+    const stored = plans.take(planId);
     // All files of one fix change together or not at all.
     await runOps(stored.ops, { homeDirectory, display, backupGroup: stored.group, platform });
     // Each written file is recorded with its backup and resulting hash: undo is per file.
+    const ops = (await Promise.all(stored.ops.map((op) => recordOp(op, display)))).filter(Boolean);
     const record = {
       id: randomUUID().replace(/-/gu, "").slice(0, 12),
       type: "cli-fix",
       toolId: stored.toolId,
       fixId: stored.fixId,
       files: stored.ops.length,
-      ops: (await Promise.all(stored.ops.map((op) => recordOp(op, display)))).filter(Boolean),
+      ops,
+      restorable: ops.some(isReversible),
       createdAt: new Date(now()).toISOString(),
     };
     await mkdir(path.dirname(historyFile), { recursive: true });

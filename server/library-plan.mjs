@@ -4,7 +4,8 @@ import path from "node:path";
 import { classifyPath, relativeLinkTarget } from "./fs-links.mjs";
 import { compactHomePath, homeVariants, object } from "./fs-safe.mjs";
 import { tierOf } from "./library-agents.mjs";
-import { LibraryError, recordOp, runOps } from "./library-ops.mjs";
+import { isReversible, LibraryError, recordOp, runOps } from "./library-ops.mjs";
+import { createPlanStore } from "./plan-store.mjs";
 import { createHasher, readLibrary } from "./library.mjs";
 import { writeLibraryLock } from "./library-lock.mjs";
 import { disableOps } from "./library-switches.mjs";
@@ -24,8 +25,8 @@ const NAME = /^[\p{L}\p{N}_.@+ -]{1,128}$/u;
 const timestamp = (now) => new Date(now).toISOString().replace(/[:.]/gu, "-");
 
 export function createLibraryManager(context) {
-  const plans = new Map();
   const now = context.now || (() => Date.now());
+  const plans = createPlanStore({ ttlMs: LIBRARY_PLAN_TTL_MS, now });
   let homes = context.homes;
   const homesReady = homeVariants(context.homeDirectory).then((variants) => {
     homes = [...new Set([...context.homes, ...variants])];
@@ -199,7 +200,7 @@ export function createLibraryManager(context) {
 
     switch (input.action) {
       case "adopt": {
-        if (!skill) throw new LibraryError(400, "缺少技能名称。");
+        if (!skill) throw new LibraryError(400, "缺少技能名称。", "invalid-request");
         const entry = entries.get(skill);
         if (entry?.kind === "link-external") items.push(adoptReverseLink(entry, state, group));
         else if (entry?.kind === "real") {
@@ -214,14 +215,14 @@ export function createLibraryManager(context) {
               if (!found && (await classifyPath(location, null)).kind === "real-dir") found = { agent, location };
             }
           }
-          if (!found) throw new LibraryError(404, "没有找到可收编的技能目录。");
+          if (!found) throw new LibraryError(404, "没有找到可收编的技能目录。", "not-found");
           items.push(adoptCandidate(found.agent, found.location, skill, state, group));
         }
         break;
       }
       case "link": {
         const entry = entries.get(skill);
-        if (!entry || entry.kind === "broken") throw new LibraryError(404, "库中没有这个技能。");
+        if (!entry || entry.kind === "broken") throw new LibraryError(404, "库中没有这个技能。", "not-found");
         for (const agent of targetAgents) {
           const tier = tierOf(agent.agentId);
           if (tier === "config") {
@@ -253,7 +254,7 @@ export function createLibraryManager(context) {
         break;
       }
       case "disable": {
-        if (!skill) throw new LibraryError(400, "缺少技能名称。");
+        if (!skill) throw new LibraryError(400, "缺少技能名称。", "invalid-request");
         for (const agent of targetAgents) {
           const item = await disableOps(agent, skill, { ...context, group, libraryEntry: entries.get(skill) });
           if (item) items.push(item);
@@ -262,7 +263,7 @@ export function createLibraryManager(context) {
       }
       case "remove": {
         const entry = entries.get(skill);
-        if (!entry) throw new LibraryError(404, "库中没有这个技能。");
+        if (!entry) throw new LibraryError(404, "库中没有这个技能。", "not-found");
         const trashId = `${group}-${skill}`.replace(/[^\w.@-]/gu, "_");
         const trashRoot = path.join(context.stateDirectory, "trash", trashId);
         const links = [];
@@ -305,7 +306,7 @@ export function createLibraryManager(context) {
         break;
       }
       default:
-        throw new LibraryError(400, "未知的操作。");
+        throw new LibraryError(400, "未知的操作。", "invalid-request");
     }
     // Per-item choices from the request: "skip" drops an item; an opt-in item (default
     // "skip", e.g. the Hermes config change) runs when its action is chosen. Conflicts take
@@ -353,21 +354,14 @@ export function createLibraryManager(context) {
     if (!active.length) {
       return { planId: null, action: input.action, items: publicItems, summary, needsChoice, message: needsChoice ? "需要先为冲突项选择处理方式。" : "没有需要执行的改动。" };
     }
-    for (const [id, stored] of plans) if (now() - stored.createdAt > LIBRARY_PLAN_TTL_MS) plans.delete(id);
-    const planId = randomUUID();
-    plans.set(planId, { planId, createdAt: now(), action: input.action, items: active, group });
+    const planId = plans.remember({ action: input.action, items: active, group });
     return { planId, action: input.action, items: publicItems, summary, needsChoice, expiresAt: new Date(now() + LIBRARY_PLAN_TTL_MS).toISOString() };
   }
 
   async function apply({ planId, confirm }) {
     await homesReady;
-    if (confirm !== true) throw new LibraryError(400, "需要明确确认后才能执行。");
-    const stored = plans.get(String(planId || ""));
-    if (!stored || now() - stored.createdAt > LIBRARY_PLAN_TTL_MS) {
-      plans.delete(String(planId || ""));
-      throw new LibraryError(404, "计划不存在或已过期（10 分钟），请重新生成。");
-    }
-    plans.delete(stored.planId);
+    if (confirm !== true) throw new LibraryError(400, "需要明确确认后才能执行。", "confirm-required");
+    const stored = plans.take(planId);
     const opContext = {
       homeDirectory: context.homeDirectory,
       display,
@@ -421,6 +415,8 @@ export function createLibraryManager(context) {
       applied: recordedItems.length,
       failed: results.filter((r) => r.status !== "applied").length,
       items: recordedItems,
+      // Whether history can undo this apply (same rule as the history list).
+      restorable: recordedItems.some((item) => Boolean(item.trashId) || item.ops.some(isReversible)),
       createdAt: new Date(now()).toISOString(),
     };
     await mkdir(path.dirname(context.historyFile), { recursive: true });

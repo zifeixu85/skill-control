@@ -75,13 +75,16 @@ export class ApiError extends Error {
   readonly unsupported: boolean;
   /** No answer within the time limit; for a write the outcome is unknown. */
   readonly timedOut: boolean;
+  /** Machine-readable reason from the service (e.g. "stale-plan"); null from older services. */
+  readonly code: string | null;
 
-  constructor(message: string, status: number, unsupported = false, timedOut = false) {
+  constructor(message: string, status: number, unsupported = false, timedOut = false, code: string | null = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.unsupported = unsupported;
     this.timedOut = timedOut;
+    this.code = code;
   }
 }
 
@@ -95,16 +98,20 @@ export const TIMEOUTS = {
 } as const;
 
 const ROUTE_MISSING = "接口不存在。";
+const ERROR_CODE = /^[a-z][a-z0-9-]{1,40}$/u;
 
 async function errorFrom(response: Response): Promise<ApiError> {
   let message = `本地服务返回了错误（${response.status}）。`;
+  let code: string | null = null;
   try {
-    const payload = (await response.json()) as { error?: unknown };
+    const payload = (await response.json()) as { error?: unknown; code?: unknown };
     if (typeof payload?.error === "string" && payload.error) message = payload.error;
+    if (typeof payload?.code === "string" && ERROR_CODE.test(payload.code)) code = payload.code;
   } catch {
     // Non-JSON error bodies keep the generic message.
   }
-  return new ApiError(message, response.status, response.status === 404 && message === ROUTE_MISSING);
+  const unsupported = response.status === 404 && (code === "route-missing" || (code === null && message === ROUTE_MISSING));
+  return new ApiError(message, response.status, unsupported, false, code);
 }
 
 function url(pathname: string, params?: Record<string, string | number | boolean | null | undefined>) {

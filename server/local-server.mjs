@@ -55,6 +55,7 @@ import { createCachedLoader } from "./cached-loader.mjs";
 import { buildConfigDetail, cleanText } from "./config-detail.mjs";
 import { planTargetWrites, publicAction, publicPlan } from "./sync-targets.mjs";
 import { copySkillTree } from "./skill-copy.mjs";
+import { errorCode } from "./plan-store.mjs";
 
 export { compareVersions } from "./skill-status.mjs";
 export { parseFrontmatter } from "./frontmatter.mjs";
@@ -2493,7 +2494,7 @@ export async function materializeSkillDirectory({
   // here would silently detach the Agents that share it.
   const existing = await lstat(destinationPath).catch(() => null);
   if (existing?.isSymbolicLink()) {
-    throw new Error("目标是软链接，请重新生成同步计划后再写入。");
+    throw new HttpError(409, "目标是软链接，请重新生成同步计划后再写入。", "stale-plan");
   }
   const parentPath = path.dirname(destinationPath);
   const suffix = randomUUID();
@@ -2554,7 +2555,7 @@ export async function materializeSkillDirectory({
 
 async function executeImportInstall(input) {
   if (input?.confirm !== true) {
-    throw new Error("需要明确确认后才能安装到技能目录。");
+    throw new HttpError(400, "需要明确确认后才能安装到技能目录。", "confirm-required");
   }
   const plan = await buildImportPlan(input);
   const completed = await executePlanActions(plan);
@@ -2647,7 +2648,7 @@ async function planSync(input) {
 
 async function executeSync(input) {
   if (input?.confirm !== true) {
-    throw new Error("需要明确确认后才能写入技能目录。");
+    throw new HttpError(400, "需要明确确认后才能写入技能目录。", "confirm-required");
   }
   const config = await loadConfig();
   const scan = await getScan(true);
@@ -2800,9 +2801,10 @@ async function revealPath(instanceId) {
 }
 
 class HttpError extends Error {
-  constructor(statusCode, message) {
+  constructor(statusCode, message, code = null) {
     super(message);
     this.statusCode = statusCode;
+    if (code) this.code = code;
   }
 }
 
@@ -3009,11 +3011,11 @@ function publicCodexConnectors(codexConnectors) {
 export async function handleRequest(request, response) {
   const origin = request.headers.origin;
   if (!hostAllowed(request)) {
-    jsonResponse(response, 403, { error: "不允许的主机名，本地服务只接受回环地址访问。" });
+    jsonResponse(response, 403, { error: "不允许的主机名，本地服务只接受回环地址访问。", code: "forbidden" });
     return;
   }
   if (!originAllowed(request)) {
-    jsonResponse(response, 403, { error: "不允许的请求来源。" });
+    jsonResponse(response, 403, { error: "不允许的请求来源。", code: "forbidden" });
     return;
   }
   if (request.method === "OPTIONS") {
@@ -3035,7 +3037,7 @@ export async function handleRequest(request, response) {
   try {
     const requestUrl = new URL(request.url, `http://${request.headers.host}`);
     if (crossSiteBlocked(request, requestUrl.pathname)) {
-      jsonResponse(response, 403, { error: "不允许跨站读取本地配置或资源。" }, origin);
+      jsonResponse(response, 403, { error: "不允许跨站读取本地配置或资源。", code: "forbidden" }, origin);
       return;
     }
     if (await getManageRoutes().handle(request, requestUrl, response, origin)) return;
@@ -3480,7 +3482,7 @@ export async function handleRequest(request, response) {
       const body = await readRequestBody(request);
       if (body.dryRun === false) {
         if (request.headers["x-skill-manager-confirm"] !== "yes") {
-          throw new Error("缺少安装确认标记。");
+          throw new HttpError(400, "缺少安装确认标记。", "confirm-required");
         }
         jsonResponse(response, 200, await executeImportInstall(body), origin);
       } else {
@@ -3492,7 +3494,7 @@ export async function handleRequest(request, response) {
       const body = await readRequestBody(request);
       if (body.dryRun === false) {
         if (request.headers["x-skill-manager-confirm"] !== "yes") {
-          throw new Error("缺少同步确认标记。");
+          throw new HttpError(400, "缺少同步确认标记。", "confirm-required");
         }
         jsonResponse(response, 200, await executeSync(body), origin);
       } else {
@@ -3506,14 +3508,11 @@ export async function handleRequest(request, response) {
       jsonResponse(response, 200, { ok: true }, origin);
       return;
     }
-    jsonResponse(response, 404, { error: "接口不存在。" }, origin);
+    jsonResponse(response, 404, { error: "接口不存在。", code: "route-missing" }, origin);
   } catch (error) {
-    jsonResponse(
-      response,
-      Number.isInteger(error?.statusCode) ? error.statusCode : 400,
-      { error: publicErrorMessage(error) },
-      origin,
-    );
+    const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 400;
+    const code = errorCode(error, statusCode);
+    jsonResponse(response, statusCode, { error: publicErrorMessage(error), ...(code ? { code } : {}) }, origin);
   }
 }
 

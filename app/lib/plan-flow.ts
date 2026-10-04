@@ -102,6 +102,8 @@ export function flowView<P, R>(
 }
 
 const STALE_HINT = /重新生成|有变化|已过期|已变化|changed|expired/iu;
+/** Service codes that mean "make a new plan"; any other code is a refusal to show. */
+const STALE_CODES = new Set(["stale-plan", "plan-expired", "plan-not-found"]);
 
 /** Structural check, so errors from any copy of the client module are recognized. */
 function asApiError(error: unknown): ApiError | null {
@@ -113,6 +115,9 @@ export function classifyApplyError(error: unknown): ApplyFailure {
   if (apiError) {
     // No answer (connection lost or timed out): the write may or may not have happened.
     if (apiError.status === 0) return "unknown";
+    // Services that send a code are classified by it alone.
+    if (apiError.code) return STALE_CODES.has(apiError.code) ? "stale" : "failed";
+    // Older services: by status, and by message for 409.
     if (apiError.status === 404 && !apiError.unsupported) return "stale";
     // 409 is either "changed since the plan" (re-plan) or a refusal such as offline mode,
     // which must stay an error instead of silently producing the same plan again.

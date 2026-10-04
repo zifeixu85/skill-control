@@ -125,10 +125,14 @@ test("CLI fixes are undone per file; a file changed since needs an explicit choi
   assert.equal(units["~/.codex/rules/default.rules"].selected, true);
   assert.equal(units["~/.gemini/settings.json"].selected, false);
   assert.match(units["~/.gemini/settings.json"].conflict, /又被修改过/u);
+  assert.deepEqual(undo.warnings, [], "the unselected conflict is shown on its unit only");
   await restore.applyRestore({ planId: undo.planId, confirm: true });
   await assert.rejects(readFile(rules, "utf8"), "the created rules file moved to backups");
   assert.match(await readFile(gemini, "utf8"), /by hand/u, "the changed file is left alone");
   const forced = await restore.planRestore({ historyId: entry.id, select: [undo.units.find((unit) => unit.title === "~/.gemini/settings.json").id] });
+  assert.equal(forced.warnings.length, 1, "one summary, not one line per unit");
+  assert.match(forced.warnings[0], /选中的 1 项/u);
+  assert.ok(forced.units.every((unit) => !unit.conflict || !forced.warnings[0].includes(unit.conflict)), "the unit's own text is not repeated");
   await restore.applyRestore({ planId: forced.planId, confirm: true });
   assert.equal(await readFile(gemini, "utf8"), geminiBefore);
 

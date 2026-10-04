@@ -96,7 +96,8 @@ test("batch plan: adopt reverse links, link identical copies, mark git and app f
   assert.equal(lock.skills["shared-a"].fanout.claude.mode, "link");
   assert.deepEqual(Object.keys(lock.skills["shared-a"]), [...Object.keys(lock.skills["shared-a"])].sort());
   assert.match(await readFile(path.join(stateDirectory, "history.jsonl"), "utf8"), /"type":"library"/u);
-  await assert.rejects(service.apply({ planId: plan.planId, confirm: true }), /不存在或已过期/u);
+  assert.equal(result.historyEntry.restorable, true, "at least one applied item can be undone");
+  await assert.rejects(service.apply({ planId: plan.planId, confirm: true }), (error) => error.code === "plan-not-found" && /不存在或已过期/u.test(error.message));
 });
 
 test("conflict choices: save-as keeps the Agent's version beside the library one", LIMIT, async (context) => {

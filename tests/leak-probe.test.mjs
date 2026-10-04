@@ -295,19 +295,23 @@ test("update routes: offline checks, plans need confirmation, nothing leaks", { 
   const plan = await post("plan:lark", "/api/updates/plan", { unitKey: lark.unitKey });
   assert.equal(plan.status, 200);
   assert.equal(plan.json.kind, "delegate");
-  assert.equal((await post("apply:no-header", "/api/updates/apply", { planId: plan.json.planId, confirm: true })).status, 400);
+  const noHeader = await post("apply:no-header", "/api/updates/apply", { planId: plan.json.planId, confirm: true });
+  assert.deepEqual([noHeader.status, noHeader.json.code], [400, "confirm-required"]);
   // An offline server never runs network-capable commands, even with a confirmed plan.
   const applied = await post("apply", "/api/updates/apply", { planId: plan.json.planId, confirm: true }, { "x-skill-manager-confirm": "yes" });
-  assert.equal(applied.status, 409);
+  assert.deepEqual([applied.status, applied.json.code], [409, "updates-offline"]);
   assert.match(applied.json.error, /离线模式下不执行/u);
-  assert.equal((await post("apply:again", "/api/updates/apply", { planId: plan.json.planId, confirm: true }, { "x-skill-manager-confirm": "yes" })).status, 404);
+  const again = await post("apply:again", "/api/updates/apply", { planId: plan.json.planId, confirm: true }, { "x-skill-manager-confirm": "yes" });
+  assert.deepEqual([again.status, again.json.code], [404, "plan-not-found"], "a plan runs once");
+  const missingRoute = await post("no-route", "/api/updates/no-such-route", {});
+  assert.deepEqual([missingRoute.status, missingRoute.json.code], [404, "route-missing"]);
   const health = await call("health", "/api/health-report?force=1");
   assert.ok(health.json.findings.some((finding) => finding.category === "update-available"));
 
   assert.deepEqual(bodies.filter((item) => /ZZ9/u.test(item.body)).map((item) => item.label), []);
   assert.deepEqual(bodies.filter((item) => item.body.includes(home)).map((item) => item.label), []);
   const crossSite = await request("/api/updates/check", { method: "POST", body: "{}", headers: { "Sec-Fetch-Site": "cross-site" } });
-  assert.equal(crossSite.status, 403);
+  assert.deepEqual([crossSite.status, (await crossSite.json()).code], [403, "forbidden"]);
   const foreign = await request("/api/updates/check", { method: "POST", body: "{}", headers: { Origin: "https://evil.example.test" } });
   assert.equal(foreign.status, 403);
 });
@@ -339,6 +343,7 @@ test("library and CLI tool routes: plans, confirmed writes in the sandbox, nothi
   const applied = await post("library:apply", "/api/library/apply", { planId: plan.json.planId, confirm: true }, { "x-skill-manager-confirm": "yes" });
   assert.equal(applied.status, 200);
   assert.ok(applied.json.results.some((item) => item.id === "adopt-link:rev-1" && item.status === "applied"));
+  assert.equal(applied.json.historyEntry.restorable, true, "the apply can be undone from history");
   const guide = await post("cli:plan:guide", "/api/cli-tools/plan", { toolId: "lark-cli", fixId: "workspace-binding" });
   assert.deepEqual([guide.status, guide.json.kind], [200, "guide"]);
   await call("health", "/api/health-report?force=1");
@@ -385,6 +390,8 @@ test("history, restore, uninstall, trash and default visibility through the API"
   assert.equal(plan.status, 200);
   assert.equal((await post("apply-restore:no-header", "/api/history/apply-restore", { planId: plan.json.planId, confirm: true })).status, 400);
   assert.equal((await post("apply-restore", "/api/history/apply-restore", { planId: plan.json.planId, confirm: true }, confirmHeader)).status, 200);
+  const reused = await post("apply-restore:again", "/api/history/apply-restore", { planId: plan.json.planId, confirm: true }, confirmHeader);
+  assert.deepEqual([reused.status, reused.json.code], [404, "plan-not-found"]);
   assert.match(await readFile(path.join(home, ".claude", "skills", "demo", "SKILL.md"), "utf8"), /v1/u);
 
   const fresh = (await call("scan:2", "/api/scan?force=1")).json;

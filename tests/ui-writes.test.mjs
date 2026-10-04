@@ -76,6 +76,40 @@ test("a plan that never answers fails with a timeout instead of hanging", async 
   await assert.rejects(pending, (error) => error instanceof ApiError && error.timedOut && error.status === 0);
 });
 
+test("error responses carry the service's code; older services without one still work", async (t) => {
+  const answers = [
+    [409, { error: "~/x 在生成计划后有变化，请重新生成恢复计划。", code: "stale-plan" }],
+    [404, { error: "接口不存在。", code: "route-missing" }],
+    [404, { error: "接口不存在。" }],
+    [409, { error: "已存在", code: "Not A Code" }],
+  ];
+  t.mock.method(globalThis, "fetch", async () => {
+    const [status, body] = answers.shift();
+    return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
+  });
+  const caught = async () => api.applyRestore("p").then(() => assert.fail("must reject"), (error) => error);
+  const stale = await caught();
+  assert.deepEqual([stale.status, stale.code, stale.unsupported], [409, "stale-plan", false]);
+  assert.equal(flow.classifyApplyError(stale), "stale");
+  const missing = await caught();
+  assert.deepEqual([missing.code, missing.unsupported], ["route-missing", true]);
+  assert.equal((await caught()).unsupported, true, "an older service: by message");
+  assert.equal((await caught()).code, null, "only well-formed codes are kept");
+});
+
+test("plan flow: the service's code decides, message matching is only the fallback", () => {
+  const coded = (status, code, message = "x") => new ApiError(message, status, false, false, code);
+  assert.equal(flow.classifyApplyError(coded(409, "stale-plan")), "stale");
+  assert.equal(flow.classifyApplyError(coded(404, "plan-expired")), "stale");
+  assert.equal(flow.classifyApplyError(coded(404, "plan-not-found")), "stale");
+  // The code wins over a message that only looks like a stale plan.
+  assert.equal(flow.classifyApplyError(coded(409, "updates-offline", "离线，请重新生成")), "failed");
+  assert.equal(flow.classifyApplyError(coded(409, "refused", "这条记录已变化")), "failed");
+  assert.equal(flow.classifyApplyError(coded(409, "conflict", "原位置已有同名条目，请先处理。")), "failed");
+  assert.equal(flow.classifyApplyError(coded(404, "not-found")), "failed", "a missing history entry is not a stale plan");
+  assert.equal(flow.classifyApplyError(coded(0, "stale-plan")), "unknown", "no answer stays unknown");
+});
+
 const key = (n) => `req#${n}`;
 const idOf = (plan) => plan.planId;
 

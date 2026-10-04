@@ -12,11 +12,13 @@ const POSIX = process.platform !== "win32";
 const LIMIT = { timeout: 30_000, skip: !POSIX };
 const skill = (name, body) => `---\nname: ${name}\ndescription: ${name}\n---\n# ${name}\n\n${body}\n`;
 
-async function setup(context) {
+const NAMES = { codex: "Codex", claude: "Claude Code" };
+
+async function setup(context, options = {}) {
   const home = await mkdtemp(path.join(tmpdir(), "restore-"));
   context.after(() => rm(home, { recursive: true, force: true }));
   const state = path.join(home, ".agent-skill-manager");
-  const agent = (id, paths) => ({ id, name: id, shortName: id.slice(0, 2), color: "#8fc9ef", paths });
+  const agent = (id, paths) => ({ id, name: NAMES[id], shortName: id.slice(0, 2), color: "#8fc9ef", paths });
   const agents = [
     agent("codex", [path.join(home, ".codex", "skills"), path.join(home, ".agents", "skills")]),
     agent("claude", [path.join(home, ".claude", "skills")]),
@@ -31,6 +33,7 @@ async function setup(context) {
     getScan: async () => JSON.parse(JSON.stringify(await scanAll(config, { homeDirectory: home }))),
     getAgents: async () => agents,
     materialize: materializeSkillDirectory,
+    ...options,
   });
   return { home, state, service, config };
 }
@@ -102,7 +105,7 @@ test("a restore refuses when the target changed after the plan", LIMIT, async (c
   const plan = await service.planRestore({ historyId: "sync00000002" });
   assert.match(plan.warnings[0], /又被修改过/u);
   await writeFile(path.join(target, "SKILL.md"), skill("demo", "edited after the plan"));
-  await assert.rejects(service.applyRestore({ planId: plan.planId, confirm: true }), /生成计划后有变化/u);
+  await assert.rejects(service.applyRestore({ planId: plan.planId, confirm: true }), (error) => error.statusCode === 409 && error.code === "stale-plan" && /生成计划后有变化/u.test(error.message));
   assert.match(await readFile(path.join(target, "SKILL.md"), "utf8"), /edited after the plan/u);
 });
 
@@ -126,7 +129,7 @@ test("uninstall from one Agent: a link is only unlinked, a shared folder warns a
 
   const realPlan = await service.planUninstall({ skillId: shared.id, agentId: "codex" });
   assert.deepEqual([realPlan.kind, realPlan.alsoAffects], ["real", ["claude"]]);
-  assert.match(realPlan.warning, /claude 也会因此看不到/u);
+  assert.equal(realPlan.warning, "Claude Code 也会因此看不到这个技能。", "display names, not Agent ids");
   const moved = await service.applyUninstall({ planId: realPlan.planId, confirm: true });
   await assert.rejects(lstat(path.join(library, "shared")));
   const { entries } = await service.listHistory(5);
@@ -136,7 +139,7 @@ test("uninstall from one Agent: a link is only unlinked, a shared folder warns a
   assert.match(await readFile(path.join(library, "shared", "SKILL.md"), "utf8"), /library copy/u);
 
   const builtin = scan.skills.find((item) => item.name === "builtin");
-  await assert.rejects(service.planUninstall({ skillId: builtin.id, agentId: "codex" }), /不能在这里卸载/u);
+  await assert.rejects(service.planUninstall({ skillId: builtin.id, agentId: "codex" }), (error) => error.code === "refused" && /Codex 的.*不能在这里卸载/u.test(error.message));
 });
 
 async function setupAgents(home) {

@@ -11,6 +11,18 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ### Added
 
+- Machine-readable error codes: every error response is `{ error, code? }`, and
+  every plan / apply refusal carries a specific `code` (`stale-plan`,
+  `plan-expired`, `plan-not-found`, `updates-offline`, `refused`, `conflict`,
+  `confirm-required`, `home-guard`, …; see docs/ARCHITECTURE.md "错误码").
+  Plans share one in-memory store (`server/plan-store.mjs`) that tells an
+  expired plan from an unknown or already-used one. The UI's `ApiError` carries
+  `code`, and `classifyApplyError` decides by it, falling back to the previous
+  status / message matching for older services.
+- Library and CLI-fix apply results include `historyEntry.restorable` (true when
+  at least one applied item has an op history can undo), using the same rule as
+  the history list.
+
 - Primary agents ("常用 Agent"): `primaryAgentIds` in the configuration, a
   stat-only session activity scan (`GET /api/agents/activity`) that suggests up
   to two primary agents by recent session bytes, and a primary-scoped status
@@ -124,6 +136,13 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ### Changed
 
+- The uninstall plan `warning` names the other Agents by display name
+  (`alsoAffects` stays a list of ids). Restore plan `warnings` no longer repeat
+  each unit's conflict text; they hold at most one summary when changed units
+  are selected.
+- Missing confirmations on `/api/sync`, `/api/import-install` now answer 400
+  `confirm-required` instead of a generic 400, and a sync target that turned
+  into a symlink after planning answers 409 `stale-plan`.
 - New app icon and sidebar mark: one skill library (green) shared with every
   Agent. `resources/icon.png` is rendered from `resources/icon.svg` by
   `node scripts/build-icon.mjs`, which dithers the background gradient so it

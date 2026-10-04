@@ -46,9 +46,10 @@ const offlineLsRemote = async () => {
 };
 
 class RouteError extends Error {
-  constructor(statusCode, message) {
+  constructor(statusCode, message, code = statusCode === 400 ? "invalid-request" : null) {
     super(message);
     this.statusCode = statusCode;
+    if (code) this.code = code;
   }
 }
 
@@ -179,7 +180,7 @@ export function createInsightRoutes(context) {
     async "/api/updates/apply"(body, request) {
       // Same confirmation model as sync: header + explicit confirm, plan id from this process.
       if (request.headers["x-skill-manager-confirm"] !== "yes" || body.confirm !== true) {
-        throw new RouteError(400, "需要明确确认后才能执行更新。");
+        throw new RouteError(400, "需要明确确认后才能执行更新。", "confirm-required");
       }
       const result = await updates.apply({ planId: body.planId, confirm: true });
       context.afterWrite?.();

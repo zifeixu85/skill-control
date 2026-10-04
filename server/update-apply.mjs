@@ -5,6 +5,7 @@ import path from "node:path";
 import { compactHomeInText, compactHomePath, isWithin, scrubTokens } from "./fs-safe.mjs";
 import { gitBlobSha, installExclude, localTreeSha } from "./git-tree.mjs";
 import { createWriteTracker } from "./sync-targets.mjs";
+import { createPlanStore } from "./plan-store.mjs";
 
 /**
  * Update execution. Nothing runs without a plan created by this process in the last ten
@@ -23,9 +24,11 @@ const OUTPUT_TAIL = 4_000;
 const NAME = /^[\w.@+-]{1,128}$/u;
 
 export class UpdateError extends Error {
-  constructor(statusCode, message) {
+  constructor(statusCode, message, code = null) {
     super(message);
     this.statusCode = statusCode;
+    // Machine-readable reason for the UI (see docs/ARCHITECTURE.md, "Error codes").
+    if (code) this.code = code;
   }
 }
 
@@ -76,28 +79,23 @@ export function runCommand(file, args, { cwd, timeoutMs = COMMAND_TIMEOUT_MS, en
  *   materialize({ sourcePath, destinationPath, backupPath }), run(file, args, options), now() }
  */
 export function createUpdateExecutor(context) {
-  const plans = new Map();
   const now = context.now || (() => Date.now());
+  const plans = createPlanStore({ ttlMs: PLAN_TTL_MS, now, label: "更新计划" });
   const run = context.run || runCommand;
   const display = (value) => compactHomePath(value, context.homes);
 
-  function remember(plan) {
-    for (const [id, stored] of plans) if (now() - stored.createdAt > PLAN_TTL_MS) plans.delete(id);
-    const planId = randomUUID();
-    plans.set(planId, { ...plan, planId, createdAt: now() });
-    return planId;
-  }
+  const remember = (plan) => plans.remember(plan);
 
   async function planSelf(unit, view, facts, cache, choice) {
     const upstream = facts?.upstream;
-    if (!upstream?.filtered || !upstream.commit) throw new UpdateError(409, "请先检查更新，再生成更新计划。");
-    if (upstream.unsupported) throw new UpdateError(409, "上游包含软链接或子模块，无法自动更新，请手动处理。");
-    if (view.status === "up-to-date") throw new UpdateError(409, "已经是最新版本。");
+    if (!upstream?.filtered || !upstream.commit) throw new UpdateError(409, "请先检查更新，再生成更新计划。", "check-required");
+    if (upstream.unsupported) throw new UpdateError(409, "上游包含软链接或子模块，无法自动更新，请手动处理。", "unsupported");
+    if (view.status === "up-to-date") throw new UpdateError(409, "已经是最新版本。", "up-to-date");
     const folderFacts = cache.repos[unit.check.repo]?.folders?.[unit.check.folder];
     const files = (folderFacts?.files || []).filter((file) => !file.path.split("/").some((part, index, parts) => installExclude(parts.slice(0, index + 1).join("/"), index < parts.length - 1)));
-    if (!folderFacts?.files || files.length === 0 || files.length > MAX_FILES) throw new UpdateError(409, "上游文件列表不可用或过大，无法自动更新。");
+    if (!folderFacts?.files || files.length === 0 || files.length > MAX_FILES) throw new UpdateError(409, "上游文件列表不可用或过大，无法自动更新。", "too-large");
     const total = files.reduce((sum, file) => sum + (file.size || 0), 0);
-    if (total > MAX_TOTAL_BYTES || files.some((file) => (file.size || 0) > MAX_FILE_BYTES)) throw new UpdateError(409, "上游内容超过大小上限，无法自动更新。");
+    if (total > MAX_TOTAL_BYTES || files.some((file) => (file.size || 0) > MAX_FILE_BYTES)) throw new UpdateError(409, "上游内容超过大小上限，无法自动更新。", "too-large");
     const modified = view.status === "conflict" || view.status === "locally-modified";
     const choices = ["keep-local", "overwrite", "save-as"];
     if (modified && !choices.includes(choice)) {
@@ -126,7 +124,7 @@ export function createUpdateExecutor(context) {
       });
     }
     const saveAs = choice === "save-as" ? path.join(path.dirname(primary), `${path.basename(primary)}@local`) : null;
-    if (saveAs && (await lstat(saveAs).catch(() => null))) throw new UpdateError(409, `${display(saveAs)} 已存在，请先处理。`);
+    if (saveAs && (await lstat(saveAs).catch(() => null))) throw new UpdateError(409, `${display(saveAs)} 已存在，请先处理。`, "conflict");
     const steps = [
       { type: "download", description: `从 github.com/${unit.check.repo} 下载 ${files.length} 个文件（提交 ${upstream.commit.slice(0, 7)}），并校验 git 树哈希。` },
       ...(saveAs ? [{ type: "save-as", description: `把本地版本另存为 ${display(saveAs)}。` }] : []),
@@ -158,7 +156,7 @@ export function createUpdateExecutor(context) {
   async function delegateSteps(unit) {
     const tool = async (name, preferred = null) => {
       const found = preferred || (await context.findCommand(name));
-      if (!found) throw new UpdateError(409, `找不到 ${name} 命令，请先安装或把它加入 PATH。`);
+      if (!found) throw new UpdateError(409, `找不到 ${name} 命令，请先安装或把它加入 PATH。`, "missing-command");
       return found;
     };
     switch (unit.sourceType) {
@@ -171,7 +169,7 @@ export function createUpdateExecutor(context) {
       }
       case "claude-plugin": {
         const { plugin, marketplace, scope } = unit.sourceRef;
-        if (!NAME.test(plugin) || !NAME.test(marketplace)) throw new UpdateError(400, "插件名称无效。");
+        if (!NAME.test(plugin) || !NAME.test(marketplace)) throw new UpdateError(400, "插件名称无效。", "invalid-request");
         const claude = await tool("claude");
         return {
           steps: [
@@ -183,27 +181,27 @@ export function createUpdateExecutor(context) {
       }
       case "codex-marketplace": {
         const { marketplace } = unit.sourceRef;
-        if (!NAME.test(marketplace)) throw new UpdateError(400, "市场名称无效。");
+        if (!NAME.test(marketplace)) throw new UpdateError(400, "市场名称无效。", "invalid-request");
         return { steps: [{ file: await tool("codex"), args: ["plugin", "marketplace", "upgrade", marketplace, "--json"] }], notes: [] };
       }
       case "hermes-hub": {
-        if (!NAME.test(unit.title)) throw new UpdateError(400, "技能名称无效。");
+        if (!NAME.test(unit.title)) throw new UpdateError(400, "技能名称无效。", "invalid-request");
         return { steps: [{ file: await tool("hermes"), args: ["skills", "update", unit.title] }], notes: [] };
       }
       case "git": {
         const git = await tool("git");
         const status = await run(git, ["-C", unit.gitRoot, "status", "--porcelain"], { timeoutMs: 20_000, env: commandEnv() });
-        if (status.exitCode !== 0) throw new UpdateError(409, "无法读取仓库状态。");
-        if (status.stdout.trim()) throw new UpdateError(409, "仓库有未提交的改动，为避免覆盖已拒绝更新。");
+        if (status.exitCode !== 0) throw new UpdateError(409, "无法读取仓库状态。", "refused");
+        if (status.stdout.trim()) throw new UpdateError(409, "仓库有未提交的改动，为避免覆盖已拒绝更新。", "conflict");
         return { steps: [{ file: git, args: ["-C", unit.gitRoot, "pull", "--ff-only"] }], notes: ["只做快进合并；如果本地已分叉会失败，不会改动文件。"], gitRoot: unit.gitRoot };
       }
       default:
-        throw new UpdateError(409, "这个来源不能由 Skill Control 执行更新。");
+        throw new UpdateError(409, "这个来源不能由 Skill Control 执行更新。", "refused");
     }
   }
 
   async function plan({ unit, view, facts, cache, choice }) {
-    if (!unit) throw new UpdateError(404, "找不到这个更新单元。");
+    if (!unit) throw new UpdateError(404, "找不到这个更新单元。", "not-found");
     if (view.action.kind === "self") return planSelf(unit, view, facts, cache, choice);
     if (view.action.kind === "delegate") {
       const { steps, notes, gitRoot } = await delegateSteps(unit);
@@ -223,38 +221,38 @@ export function createUpdateExecutor(context) {
   async function applySelf(stored) {
     const transport = context.transportFactory(stored.files.length + 5);
     if (stored.localHash && (await localTreeSha(stored.primary, { exclude: installExclude })) !== stored.localHash) {
-      throw new UpdateError(409, "本地内容在生成计划后有变化，请重新生成计划。");
+      throw new UpdateError(409, "本地内容在生成计划后有变化，请重新生成计划。", "stale-plan");
     }
     const lockText = await readFile(stored.lockFile, "utf8");
     const lock = JSON.parse(lockText);
     const entry = lock?.skills?.[stored.lockName];
     if (!entry || (stored.lockBaseline && entry.skillFolderHash !== stored.lockBaseline)) {
-      throw new UpdateError(409, "锁文件在生成计划后被修改，请重新生成计划。");
+      throw new UpdateError(409, "锁文件在生成计划后被修改，请重新生成计划。", "stale-plan");
     }
     const staging = path.join(context.stateDirectory, "staging", randomUUID());
     const completed = [];
     try {
       for (const file of stored.files) {
         const parts = file.path.split("/");
-        if (parts.some((part) => !part || part === "." || part === "..")) throw new UpdateError(409, "上游文件路径无效。");
+        if (parts.some((part) => !part || part === "." || part === "..")) throw new UpdateError(409, "上游文件路径无效。", "integrity");
         const url = `https://raw.githubusercontent.com/${stored.repo}/${stored.commit}/${[...(stored.folder ? stored.folder.split("/") : []), ...parts].map(encodeURIComponent).join("/")}`;
         const content = await transport.getBuffer(url);
-        if (gitBlobSha(content).toString("hex") !== file.sha) throw new UpdateError(409, `下载的 ${file.path} 校验失败，已停止更新，未做任何改动。`);
+        if (gitBlobSha(content).toString("hex") !== file.sha) throw new UpdateError(409, `下载的 ${file.path} 校验失败，已停止更新，未做任何改动。`, "integrity");
         const target = path.join(staging, ...parts);
-        if (!isWithin(staging, target)) throw new UpdateError(409, "上游文件路径无效。");
+        if (!isWithin(staging, target)) throw new UpdateError(409, "上游文件路径无效。", "integrity");
         await mkdir(path.dirname(target), { recursive: true });
         await writeFile(target, content);
         if (file.mode === "100755") await chmod(target, 0o755);
       }
       if ((await localTreeSha(staging, { exclude: installExclude })) !== stored.expected) {
-        throw new UpdateError(409, "下载内容的 git 树哈希与上游不一致，已停止更新，未做任何改动。");
+        throw new UpdateError(409, "下载内容的 git 树哈希与上游不一致，已停止更新，未做任何改动。", "integrity");
       }
       if (stored.saveAs) await cp(stored.primary, stored.saveAs, { recursive: true, errorOnExist: true, force: false });
       for (const write of stored.writes) {
         await context.materialize({ sourcePath: staging, destinationPath: write.writePath, backupPath: write.backupPath });
         completed.push(write);
         if ((await localTreeSha(write.writePath, { exclude: installExclude })) !== stored.expected) {
-          throw new UpdateError(500, "写入后的内容校验失败，已从备份恢复。");
+          throw new UpdateError(500, "写入后的内容校验失败，已从备份恢复。", "integrity");
         }
       }
     } catch (error) {
@@ -293,12 +291,12 @@ export function createUpdateExecutor(context) {
       ...(await Promise.all(context.allowedCommandRoots.map((root) => realpath(root).catch(() => root)))),
     ];
     const allowed = candidates.some((candidate) => roots.some((root) => isWithin(root, candidate)));
-    if (!allowed) throw new UpdateError(403, "这个命令不在允许执行的目录中，已拒绝执行。");
+    if (!allowed) throw new UpdateError(403, "这个命令不在允许执行的目录中，已拒绝执行。", "command-not-allowed");
   }
 
   async function applyDelegate(stored) {
     // Delegated updates download things: never in offline mode.
-    if (process.env.SKILL_MANAGER_UPDATES_OFFLINE === "1") throw new UpdateError(409, "离线模式下不执行会联网的更新命令。");
+    if (process.env.SKILL_MANAGER_UPDATES_OFFLINE === "1") throw new UpdateError(409, "离线模式下不执行会联网的更新命令。", "updates-offline");
     const results = [];
     for (const step of stored.steps) await assertAllowedCommand(step.file);
     for (const step of stored.steps) {
@@ -315,13 +313,8 @@ export function createUpdateExecutor(context) {
   }
 
   async function apply({ planId, confirm }) {
-    if (confirm !== true) throw new UpdateError(400, "需要明确确认后才能执行更新。");
-    const stored = plans.get(String(planId || ""));
-    if (!stored || now() - stored.createdAt > PLAN_TTL_MS) {
-      plans.delete(String(planId || ""));
-      throw new UpdateError(404, "更新计划不存在或已过期（10 分钟），请重新生成。");
-    }
-    plans.delete(stored.planId);
+    if (confirm !== true) throw new UpdateError(400, "需要明确确认后才能执行更新。", "confirm-required");
+    const stored = plans.take(planId);
     const result = stored.kind === "self" ? await applySelf(stored) : stored.kind === "delegate" ? await applyDelegate(stored) : { changed: [] };
     const record = {
       id: createHash("sha1").update(`${now()}:${stored.unitKey}`).digest("hex").slice(0, 12),

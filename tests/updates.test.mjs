@@ -201,7 +201,7 @@ test("self update: plan, confirm, verify, backup, replace once per real folder, 
   assert.notEqual(lock.skills["old-skill"].updatedAt, "2026-09-01T00:00:00.000Z");
   assert.ok(result.lockBackup.endsWith("skill-lock.json"));
   assert.match(await readFile(path.join(stateDirectory, "history.jsonl"), "utf8"), /"type":"update"/u);
-  await assert.rejects(service.apply({ planId: plan.planId, confirm: true }), /不存在或已过期/u, "a plan runs once");
+  await assert.rejects(service.apply({ planId: plan.planId, confirm: true }), (error) => error.code === "plan-not-found" && /不存在或已过期/u.test(error.message), "a plan runs once");
   await rescan();
   assert.equal(byTitle(await service.view())["skills-cli:old-skill"].status, "up-to-date");
 });
@@ -292,7 +292,7 @@ test("delegated updates run the owning CLI without a shell and return a redacted
   });
   await dirty.service.check();
   const tooling = (await dirty.service.view()).units.find((unit) => unit.title === "tooling");
-  await assert.rejects(dirty.service.plan({ unitKey: tooling.unitKey }), /未提交的改动/u);
+  await assert.rejects(dirty.service.plan({ unitKey: tooling.unitKey }), (error) => error.code === "conflict" && /未提交的改动/u.test(error.message));
   assert.ok(calls.every((args) => !args.includes("pull")));
   await assert.rejects(service.apply({ planId: "not-a-plan", confirm: true }), /不存在或已过期/u);
 });
@@ -344,7 +344,7 @@ test("offline mode attempts no request and no subprocess, injected or not", LIMI
     assert.equal(view.units.find((unit) => unit.title === "old-skill").error.kind, "offline");
     const lark = view.units.find((unit) => unit.sourceType === "lark-cli");
     const plan = await service.plan({ unitKey: lark.unitKey });
-    await assert.rejects(service.apply({ planId: plan.planId, confirm: true }), /离线模式下不执行/u);
+    await assert.rejects(service.apply({ planId: plan.planId, confirm: true }), (error) => error.statusCode === 409 && error.code === "updates-offline" && /离线模式下不执行/u.test(error.message));
   } finally {
     if (previous === undefined) delete process.env.SKILL_MANAGER_UPDATES_OFFLINE;
     else process.env.SKILL_MANAGER_UPDATES_OFFLINE = previous;

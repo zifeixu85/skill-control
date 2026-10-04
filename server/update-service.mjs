@@ -236,7 +236,7 @@ export function createUpdateService({
   async function changes(unitKey) {
     const units = await resolveUnits();
     const unit = units.find((item) => item.unitKey === unitKey);
-    if (!unit) throw new UpdateError(404, "找不到这个更新单元。");
+    if (!unit) throw new UpdateError(404, "找不到这个更新单元。", "not-found");
     const cache = await loadCache();
     const facts = cache.facts[unit.unitKey]?.upstream || {};
     const transport = transportFor(3, cache);
@@ -287,7 +287,7 @@ export function createUpdateService({
   async function plan({ unitKey, choice = null }) {
     const units = await resolveUnits();
     const unit = units.find((item) => item.unitKey === unitKey);
-    if (!unit) throw new UpdateError(404, "找不到这个更新单元。");
+    if (!unit) throw new UpdateError(404, "找不到这个更新单元。", "not-found");
     const cache = await loadCache();
     const view = publicUnit(unit, cache.facts[unit.unitKey], await tools());
     return executor.plan({ unit, view, facts: cache.facts[unit.unitKey], cache, choice });

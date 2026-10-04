@@ -31,9 +31,10 @@ export const MANAGE_ROUTES = [
 ];
 
 class RouteError extends Error {
-  constructor(statusCode, message) {
+  constructor(statusCode, message, code = statusCode === 400 ? "invalid-request" : null) {
     super(message);
     this.statusCode = statusCode;
+    if (code) this.code = code;
   }
 }
 
@@ -112,7 +113,7 @@ export function createManageRoutes(context) {
     });
 
   const confirmed = (request, body) => {
-    if (request.headers["x-skill-manager-confirm"] !== "yes" || body.confirm !== true) throw new RouteError(400, "需要明确确认后才能执行。");
+    if (request.headers["x-skill-manager-confirm"] !== "yes" || body.confirm !== true) throw new RouteError(400, "需要明确确认后才能执行。", "confirm-required");
   };
 
   const getRoutes = {

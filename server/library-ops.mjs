@@ -11,9 +11,11 @@ import { assertSafeWrite } from "./home-guard.mjs";
  */
 
 export class LibraryError extends Error {
-  constructor(statusCode, message) {
+  constructor(statusCode, message, code = null) {
     super(message);
     this.statusCode = statusCode;
+    // Machine-readable reason for the UI (see docs/ARCHITECTURE.md, "Error codes").
+    if (code) this.code = code;
   }
 }
 
@@ -36,7 +38,7 @@ async function moveDirectory(from, to, asideFor) {
   await cp(from, to, { recursive: true, verbatimSymlinks: true, errorOnExist: true, force: false });
   if ((await contentHash(from)) !== (await contentHash(to))) {
     await rm(to, { recursive: true, force: true });
-    throw new LibraryError(500, "跨卷复制后内容校验失败，已取消。");
+    throw new LibraryError(500, "跨卷复制后内容校验失败，已取消。", "integrity");
   }
   await mkdir(path.dirname(asideFor), { recursive: true });
   await rename(from, asideFor);
@@ -55,7 +57,7 @@ async function runOp(op, context) {
     case "move": {
       await guard(op.from);
       await guard(op.to);
-      if (await exists(op.to)) throw new LibraryError(409, `${context.display(op.to)} 已存在，已停止。`);
+      if (await exists(op.to)) throw new LibraryError(409, `${context.display(op.to)} 已存在，已停止。`, "stale-plan");
       await mkdir(path.dirname(op.to), { recursive: true });
       const aside = path.join(context.backupGroup, "cross-volume", path.basename(op.from));
       await moveDirectory(op.from, op.to, aside);
@@ -75,7 +77,7 @@ async function runOp(op, context) {
     }
     case "unlink": {
       await guard(op.path);
-      if (!(await isLink(op.path))) throw new LibraryError(409, `${context.display(op.path)} 不是链接，已停止。`);
+      if (!(await isLink(op.path))) throw new LibraryError(409, `${context.display(op.path)} 不是链接，已停止。`, "stale-plan");
       const linkTarget = await readlink(op.path);
       op.linkTarget = linkTarget;
       await unlink(op.path);
@@ -85,7 +87,7 @@ async function runOp(op, context) {
     }
     case "link": {
       await guard(op.path);
-      if (await exists(op.path)) throw new LibraryError(409, `${context.display(op.path)} 已存在，已停止。`);
+      if (await exists(op.path)) throw new LibraryError(409, `${context.display(op.path)} 已存在，已停止。`, "stale-plan");
       await mkdir(path.dirname(op.path), { recursive: true });
       const result = await createDirLink({ linkPath: op.path, relativeTarget: op.relativeTarget, absoluteTarget: op.absoluteTarget, platform: context.platform, fsImpl: context.fsImpl });
       op.result = result;
@@ -161,6 +163,13 @@ export async function recordOp(op, display) {
   const target = resultPath(op);
   record.afterHash = target ? await fingerprint(target) : null;
   return record;
+}
+
+/** Whether `reverseOp` can undo a recorded op automatically. */
+export function isReversible(record) {
+  if (!record) return false;
+  if (record.op === "command") return Boolean(record.restoreFile);
+  return ["move", "stash", "unlink", "link", "write"].includes(record.op);
 }
 
 /**
