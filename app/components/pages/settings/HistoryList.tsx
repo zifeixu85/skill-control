@@ -29,7 +29,13 @@ export function HistoryList() {
       </div>
     );
   }
-  if (history.status === "error" && !history.data) return <p className="form-error">{errorMessage(history.error, "读取历史失败。")}</p>;
+  if (history.status === "error" && !history.data) {
+    return (
+      <p className="form-error" role="alert">
+        {errorMessage(history.error, "读取历史失败。")}
+      </p>
+    );
+  }
   if (!history.data) return <p className="muted small">正在读取历史…</p>;
   if (!history.data.length) return <p className="muted small">还没有任何改动记录。</p>;
 
@@ -42,6 +48,12 @@ export function HistoryList() {
               {HISTORY_ACTION_LABELS[entry.action] || entry.action}
               {entry.skill ? ` · ${entry.skill}` : ""}
             </b>
+            {entry.units.length ? (
+              <span className="muted small history-units" title={entry.units.map((unit) => unit.title).join("\n")}>
+                {entry.units.slice(0, 3).map((unit) => unit.title).join("；")}
+                {entry.units.length > 3 ? ` 等 ${entry.units.length} 项` : ""}
+              </span>
+            ) : null}
             <span className="muted small">
               {entry.agents.length ? joinNames(entry.agents.map(agentName)) : ""}
               {entry.mode ? ` · ${entry.mode === "symlink" ? "软链接" : "复制"}` : ""}

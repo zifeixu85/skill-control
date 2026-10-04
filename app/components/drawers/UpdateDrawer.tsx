@@ -55,7 +55,11 @@ function ChangesSection({ unitKey, initial }: { unitKey: string; initial: { titl
           {state.status === "loading" ? "正在读取…" : "查看改动"}
         </button>
       )}
-      {state.status === "error" ? <p className="form-error">{state.message}</p> : null}
+      {state.status === "error" ? (
+        <p className="form-error" role="alert">
+          {state.message}
+        </p>
+      ) : null}
       <p className="footnote">查看改动会向上游发 1 个请求。</p>
     </section>
   );

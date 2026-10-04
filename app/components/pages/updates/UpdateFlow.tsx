@@ -1,263 +1,151 @@
 "use client";
 
 import { useState } from "react";
-import { invalidateResources, primeResource } from "../../../hooks/useResource";
-import { api, errorMessage } from "../../../lib/api";
-import { joinNames } from "../../../lib/format";
-import {
-  CHOICE_TEXT,
-  STEP_LABELS,
-  type ApplyResult,
-  type ConflictChoice,
-  type UpdatePlan,
-  type UpdateUnit,
-} from "../../../lib/updates";
-import { CopyPathButton } from "../../files/ConfigDetailView";
-import { CodeView } from "../../ui/CodeView";
-import { useData } from "../../providers/DataProvider";
+import { refreshAfterWrite } from "../../../hooks/refresh";
+import { useMarkBusy } from "../../../hooks/useBusy";
+import { usePlanApply } from "../../../hooks/usePlanApply";
 import { useUndoToast } from "../../../hooks/useUndoToast";
-import { UPDATES_KEY } from "./UpdatesPage";
+import { api } from "../../../lib/api";
+import { CHOICE_TEXT, type ApplyResult, type ConflictChoice, type UpdatePlan, type UpdateUnit } from "../../../lib/updates";
+import { CopyPathButton } from "../../files/ConfigDetailView";
+import { PlanView, ResultView } from "./UpdateViews";
 
-type Phase =
-  | { name: "idle" }
-  | { name: "planning" }
-  | { name: "plan"; plan: UpdatePlan }
-  | { name: "applying"; plan: Extract<UpdatePlan, { kind: "plan" }> }
-  | { name: "done"; result: ApplyResult }
-  | { name: "error"; message: string };
-
-function PlanView({ plan }: { plan: Extract<UpdatePlan, { kind: "plan" }> }) {
-  const { agentName } = useData();
+function Intro({ unit, onStart }: { unit: UpdateUnit; onStart: () => void }) {
+  const canPlan = unit.action.kind !== "none";
   return (
-    <div className="plan-list">
-      <ol className="steps">
-        {plan.steps.map((step, index) => (
-          <li key={`${step.type}-${index}`}>
-            <span className="tag mute">{STEP_LABELS[step.type] || step.type}</span>
-            <div>
-              {step.description ? <p>{step.description}</p> : null}
-              {step.command ? <code className="command">{step.command}</code> : null}
-              {step.path ? (
-                <p>
-                  {step.agentId ? `${agentName(step.agentId)}：` : ""}
-                  <code>{step.path}</code>
-                </p>
-              ) : null}
-              {step.backup ? (
-                <p className="muted">
-                  备份到 <code>{step.backup}</code>
-                </p>
-              ) : null}
-              {step.alsoVisibleTo.length ? (
-                <p className="plan-shared">写入后 {joinNames(step.alsoVisibleTo.map(agentName))} 也会看到这次改动。</p>
-              ) : null}
-            </div>
-          </li>
-        ))}
-      </ol>
-      {plan.changes ? (
-        <div className="file-changes">
-          {(["added", "modified", "removed"] as const).map((key) =>
-            plan.changes && plan.changes[key].length ? (
-              <details key={key} open={plan.changes[key].length <= 8}>
-                <summary>
-                  {key === "added" ? "新增" : key === "modified" ? "修改" : "删除"} {plan.changes[key].length} 个文件
-                </summary>
-                <div className="list-names">
-                  {plan.changes[key].slice(0, 80).map((file) => (
-                    <span key={file}>{file}</span>
-                  ))}
-                </div>
-              </details>
-            ) : null,
-          )}
+    <div className="confirm quiet">
+      <b>{unit.action.kind === "guide" ? "在来源产品里更新" : unit.action.label || "更新"}</b>
+      {unit.action.kind === "guide" && unit.action.label ? <p>{unit.action.label}</p> : null}
+      <p>
+        {unit.action.kind === "delegate"
+          ? "会调用这个来源自己的命令完成更新，先给你看要运行的命令。"
+          : unit.action.kind === "guide"
+            ? "这个来源需要在它自己的产品里更新，可以查看具体步骤。"
+            : unit.action.kind === "self"
+              ? "Skill Control 会下载上游内容并校验，替换前自动备份。先看计划再决定。"
+              : "这个来源不需要也不能在这里更新。"}
+      </p>
+      {unit.action.command ? <code className="command">{unit.action.command}</code> : null}
+      {canPlan ? (
+        <div className="acts">
+          <button type="button" className="btn sm primary" onClick={onStart}>
+            {unit.action.kind === "guide" ? "查看步骤" : "生成更新计划"}
+          </button>
         </div>
       ) : null}
-      {plan.notes.map((note) => (
-        <p key={note} className="plan-warning">
-          {note}
-        </p>
-      ))}
     </div>
   );
 }
 
-function ResultView({ result }: { result: ApplyResult }) {
-  const { agentName } = useData();
+const confirmable = (plan: UpdatePlan) => (plan.kind === "plan" && plan.action !== "none" ? plan.planId : null);
+
+function UpdateReview({ unit, onCancel }: { unit: UpdateUnit; onCancel: () => void }) {
+  const undoToast = useUndoToast();
+  const [choice, setChoice] = useState<ConflictChoice | undefined>(undefined);
+  const flow = usePlanApply<UpdatePlan, ApplyResult>({
+    requestKey: JSON.stringify([unit.unitKey, choice || null]),
+    makePlan: () => api.planUpdate(unit.unitKey, choice),
+    planIdOf: confirmable,
+    expiresAtOf: (plan) => (plan.kind === "plan" ? plan.expiresAt : null),
+    apply: (planId) => api.applyUpdate(planId),
+    // Only self-updates keep backups the service can put back.
+    onApplied: (result) =>
+      undoToast(
+        result.ok ? `已更新 ${unit.title}` : `${unit.title} 没有全部完成，请查看输出`,
+        result.kind === "self" ? result.historyId : null,
+        result.ok ? "default" : "error",
+      ),
+    // Outside the apply: a failed refresh can never turn a finished update into an error.
+    refresh: refreshAfterWrite,
+    planFailure: "无法生成更新计划。",
+    applyFailure: "更新失败，已写入的目录会从备份恢复。",
+  });
+  // The drawer can't be closed (button or Esc) while the update runs.
+  useMarkBusy(flow.applying);
+
+  if (flow.result) {
+    return (
+      <div className="confirm quiet" role="status" aria-live="polite">
+        <b>{flow.result.ok ? "更新完成" : "部分步骤失败"}</b>
+        <ResultView result={flow.result} />
+      </div>
+    );
+  }
+  const plan = flow.plan || (flow.planning ? flow.lastPlan : null);
+  const failure = flow.planError || flow.error;
+  const notice = flow.expired ? "计划已过期（10 分钟），请重新生成。" : flow.notice;
+  const cancel = (
+    <button type="button" className="btn sm ghost" disabled={flow.applying} onClick={onCancel}>
+      取消
+    </button>
+  );
   return (
-    <div className="plan-list">
-      {result.changed.map((change) => (
-        <div className="plan-action" key={`${change.agentId}-${change.path}`}>
-          <div className="plan-line">
-            <span className="tag">已更新</span>
-            <code>{change.path}</code>
-          </div>
-          <p>
-            {agentName(change.agentId)}
-            {change.backup ? (
-              <>
-                {" · 旧版本备份在 "}
-                <code>{change.backup}</code>
-              </>
+    <div className={`confirm ${plan?.kind === "guide" ? "quiet" : ""}`} aria-busy={flow.planning || flow.applying}>
+      {notice ? <p className="inline-note" role="status">{notice}</p> : null}
+      {flow.planning && !plan ? <p className="muted">正在生成计划…</p> : null}
+      <div className={flow.planning ? "stale" : ""}>
+        {plan?.kind === "choice" ? (
+          <>
+            <b>先决定怎么处理本地修改</b>
+            <p>{plan.message || "你在本地改过这个技能。"}</p>
+            <div className="choices">
+              {plan.choices.map((item) => (
+                <button key={item} type="button" className="choice" disabled={flow.planning} onClick={() => setChoice(item)}>
+                  <b>{CHOICE_TEXT[item].title}</b>
+                  <span>{CHOICE_TEXT[item].detail}</span>
+                </button>
+              ))}
+            </div>
+          </>
+        ) : null}
+        {plan?.kind === "guide" ? (
+          <>
+            <b>需要在来源产品里更新</b>
+            <p>{plan.instructions || "请在安装它的产品里更新。"}</p>
+            {plan.command ? (
+              <div className="command-copy">
+                <code className="command">{plan.command}</code>
+                <CopyPathButton path={plan.command} label="复制命令" />
+              </div>
             ) : null}
+          </>
+        ) : null}
+        {plan?.kind === "incomplete" ? (
+          <p className="form-error" role="alert">
+            {plan.message}
           </p>
-        </div>
-      ))}
-      {result.savedAs ? (
-        <p>
-          本地版本另存为 <code>{result.savedAs}</code>
+        ) : null}
+        {plan?.kind === "plan" ? (
+          <>
+            <b>{plan.action === "delegate" ? "将运行这些命令" : plan.action === "self" ? "更新计划" : "无需改动"}</b>
+            <PlanView plan={plan} />
+          </>
+        ) : null}
+      </div>
+      {failure ? (
+        <p className="form-error" role="alert">
+          {failure}
         </p>
       ) : null}
-      {result.lockBackup ? (
-        <p className="muted">
-          锁文件备份：<code>{result.lockBackup}</code>
-        </p>
-      ) : null}
-      {result.commands.map((command, index) => (
-        <div className="command-result" key={`${command.command}-${index}`}>
-          <div className="plan-line">
-            <span className={`tag ${command.exitCode === 0 ? "" : "danger"}`}>退出码 {command.exitCode ?? "未知"}</span>
-            <code>{command.command}</code>
-          </div>
-          {command.stdout ? <CodeView text={command.stdout} language="text" wrap label="命令输出" /> : null}
-          {command.stderr ? <CodeView text={command.stderr} language="text" wrap label="错误输出" /> : null}
-        </div>
-      ))}
+      <div className="acts">
+        {cancel}
+        {failure || flow.expired || plan?.kind === "incomplete" ? (
+          <button type="button" className="btn sm" disabled={flow.applying} onClick={flow.retry}>
+            重新生成
+          </button>
+        ) : null}
+        {plan?.kind === "plan" && plan.action !== "none" ? (
+          <button type="button" className="btn sm primary" disabled={!flow.canApply} onClick={() => void flow.confirm()}>
+            {flow.applying ? "正在执行…" : plan.action === "delegate" ? "确认运行" : "确认更新"}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }
 
 /** Plan → explicit confirm → apply → result. Nothing runs without the confirm click. */
 export function UpdateFlow({ unit }: { unit: UpdateUnit }) {
-  const undoToast = useUndoToast();
-  const [phase, setPhase] = useState<Phase>({ name: "idle" });
-
-  const plan = async (choice?: ConflictChoice) => {
-    setPhase({ name: "planning" });
-    try {
-      setPhase({ name: "plan", plan: await api.planUpdate(unit.unitKey, choice) });
-    } catch (error) {
-      setPhase({ name: "error", message: errorMessage(error, "无法生成更新计划。") });
-    }
-  };
-
-  const apply = async (current: Extract<UpdatePlan, { kind: "plan" }>) => {
-    setPhase({ name: "applying", plan: current });
-    try {
-      const result = await api.applyUpdate(current.planId);
-      setPhase({ name: "done", result });
-      // Only self-updates keep backups the service can put back.
-      undoToast(
-        result.ok ? `已更新 ${unit.title}` : `${unit.title} 没有全部完成，请查看输出`,
-        result.kind === "self" ? result.historyId : null,
-        result.ok ? "default" : "error",
-      );
-      primeResource(UPDATES_KEY, await api.updates());
-      void invalidateResources("scan", "files:", "file:", "detail:", "health-report", "usage:skill:", "integrations");
-    } catch (error) {
-      setPhase({ name: "error", message: errorMessage(error, "更新失败，已写入的目录会从备份恢复。") });
-    }
-  };
-
-  if (phase.name === "idle" || phase.name === "planning") {
-    const canPlan = unit.action.kind !== "none";
-    return (
-      <div className="confirm quiet">
-        <b>{unit.action.kind === "guide" ? "在来源产品里更新" : unit.action.label || "更新"}</b>
-        {unit.action.kind === "guide" && unit.action.label ? <p>{unit.action.label}</p> : null}
-        <p>
-          {unit.action.kind === "delegate"
-            ? "会调用这个来源自己的命令完成更新，先给你看要运行的命令。"
-            : unit.action.kind === "guide"
-              ? "这个来源需要在它自己的产品里更新，可以查看具体步骤。"
-              : unit.action.kind === "self"
-                ? "Skill Control 会下载上游内容并校验，替换前自动备份。先看计划再决定。"
-                : "这个来源不需要也不能在这里更新。"}
-        </p>
-        {unit.action.command ? <code className="command">{unit.action.command}</code> : null}
-        {canPlan ? (
-          <div className="acts">
-            <button type="button" className="btn sm primary" disabled={phase.name === "planning"} onClick={() => void plan()}>
-              {phase.name === "planning" ? "正在生成计划…" : unit.action.kind === "guide" ? "查看步骤" : "生成更新计划"}
-            </button>
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-  if (phase.name === "error") {
-    return (
-      <div className="confirm">
-        <p className="form-error" role="alert">
-          {phase.message}
-        </p>
-        <div className="acts">
-          <button type="button" className="btn sm" onClick={() => setPhase({ name: "idle" })}>
-            返回
-          </button>
-        </div>
-      </div>
-    );
-  }
-  if (phase.name === "done") {
-    return (
-      <div className="confirm quiet">
-        <b>{phase.result.ok ? "更新完成" : "部分步骤失败"}</b>
-        <ResultView result={phase.result} />
-      </div>
-    );
-  }
-  const current = phase.plan;
-  if (current.kind === "choice") {
-    return (
-      <div className="confirm">
-        <b>先决定怎么处理本地修改</b>
-        <p>{current.message || "你在本地改过这个技能。"}</p>
-        <div className="choices">
-          {current.choices.map((choice) => (
-            <button key={choice} type="button" className="choice" onClick={() => void plan(choice)}>
-              <b>{CHOICE_TEXT[choice].title}</b>
-              <span>{CHOICE_TEXT[choice].detail}</span>
-            </button>
-          ))}
-        </div>
-        <div className="acts">
-          <button type="button" className="btn sm ghost" onClick={() => setPhase({ name: "idle" })}>
-            取消
-          </button>
-        </div>
-      </div>
-    );
-  }
-  if (current.kind === "guide") {
-    return (
-      <div className="confirm quiet">
-        <b>需要在来源产品里更新</b>
-        <p>{current.instructions || "请在安装它的产品里更新。"}</p>
-        {current.command ? (
-          <div className="command-copy">
-            <code className="command">{current.command}</code>
-            <CopyPathButton path={current.command} label="复制命令" />
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-  const applying = phase.name === "applying";
-  return (
-    <div className="confirm">
-      <b>{current.action === "delegate" ? "将运行这些命令" : current.action === "self" ? "更新计划" : "无需改动"}</b>
-      <PlanView plan={current} />
-      <div className="acts">
-        <button type="button" className="btn sm ghost" disabled={applying} onClick={() => setPhase({ name: "idle" })}>
-          取消
-        </button>
-        {current.action !== "none" ? (
-          <button type="button" className="btn sm primary" disabled={applying} onClick={() => void apply(current)}>
-            {applying ? "正在执行…" : current.action === "delegate" ? "确认运行" : "确认更新"}
-          </button>
-        ) : null}
-      </div>
-    </div>
-  );
+  const [open, setOpen] = useState(false);
+  return open ? <UpdateReview unit={unit} onCancel={() => setOpen(false)} /> : <Intro unit={unit} onStart={() => setOpen(true)} />;
 }

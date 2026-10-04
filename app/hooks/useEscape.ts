@@ -1,21 +1,21 @@
 "use client";
 
 import { useEffect, useEffectEvent } from "react";
+import { createEscapeStack, noop } from "../lib/escape-stack";
 
-/**
- * Esc closes the top-most open layer only (sheet → dialog → drawer → pending install →
- * inspector). Layers register while active; the latest registration wins.
- */
-const stack: { id: number; close: () => void }[] = [];
-let sequence = 0;
+const stack = createEscapeStack();
 let installed = false;
 
 function onKeyDown(event: KeyboardEvent) {
-  if (event.key !== "Escape" || event.defaultPrevented || !stack.length) return;
+  if (event.key !== "Escape" || event.defaultPrevented || !stack.size()) return;
   event.preventDefault();
-  stack[stack.length - 1].close();
+  stack.escape();
 }
 
+/**
+ * Registers a layer for Esc while `active`. To block Esc during a write, keep the layer
+ * active and pass a no-op: `useEscape(true, busy ? noop : onClose)`.
+ */
 export function useEscape(active: boolean, close: () => void) {
   const onClose = useEffectEvent(close);
   useEffect(() => {
@@ -24,12 +24,13 @@ export function useEscape(active: boolean, close: () => void) {
       window.addEventListener("keydown", onKeyDown);
       installed = true;
     }
-    sequence += 1;
-    const entry = { id: sequence, close: () => onClose() };
-    stack.push(entry);
-    return () => {
-      const index = stack.findIndex((item) => item.id === entry.id);
-      if (index >= 0) stack.splice(index, 1);
-    };
+    return stack.push(() => onClose());
   }, [active]);
 }
+
+/** Swallows Esc while `busy`, so a write in progress is not dismissed from underneath. */
+export function useBlockEscape(busy: boolean) {
+  useEscape(busy, noop);
+}
+
+export { noop };

@@ -422,3 +422,55 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* A plan being regenerated: still readable, clearly not the one that will run. */
+.stale {
+  opacity: 0.5;
+  pointer-events: none;
+  transition: opacity 160ms var(--ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .stale {
+    transition: none;
+  }
+}
+.sr-focus {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.sr-focus:focus {
+  outline: none;
+}
+.sr-focus:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.warn-text {
+  display: block;
+  color: var(--warn);
+}
+.fix-agents {
+  display: inline-flex;
+  gap: 4px;
+  margin: 2px 0 4px;
+}
+.restore-units .plan-item-head > div {
+  display: grid;
+  gap: 2px;
+}
+.restore-units .steps {
+  margin: 6px 0 0 26px;
+}
+.history-units {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 52ch;
+}
+.trash-main .form-error {
+  display: block;
+  margin: 2px 0 0;
+}

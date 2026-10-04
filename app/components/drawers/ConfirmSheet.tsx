@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEscape } from "../../hooks/useEscape";
+import { noop, useEscape } from "../../hooks/useEscape";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
 
 /** Small modal for a planned write: what will happen, then an explicit confirm. */
@@ -9,29 +9,41 @@ export function ConfirmSheet({
   title,
   children,
   error,
+  notice,
   busy,
   confirmLabel,
   canConfirm,
   onConfirm,
   onClose,
+  onRetry,
   footnote,
 }: {
   title: string;
   children: ReactNode;
   error?: string;
+  /** Informational, e.g. why the plan was regenerated. */
+  notice?: string;
   busy: boolean;
   confirmLabel: string;
   canConfirm: boolean;
   onConfirm: () => void;
   onClose: () => void;
+  /** Shown as 重新生成 when the plan failed or expired. */
+  onRetry?: () => void;
   footnote?: string;
 }) {
   const ref = useFocusTrap<HTMLDivElement>();
-  useEscape(!busy, onClose);
+  // Stays registered while busy so Esc can't close this or anything underneath mid-write.
+  useEscape(true, busy ? noop : onClose);
   return (
     <div className="scrim">
-      <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="confirm-title" ref={ref} tabIndex={-1}>
+      <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="confirm-title" aria-busy={busy} ref={ref} tabIndex={-1}>
         <h2 id="confirm-title">{title}</h2>
+        {notice ? (
+          <p className="inline-note" role="status">
+            {notice}
+          </p>
+        ) : null}
         {children}
         {error ? (
           <p className="form-error" role="alert">
@@ -44,6 +56,11 @@ export function ConfirmSheet({
             <button type="button" className="btn ghost" onClick={onClose} disabled={busy}>
               取消
             </button>
+            {onRetry ? (
+              <button type="button" className="btn" onClick={onRetry} disabled={busy}>
+                重新生成
+              </button>
+            ) : null}
             <button type="button" className="btn primary" onClick={onConfirm} disabled={busy || !canConfirm}>
               {busy ? "正在执行…" : confirmLabel}
             </button>

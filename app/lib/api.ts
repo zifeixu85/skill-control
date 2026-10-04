@@ -1,6 +1,6 @@
 import { normalizeAgentFile, normalizeAgentFiles, normalizeAgentTools } from "./agent-extras";
 import { resolveApiBase } from "./api-base";
-import { normalizeCliPlan, normalizeCliTools } from "./cli-tools";
+import { normalizeCliApply, normalizeCliPlan, normalizeCliTools } from "./cli-tools";
 import { normalizeHealthReport } from "./health";
 import { normalizeHistory, normalizeRestorePlan, normalizeTrash, normalizeUninstallPlan } from "./history";
 import { normalizeLibrary, normalizeLibraryApply, normalizeLibraryPlan, type LibraryAction } from "./library";
@@ -73,14 +73,26 @@ export class ApiError extends Error {
   readonly status: number;
   /** The route itself does not exist on this service version. */
   readonly unsupported: boolean;
+  /** No answer within the time limit; for a write the outcome is unknown. */
+  readonly timedOut: boolean;
 
-  constructor(message: string, status: number, unsupported = false) {
+  constructor(message: string, status: number, unsupported = false, timedOut = false) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.unsupported = unsupported;
+    this.timedOut = timedOut;
   }
 }
+
+/** Time limits per call type, so no state can hang forever. */
+export const TIMEOUTS = {
+  read: 120_000,
+  plan: 30_000,
+  updatePlan: 90_000,
+  apply: 120_000,
+  updateApply: 360_000,
+} as const;
 
 const ROUTE_MISSING = "接口不存在。";
 
@@ -104,38 +116,69 @@ function url(pathname: string, params?: Record<string, string | number | boolean
   return `${apiBase()}${pathname}${query ? `?${query}` : ""}`;
 }
 
-async function send(target: string, init?: RequestInit): Promise<Response> {
-  let response: Response;
+function networkError(timedOut: boolean, timeoutMs: number): ApiError {
+  return timedOut
+    ? new ApiError(`本地服务 ${Math.round(timeoutMs / 1000)} 秒没有响应。`, 0, false, true)
+    : new ApiError("连不上本地服务。请确认 Skill Control 正在运行。", 0);
+}
+
+/** One request with a time limit that also covers reading the body. */
+async function send<T>(
+  target: string,
+  init: RequestInit,
+  timeoutMs: number,
+  read: (response: Response) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    response = await fetch(target, init);
-  } catch {
-    throw new ApiError("连不上本地服务。请确认 Skill Control 正在运行。", 0);
+    let response: Response;
+    try {
+      response = await fetch(target, { ...init, signal: controller.signal });
+    } catch {
+      throw networkError(controller.signal.aborted, timeoutMs);
+    }
+    if (!response.ok) throw await errorFrom(response);
+    try {
+      return await read(response);
+    } catch (error) {
+      if (controller.signal.aborted) throw networkError(true, timeoutMs);
+      throw error;
+    }
+  } finally {
+    clearTimeout(timer);
   }
-  if (!response.ok) throw await errorFrom(response);
-  return response;
 }
 
-async function getJson<T>(pathname: string, params?: Parameters<typeof url>[1]): Promise<T> {
-  const response = await send(url(pathname, params));
-  return (await response.json()) as T;
+const json = <T>(response: Response) => response.json() as Promise<T>;
+
+function getJson<T>(pathname: string, params?: Parameters<typeof url>[1]): Promise<T> {
+  return send(url(pathname, params), {}, TIMEOUTS.read, json<T>);
 }
 
-async function sendJson<T>(
+function sendJson<T>(
   method: "POST" | "PUT",
   pathname: string,
   body: unknown,
-  confirm = false,
+  options: { confirm?: boolean; timeout?: number } = {},
 ): Promise<T> {
-  const response = await send(url(pathname), {
-    method,
-    headers: {
-      "content-type": "application/json",
-      ...(confirm ? { "x-skill-manager-confirm": "yes" } : {}),
+  return send(
+    url(pathname),
+    {
+      method,
+      headers: {
+        "content-type": "application/json",
+        ...(options.confirm ? { "x-skill-manager-confirm": "yes" } : {}),
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-  });
-  return (await response.json()) as T;
+    options.timeout ?? TIMEOUTS.read,
+    json<T>,
+  );
 }
+
+const PLAN = { timeout: TIMEOUTS.plan };
+const WRITE = { confirm: true, timeout: TIMEOUTS.apply };
 
 const force = (value?: boolean) => (value ? { force: 1 } : undefined);
 
@@ -181,38 +224,36 @@ export const api = {
   importFile: (importId: string, path: string) => getJson<FileContent>("/api/import-file", { importId, path }),
 
   planSync: (input: { sourceInstanceId: string; targetAgentIds: string[]; mode: SyncMode }) =>
-    sendJson<SyncPlan>("POST", "/api/sync", { ...input, dryRun: true }),
+    sendJson<SyncPlan>("POST", "/api/sync", { ...input, dryRun: true }, PLAN),
   executeSync: (input: { sourceInstanceId: string; targetAgentIds: string[]; mode: SyncMode }) =>
-    sendJson<SyncPlan>("POST", "/api/sync", { ...input, dryRun: false, confirm: true }, true),
+    sendJson<SyncPlan>("POST", "/api/sync", { ...input, dryRun: false, confirm: true }, WRITE),
   planImport: (importId: string, targetAgentIds: string[]) =>
-    sendJson<SyncPlan>("POST", "/api/import-install", { importId, targetAgentIds, dryRun: true }),
+    sendJson<SyncPlan>("POST", "/api/import-install", { importId, targetAgentIds, dryRun: true }, PLAN),
   executeImport: (importId: string, targetAgentIds: string[]) =>
     sendJson<SyncPlan>(
       "POST",
       "/api/import-install",
       { importId, targetAgentIds, dryRun: false, confirm: true },
-      true,
+      WRITE,
     ),
-  async importSkill(file: File): Promise<ImportedSkill> {
-    const response = await send(url("/api/import-skill"), {
-      method: "POST",
-      headers: {
-        "content-type": "application/octet-stream",
-        "x-skill-filename": encodeURIComponent(file.name),
+  importSkill: (file: File) =>
+    send(
+      url("/api/import-skill"),
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/octet-stream",
+          "x-skill-filename": encodeURIComponent(file.name),
+        },
+        body: file,
       },
-      body: file,
-    });
-    return (await response.json()) as ImportedSkill;
-  },
-  async exportSkill(instanceId: string, format: "skill" | "zip"): Promise<Blob> {
-    const response = await send(url("/api/export-skill", { instanceId, format }));
-    return response.blob();
-  },
+      TIMEOUTS.read,
+      json<ImportedSkill>,
+    ),
+  exportSkill: (instanceId: string, format: "skill" | "zip") =>
+    send(url("/api/export-skill", { instanceId, format }), {}, TIMEOUTS.read, (response) => response.blob()),
   reveal: (instanceId: string) => sendJson<{ ok: boolean }>("POST", "/api/reveal", { instanceId }),
-  async fetchBlob(target: string): Promise<Blob> {
-    const response = await send(target);
-    return response.blob();
-  },
+  fetchBlob: (target: string) => send(target, {}, TIMEOUTS.read, (response) => response.blob()),
 
   // Endpoints added by newer services; callers feature-detect `ApiError.unsupported`.
   agentFiles: async (agent: string, options: { profile?: string | null; agentId?: string | null } = {}) =>
@@ -239,9 +280,13 @@ export const api = {
   checkStatus: async () => normalizeCheckJob(await getJson<unknown>("/api/updates/check-status")),
   updateChanges: async (unitKey: string) => normalizeChanges(await getJson<unknown>("/api/updates/changes", { unitKey })),
   planUpdate: async (unitKey: string, choice?: ConflictChoice) =>
-    normalizePlan(await sendJson<unknown>("POST", "/api/updates/plan", choice ? { unitKey, choice } : { unitKey })),
+    normalizePlan(
+      await sendJson<unknown>("POST", "/api/updates/plan", choice ? { unitKey, choice } : { unitKey }, { timeout: TIMEOUTS.updatePlan }),
+    ),
   applyUpdate: async (planId: string) =>
-    normalizeApply(await sendJson<unknown>("POST", "/api/updates/apply", { planId, confirm: true }, true)),
+    normalizeApply(
+      await sendJson<unknown>("POST", "/api/updates/apply", { planId, confirm: true }, { confirm: true, timeout: TIMEOUTS.updateApply }),
+    ),
   library: async () => normalizeLibrary(await getJson<unknown>("/api/library")),
   libraryPlan: async (input: {
     action: LibraryAction;
@@ -249,28 +294,30 @@ export const api = {
     agents?: string[];
     choice?: string;
     choices?: Record<string, string>;
-  }) => normalizeLibraryPlan(await sendJson<unknown>("POST", "/api/library/plan", input)),
+  }) => normalizeLibraryPlan(await sendJson<unknown>("POST", "/api/library/plan", input, PLAN)),
   libraryApply: async (planId: string) =>
-    normalizeLibraryApply(await sendJson<unknown>("POST", "/api/library/apply", { planId, confirm: true }, true)),
-  libraryRestore: async (trashId: string) =>
-    sendJson<{ trashId: string; name: string; path: string }>("POST", "/api/library/restore", { trashId, confirm: true }, true),
+    normalizeLibraryApply(await sendJson<unknown>("POST", "/api/library/apply", { planId, confirm: true }, WRITE)),
   history: async (limit = 100) => normalizeHistory(await getJson<unknown>("/api/history", { limit })),
-  planRestore: async (historyId: string) =>
-    normalizeRestorePlan(await sendJson<unknown>("POST", "/api/history/plan-restore", { historyId })),
+  planRestore: async (historyId: string, select?: string[] | null) =>
+    normalizeRestorePlan(
+      await sendJson<unknown>("POST", "/api/history/plan-restore", select ? { historyId, select } : { historyId }, PLAN),
+    ),
   applyRestore: (planId: string) =>
-    sendJson<Record<string, unknown>>("POST", "/api/history/apply-restore", { planId, confirm: true }, true),
+    sendJson<Record<string, unknown>>("POST", "/api/history/apply-restore", { planId, confirm: true }, WRITE),
   planUninstall: async (skillId: string, agentId: string) =>
-    normalizeUninstallPlan(await sendJson<unknown>("POST", "/api/skills/plan-uninstall", { skillId, agentId })),
+    normalizeUninstallPlan(await sendJson<unknown>("POST", "/api/skills/plan-uninstall", { skillId, agentId }, PLAN)),
   applyUninstall: (planId: string) =>
-    sendJson<Record<string, unknown>>("POST", "/api/skills/apply-uninstall", { planId, confirm: true }, true),
+    sendJson<Record<string, unknown>>("POST", "/api/skills/apply-uninstall", { planId, confirm: true }, WRITE),
   trash: async () => normalizeTrash(await getJson<unknown>("/api/trash")),
   restoreTrash: (trashId: string) =>
-    sendJson<{ trashId: string; name: string; path: string }>("POST", "/api/trash/restore", { trashId, confirm: true }, true),
+    sendJson<{ trashId: string; name: string; path: string }>("POST", "/api/trash/restore", { trashId, confirm: true }, WRITE),
   cliTools: async () => normalizeCliTools(await getJson<unknown>("/api/cli-tools")),
   cliPlan: async (toolId: string, fixId: string, agents?: string[]) =>
-    normalizeCliPlan(await sendJson<unknown>("POST", "/api/cli-tools/plan", agents?.length ? { toolId, fixId, agents } : { toolId, fixId })),
+    normalizeCliPlan(
+      await sendJson<unknown>("POST", "/api/cli-tools/plan", agents?.length ? { toolId, fixId, agents } : { toolId, fixId }, PLAN),
+    ),
   cliApply: async (planId: string) =>
-    sendJson<{ changed: { path: string; backup: string | null }[] }>("POST", "/api/cli-tools/apply", { planId, confirm: true }, true),
+    normalizeCliApply(await sendJson<unknown>("POST", "/api/cli-tools/apply", { planId, confirm: true }, WRITE)),
   healthReport: async (refresh?: boolean) =>
     normalizeHealthReport(await getJson<unknown>("/api/health-report", force(refresh))),
 };

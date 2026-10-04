@@ -89,7 +89,9 @@ export type UpdatePlan =
       changes: { added: string[]; modified: string[]; removed: string[] } | null;
       notes: string[];
     }
-  | { kind: "guide"; unitKey: string; instructions: string; command: string | null };
+  | { kind: "guide"; unitKey: string; instructions: string; command: string | null }
+  /** A self/delegate answer without a plan id: never confirmable, never shown as a guide. */
+  | { kind: "incomplete"; unitKey: string; message: string };
 
 export interface ApplyResult {
   kind: "self" | "delegate" | "none";
@@ -266,6 +268,9 @@ export function normalizePlan(raw: unknown): UpdatePlan {
   }
   const planId = asOptionalString(record.planId);
   const kind = asString(record.kind, "none");
+  if (!planId && (kind === "self" || kind === "delegate")) {
+    return { kind: "incomplete", unitKey, message: "服务返回的计划不完整（缺少计划编号），不能执行。请重新生成计划。" };
+  }
   if (!planId) {
     return { kind: "guide", unitKey, instructions: asString(record.instructions), command: asOptionalString(record.command) };
   }

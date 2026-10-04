@@ -5,6 +5,7 @@ import { loadTs } from "./helpers/load-ts.mjs";
 const library = await loadTs("app/lib/library.ts");
 const cli = await loadTs("app/lib/cli-tools.ts");
 const history = await loadTs("app/lib/history.ts");
+const review = await loadTs("app/lib/library-review.ts");
 
 const view = {
   root: "~/.agents/skills",
@@ -79,7 +80,7 @@ test("CLI tools: checks explain each column in plain words", () => {
   assert.equal(tool.fixes[1].kind, "guide");
   const plan = cli.normalizeCliPlan({ planId: "p", kind: "self", steps: [{ type: "write", path: "~/.codex/rules/default.rules", diff: "+ x" }], notes: ["n"], skipped: [{ agentId: "hermes", reason: "无需放行" }] });
   assert.equal(plan.kind, "self");
-  assert.deepEqual(plan.skipped[0], { agentId: "hermes", reason: "无需放行" });
+  assert.deepEqual(plan.skipped[0], { agentId: "hermes", agentName: null, reason: "无需放行" });
   assert.equal(cli.normalizeCliPlan({ planId: null, kind: "guide", instructions: "x" }).kind, "guide");
 });
 
@@ -99,4 +100,69 @@ test("history, restore, uninstall and trash payloads", () => {
   assert.deepEqual(trash.map((item) => item.name), ["new", "old"]);
   assert.equal(history.historyIdOf({ historyEntry: { id: "h9" } }), "h9");
   assert.equal(history.historyIdOf(null), null);
+});
+
+test("undo: units, selection, plan ids and which results offer 撤销", () => {
+  const [entry] = history.normalizeHistory({ entries: [{ id: "h2", action: "library", units: [{ id: "adopt:a", title: "收编 a" }, { title: "no id" }], restorable: true }] });
+  assert.deepEqual(entry.units, [{ id: "adopt:a", title: "收编 a" }]);
+  const plan = history.normalizeRestorePlan({
+    planId: null,
+    historyId: "h2",
+    units: [
+      { id: "u1", title: "a", selected: true, steps: [{ type: "move", path: "~/.claude/skills/a", from: "~/b" }] },
+      { id: "u2", title: "b", selected: false, conflict: "之后又被修改过", steps: [] },
+      { id: "u3", title: "c", selected: true, unrestorable: "备份已不存在", steps: [] },
+    ],
+    message: "没有可以直接撤销的项目",
+  });
+  assert.equal(plan.planId, null, "a missing plan id stays missing, never an empty string");
+  assert.equal(plan.units[2].selected, false, "gone units are never selected");
+  assert.equal(plan.units[1].conflict, "之后又被修改过");
+  assert.deepEqual(history.toggleUnit(plan.units, "u2", true), ["u1", "u2"], "opting into a conflict");
+  assert.deepEqual(history.toggleUnit(plan.units, "u1", false), []);
+  assert.deepEqual(history.toggleUnit(plan.units, "u3", true), ["u1"], "gone units can't be opted into");
+  assert.equal(history.normalizeUninstallPlan({ kind: "real" }).planId, null);
+  assert.equal(history.historyIdOf({ historyEntry: { id: "h3", restorable: false } }), null);
+
+  const outcome = library.normalizeLibraryApply({ results: [{ id: "a", status: "applied" }], backups: "~/.agent-skill-manager/backups/20261004", historyEntry: { id: "h4" } });
+  assert.deepEqual(outcome.backups, ["~/.agent-skill-manager/backups/20261004"], "the service sends one folder as a string");
+  assert.equal(outcome.historyId, "h4");
+  assert.equal(cli.normalizeCliApply({ changed: [{ path: "~/.local/bin/lark-cli", backup: null }], historyEntry: { id: "h5" } }).historyId, "h5");
+});
+
+test("scoped tidy-up: one issue runs only its own items; single actions send choice for one conflict", () => {
+  const drift = { id: "library-drift", agentId: "claude", title: "Claude Code 有 90 个与库相同的独立副本", names: [] };
+  const scope = review.scopeForIssue(drift);
+  assert.deepEqual(scope.kinds, ["link", "dedupe"]);
+  assert.equal(review.scopeForIssue({ id: "library-owner-missing", title: "x", names: [] }), null, "falls back to the full review");
+  const items = library.normalizeLibraryPlan({
+    items: [
+      { id: "dedupe:claude:a", kind: "link", agentId: "claude", choice: "link", choices: ["link", "skip"], steps: [{ type: "stash" }] },
+      { id: "dedupe:codex:a", kind: "dedupe", agentId: "codex", choice: "link", choices: ["link", "skip"], steps: [{ type: "stash" }] },
+      { id: "adopt:b", kind: "adopt", choice: "skip", choices: ["adopt", "skip"], steps: [] },
+    ],
+  }).items;
+  assert.deepEqual(review.outOfScopeActive(items, scope).map((item) => item.id), ["dedupe:codex:a"], "codex must be skipped first");
+  assert.deepEqual(review.activeItems(items).map((item) => item.id), ["dedupe:claude:a", "dedupe:codex:a"]);
+
+  const conflict = library.normalizeLibraryPlan({ items: [{ id: "conflict:claude:x", kind: "conflict", choices: ["keep-library", "use-this", "save-as", "skip"], choice: "skip", steps: [] }] }).items;
+  const single = review.libraryPlanBody({ action: "adopt", skill: "x" }, { "conflict:claude:x": "save-as" }, conflict);
+  assert.deepEqual(single, { action: "adopt", skill: "x", choices: { "conflict:claude:x": "save-as" }, choice: "save-as" });
+  const batch = review.libraryPlanBody({ action: "batch" }, { "conflict:claude:x": "save-as" }, conflict);
+  assert.equal(batch.choice, undefined, "batch sends the map only");
+});
+
+test("CLI fix reasons show names, guide commands are only real command lines", () => {
+  const name = (id) => ({ codex: "Codex", claude: "Claude Code", openclaw: "OpenClaw" })[id] || id;
+  const old = { reason: "缺少：codex、claude", agentIds: [] };
+  assert.equal(cli.fixReason(old, ["codex", "claude"], name), "缺少：Codex、Claude Code", "old services put ids in the text");
+  const paths = { reason: "指向原生程序 ~/.codex/bin/lark-cli", agentIds: [] };
+  assert.equal(cli.fixReason(paths, ["codex"], name), "指向原生程序 ~/.codex/bin/lark-cli", "ids inside paths stay");
+  const fresh = { reason: "缺少放行规则：Codex、Claude Code", agentIds: ["codex", "claude"] };
+  assert.equal(cli.fixReason(fresh, ["codex"], name), "缺少放行规则：Codex、Claude Code", "names are not repeated");
+  assert.deepEqual(cli.normalizeCliTools({ tools: [{ id: "t", fixes: [{ id: "f", agentIds: ["codex"] }] }] })[0].fixes[0].agentIds, ["codex"]);
+
+  const text = "lark-cli config bind --source hermes\n编辑 ~/Library/LaunchAgents/x.plist 中的 PATH，然后重新加载。\nlark-cli config keychain-downgrade";
+  assert.deepEqual([...cli.commandLines(text)], ["lark-cli config bind --source hermes", "lark-cli config keychain-downgrade"]);
+  assert.equal(cli.commandLines("Skill Control 不会修改 launchd 配置。").size, 0);
 });

@@ -68,7 +68,7 @@ function ToolCard({ tool }: { tool: CliTool }) {
               <div className="tool-agent" key={row.agentId}>
                 <div>
                   <AgentAvatar id={row.agentId} size="sm" />
-                  {agentName(row.agentId)}
+                  {agentName(row.agentId) === row.agentId && row.agentName ? row.agentName : agentName(row.agentId)}
                 </div>
                 <div className="checks">
                   {agentChecks(row, tool.latest).map((check) => (
@@ -88,7 +88,7 @@ function ToolCard({ tool }: { tool: CliTool }) {
           <h4 className="mini-h">可以这样修</h4>
           <div className="fix-grid">
             {tool.fixes.map((fix) => (
-              <CliFixCard key={fix.id} toolId={tool.id} fix={fix} />
+              <CliFixCard key={fix.id} toolId={tool.id} fix={fix} agentIds={tool.agents.map((row) => row.agentId)} />
             ))}
           </div>
         </section>

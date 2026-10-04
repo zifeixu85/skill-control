@@ -69,7 +69,12 @@ test("plans: choice, executable plan and guide shapes", () => {
   assert.deepEqual(plan.changes.added, ["scripts/run.sh"]);
   const guide = updates.normalizePlan({ planId: null, unitKey: "c", kind: "guide", steps: [], instructions: "在 Claude Code 里运行", command: "/gstack-upgrade" });
   assert.equal(guide.kind, "guide");
-  assert.equal(guide.command, "/gstack-upgrade");
+  assert.equal(guide.command, "/gstack-upgrade");  // A self / delegate answer without a plan id is never shown as a guide or confirmable.
+  for (const kind of ["self", "delegate"]) {
+    const broken = updates.normalizePlan({ planId: null, unitKey: "d", kind, steps: [{ type: "replace" }] });
+    assert.equal(broken.kind, "incomplete", kind);
+    assert.match(broken.message, /服务返回的计划不完整/);
+  }
 });
 
 test("apply results and change lists", () => {

@@ -11,6 +11,7 @@ import {
   type Route,
 } from "../../lib/navigation";
 import type { LibraryAction } from "../../lib/library";
+import type { PlanScope } from "../../lib/library-review";
 import { persistentStore } from "../../lib/storage";
 
 const routeStore = persistentStore<string>("route", "home", isValidRoute);
@@ -49,6 +50,8 @@ export interface LibraryRequest {
   skill?: string;
   agents?: string[];
   title: string;
+  /** Batch only: run just the items for one 需要注意 entry. */
+  scope?: PlanScope;
 }
 
 const NavContext = createContext<Nav | null>(null);

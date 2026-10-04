@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { invalidateResources } from "../../../hooks/useResource";
+import { refreshAfterWrite } from "../../../hooks/refresh";
+import { useBlockEscape } from "../../../hooks/useEscape";
 import { useUndoToast } from "../../../hooks/useUndoToast";
 import { api, errorMessage } from "../../../lib/api";
+import { applyFailureMessage, classifyApplyError } from "../../../lib/plan-flow";
 import { formatMonthDay, joinNames } from "../../../lib/format";
 import { isReadOnlyInstance, pickSourceInstance, type SkillView } from "../../../lib/skill-model";
 import type { SyncAction, SyncMode, SyncPlan } from "../../../lib/types";
@@ -63,7 +65,10 @@ export function InstallPlan({ view, agentId, onDone }: { view: SkillView; agentI
   const initial = pickSourceInstance(view, agentId, primary);
   const [sourceId, setSourceId] = useState(initial?.id || "");
   const [state, setState] = useState<PlanState>({ status: "loading" });
+  const [attempt, setAttempt] = useState(0);
   const [running, setRunning] = useState(false);
+  // Esc must not dismiss the panel while files are being written.
+  useBlockEscape(running);
   const agent = agentsById.get(agentId);
   const mode: SyncMode = agent?.copyOnly ? "copy" : config.data?.syncMode || "copy";
 
@@ -77,7 +82,12 @@ export function InstallPlan({ view, agentId, onDone }: { view: SkillView; agentI
     return () => {
       cancelled = true;
     };
-  }, [sourceId, agentId, mode]);
+  }, [sourceId, agentId, mode, attempt]);
+
+  const retry = () => {
+    setState({ status: "loading" });
+    setAttempt((value) => value + 1);
+  };
 
   const install = async () => {
     if (state.status !== "ready" || state.sourceId !== sourceId || state.mode !== mode) return;
@@ -89,12 +99,14 @@ export function InstallPlan({ view, agentId, onDone }: { view: SkillView; agentI
       if (done.length) undoToast(`已装到 ${agentName(agentId)}：${view.title}`, result);
       else toast.show(`${agentName(agentId)} 里已经是这一份，没有改动`);
       onDone();
-      await invalidateResources("scan", "files:skill:", "file:skill:", "detail:skill", "usage:skill:", "health-report", "updates", "history", "library");
     } catch (error) {
-      setState({ status: "error", message: errorMessage(error, "安装失败，没有写入任何文件。") });
+      const message = applyFailureMessage(classifyApplyError(error), error, "安装失败，没有写入任何文件。");
+      setState({ status: "error", message });
+      toast.show(message, { tone: "error" });
     } finally {
       setRunning(false);
     }
+    refreshAfterWrite();
   };
 
   const hashes = new Set(candidates.map((instance) => instance.hash));
@@ -169,6 +181,11 @@ export function InstallPlan({ view, agentId, onDone }: { view: SkillView; agentI
         <button type="button" className="btn sm ghost" onClick={onDone} disabled={running}>
           取消
         </button>
+        {state.status === "error" ? (
+          <button type="button" className="btn sm" onClick={retry} disabled={running}>
+            重新生成
+          </button>
+        ) : null}
         <button type="button" className="btn sm primary" disabled={!plan || !writes || running} onClick={install}>
           {running ? "正在安装…" : "安装"}
         </button>

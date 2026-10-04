@@ -1,94 +1,111 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { invalidateResources } from "../../hooks/useResource";
+import { useState } from "react";
+import { refreshAfterWrite } from "../../hooks/refresh";
+import { usePlanApply } from "../../hooks/usePlanApply";
 import { useUndoToast } from "../../hooks/useUndoToast";
-import { api, ApiError, errorMessage } from "../../lib/api";
-import { RESTORE_STEP_LABELS, type RestorePlan } from "../../lib/history";
+import { api } from "../../lib/api";
+import { RESTORE_STEP_LABELS, toggleUnit, type RestorePlan, type RestoreStep } from "../../lib/history";
 import { useData } from "../providers/DataProvider";
 import { ConfirmSheet } from "./ConfirmSheet";
+import { RestoreUnits } from "./RestoreUnits";
 
-/** Undo of one history entry: plan-restore → show what goes back where → confirm → apply. */
-export function RestoreDialog({ historyId, onClose }: { historyId: string; onClose: () => void }) {
-  const { agentName } = useData();
-  const undoToast = useUndoToast();
-  const [plan, setPlan] = useState<RestorePlan | null>(null);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [attempt, setAttempt] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    api.planRestore(historyId).then(
-      (next) => !cancelled && setPlan(next),
-      (planError: unknown) => !cancelled && setError(errorMessage(planError, "这条记录不能撤销。")),
+function StepText({ step }: { step: RestoreStep }) {
+  if (step.type === "restore-backup" && step.from) {
+    return (
+      <>
+        用备份 <code>{step.from}</code> 替换现在的内容
+      </>
     );
-    return () => {
-      cancelled = true;
-    };
-  }, [historyId, attempt]);
+  }
+  if (step.type === "trash-created") return <>这次创建的目录会移到回收站（可以再恢复）</>;
+  if (step.type === "restore-trash") return <>从回收站放回原位</>;
+  return step.from ? (
+    <>
+      从 <code>{step.from}</code> 放回
+    </>
+  ) : (
+    <>恢复到这次改动之前</>
+  );
+}
 
-  const apply = async () => {
-    if (!plan) return;
-    setBusy(true);
-    setError("");
-    try {
-      const result = await api.applyRestore(plan.planId);
+function InstallSteps({ steps }: { steps: RestoreStep[] }) {
+  const { agentName } = useData();
+  return (
+    <>
+      {steps.map((step, index) => (
+        <div className="plan-action" key={`${step.type}-${step.target}-${index}`}>
+          <div className="plan-line">
+            <span className={`tag ${step.type === "trash-created" ? "warn" : ""}`}>{RESTORE_STEP_LABELS[step.type] || step.type}</span>
+            <code>{step.target}</code>
+          </div>
+          <p>
+            {step.agentId ? `${agentName(step.agentId)} · ` : ""}
+            <StepText step={step} />
+          </p>
+        </div>
+      ))}
+    </>
+  );
+}
+
+/**
+ * Undo of one history entry: plan-restore → show what goes back where → confirm → apply.
+ * Library applies and CLI fixes undo per unit; the user picks units and the plan follows.
+ */
+export function RestoreDialog({ historyId, onClose }: { historyId: string; onClose: () => void }) {
+  const undoToast = useUndoToast();
+  const [select, setSelect] = useState<string[] | null>(null);
+  const flow = usePlanApply<RestorePlan, unknown>({
+    requestKey: JSON.stringify([historyId, select]),
+    makePlan: () => api.planRestore(historyId, select),
+    planIdOf: (plan) => (plan.steps.length || plan.units.some((unit) => unit.selected) ? plan.planId : null),
+    expiresAtOf: (plan) => plan.expiresAt,
+    apply: (planId) => api.applyRestore(planId),
+    onApplied: (result) => {
       undoToast("已撤销", result);
       onClose();
-      await invalidateResources("scan", "files:", "file:", "detail:", "library", "trash", "history", "health-report", "updates");
-    } catch (applyError) {
-      if (applyError instanceof ApiError && applyError.status === 409) {
-        setPlan(null);
-        setError("目标在生成计划之后又被改过。已重新生成计划，请再看一遍。");
-        setAttempt((value) => value + 1);
-      } else {
-        setError(errorMessage(applyError, "撤销失败，没有改动任何文件。"));
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
+    },
+    refresh: refreshAfterWrite,
+    planFailure: "这条记录不能撤销。",
+    applyFailure: "撤销失败，没有改动任何文件。",
+  });
+  const plan = flow.plan || (flow.planning ? flow.lastPlan : null);
+  const unitMode = Boolean(plan?.units.length);
+  const notice = flow.expired ? "计划已过期，请重新生成。" : flow.notice || (flow.plan && !flow.planId ? flow.plan.message || "" : "");
 
   return (
     <ConfirmSheet
       title="撤销这次改动"
-      error={error}
-      busy={busy}
-      confirmLabel="确认撤销"
-      canConfirm={Boolean(plan?.steps.length)}
-      onConfirm={() => void apply()}
+      error={flow.planError || flow.error}
+      notice={notice}
+      busy={flow.applying}
+      confirmLabel={unitMode ? `撤销选中的 ${plan?.units.filter((unit) => unit.selected).length || 0} 项` : "确认撤销"}
+      canConfirm={flow.canApply}
+      onConfirm={() => void flow.confirm()}
       onClose={onClose}
+      onRetry={flow.planError || flow.expired ? flow.retry : undefined}
       footnote="撤销前会先备份当前内容，撤销本身也可以再撤销"
     >
-      {!plan && !error ? <p className="muted">正在生成撤销计划…</p> : null}
+      {flow.planning && !plan ? <p className="muted">正在生成撤销计划…</p> : null}
       {plan ? (
-        <div className="plan-list">
-          {plan.steps.map((step, index) => (
-            <div className="plan-action" key={`${step.type}-${index}`}>
-              <div className="plan-line">
-                <span className={`tag ${step.type === "trash-created" ? "warn" : ""}`}>{RESTORE_STEP_LABELS[step.type] || step.type}</span>
-                <code>{step.target}</code>
-              </div>
-              <p>
-                {step.agentId ? `${agentName(step.agentId)} · ` : ""}
-                {step.type === "restore-backup" && step.from ? (
-                  <>
-                    用备份 <code>{step.from}</code> 替换现在的内容
-                  </>
-                ) : step.type === "trash-created" ? (
-                  "这次创建的目录会移到回收站（可以再恢复）"
-                ) : (
-                  "从回收站放回原位"
-                )}
+        <div className={`plan-list ${flow.planning ? "stale" : ""}`} aria-busy={flow.planning}>
+          {unitMode ? (
+            <RestoreUnits
+              units={plan.units}
+              disabled={flow.planning || flow.applying}
+              onToggle={(id, on) => setSelect(toggleUnit(plan.units, id, on))}
+            />
+          ) : (
+            <InstallSteps steps={plan.steps} />
+          )}
+          {plan.warnings
+            .filter((warning) => !unitMode || !plan.units.some((unit) => warning.startsWith(`${unit.title}：`)))
+            .map((warning) => (
+              <p key={warning} className="plan-warning">
+                {warning}
               </p>
-            </div>
-          ))}
-          {plan.warnings.map((warning) => (
-            <p key={warning} className="plan-warning">
-              {warning}
-            </p>
-          ))}
+            ))}
         </div>
       ) : null}
     </ConfirmSheet>

@@ -20,7 +20,14 @@ export function DrawerHost() {
       {drawer?.kind === "mcp" ? <McpDrawer key={drawer.id} name={drawer.id} onClose={closeDrawer} /> : null}
       {drawer?.kind === "update" ? <UpdateDrawer key={drawer.id} unitKey={drawer.id} onClose={closeDrawer} /> : null}
       {importOpen ? <ImportDialog onClose={() => setImportOpen(false)} /> : null}
-      {libraryRequest ? <PlanReview request={libraryRequest} onClose={() => setLibraryRequest(null)} /> : null}
+      {libraryRequest ? (
+        <PlanReview
+          key={JSON.stringify(libraryRequest)}
+          request={libraryRequest}
+          onClose={() => setLibraryRequest(null)}
+          onWiden={() => setLibraryRequest({ action: "batch", title: "一键整理技能库" })}
+        />
+      ) : null}
       {restoreHistoryId ? (
         <RestoreDialog key={restoreHistoryId} historyId={restoreHistoryId} onClose={() => setRestoreHistoryId(null)} />
       ) : null}

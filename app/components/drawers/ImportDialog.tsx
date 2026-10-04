@@ -1,16 +1,18 @@
 "use client";
 
 import { useMemo, useState, type DragEvent } from "react";
-import { useEscape } from "../../hooks/useEscape";
+import { refreshAfterWrite } from "../../hooks/refresh";
+import { noop, useEscape } from "../../hooks/useEscape";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
-import { invalidateResources } from "../../hooks/useResource";
 import { api, assetUrl, errorMessage } from "../../lib/api";
+import { applyFailureMessage, classifyApplyError } from "../../lib/plan-flow";
 import { formatBytes } from "../../lib/format";
 import type { ImportedSkill, SyncPlan } from "../../lib/types";
 import { FileBrowser, type FileSource } from "../files/FileBrowser";
 import { ActionDetail } from "../pages/skills/InstallPlan";
 import { useData } from "../providers/DataProvider";
 import { useUndoToast } from "../../hooks/useUndoToast";
+import { useToast } from "../providers/ToastProvider";
 import { AgentAvatar } from "../ui/Avatar";
 
 type Step =
@@ -22,6 +24,7 @@ type Step =
 export function ImportDialog({ onClose }: { onClose: () => void }) {
   const { agents, primary, agentName } = useData();
   const undoToast = useUndoToast();
+  const toast = useToast();
   const ref = useFocusTrap<HTMLDivElement>();
   const [step, setStep] = useState<Step>({ name: "pick", busy: false });
   const installable = agents.filter((agent) => agent.available && !agent.refuseInstall);
@@ -33,8 +36,8 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
   const [dragging, setDragging] = useState(false);
   const reading = step.name === "pick" && step.busy;
   const busy = working || reading;
-  // While something is being read or written, Esc and 取消 are disabled.
-  useEscape(!busy, onClose);
+  // While something is being read or written, Esc and 取消 do nothing (Esc stays caught here).
+  useEscape(true, busy ? noop : onClose);
   const imported = step.name === "pick" ? null : step.skill;
   const source = useMemo<FileSource | null>(
     () =>
@@ -90,12 +93,14 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
       const result = await api.executeImport(skill.importId, targets);
       undoToast(`已安装 ${skill.displayName || skill.name}`, result);
       onClose();
-      await invalidateResources("scan", "health-report", "updates", "history", "library");
     } catch (installError) {
-      setError(errorMessage(installError, "安装失败，没有写入任何文件。"));
+      const message = applyFailureMessage(classifyApplyError(installError), installError, "安装失败，没有写入任何文件。");
+      setError(message);
+      toast.show(message, { tone: "error" });
     } finally {
       setWorking(false);
     }
+    refreshAfterWrite();
   };
 
   const onDrop = (event: DragEvent<HTMLLabelElement>) => {

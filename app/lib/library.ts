@@ -1,3 +1,4 @@
+import { historyIdOf } from "./history";
 import { asArray, asOptionalString, asRecord, asString, asStringList, type UnknownRecord } from "./parse";
 
 /** Shapes from docs/ARCHITECTURE.md · 统一技能库与 CLI 工具卡片, parsed tolerantly. */
@@ -98,6 +99,8 @@ export interface LibraryApplyResult {
   results: { id: string; title: string; status: string; error: string | null; trashId: string | null }[];
   backups: string[];
   visibility: Record<string, Record<string, Fanout>>;
+  /** Set when the service recorded an entry it can undo. */
+  historyId: string | null;
 }
 
 export const TIER_LABELS: Record<Tier, string> = {
@@ -309,8 +312,10 @@ export function normalizeLibraryApply(raw: unknown): LibraryApplyResult {
         trashId: asOptionalString(result.trashId),
       };
     }),
-    backups: asStringList(record.backups),
+    // The service sends one backup folder as a string; older drafts sent a list.
+    backups: typeof record.backups === "string" ? asStringList([record.backups]) : asStringList(record.backups),
     visibility: Object.fromEntries(Object.entries(asRecord(record.visibility)).map(([skill, value]) => [skill, fanoutMap(value)])),
+    historyId: historyIdOf(record),
   };
 }
 

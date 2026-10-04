@@ -4,9 +4,12 @@ import { useState } from "react";
 import { isUnsupported, useResource } from "../../../hooks/useResource";
 import { useScrollMemory } from "../../../hooks/useScrollMemory";
 import { api, errorMessage } from "../../../lib/api";
+import type { LibraryIssue } from "../../../lib/library";
+import { scopeForIssue } from "../../../lib/library-review";
 import { CheckIcon, WarnIcon } from "../../icons";
 import { EmptyState, Loading, SectionHeading, TopBar } from "../../ui/basics";
-import { AgentStrip, EntriesTable, TrashList } from "./LibraryParts";
+import { AgentStrip, EntriesTable } from "./LibraryParts";
+import { TrashList } from "./TrashList";
 import { useNav } from "../../providers/NavProvider";
 import type { PlanRequest } from "./PlanReview";
 
@@ -19,6 +22,11 @@ export function LibraryPage() {
   const scrollRef = useScrollMemory<HTMLDivElement>("library");
   const { setLibraryRequest } = useNav();
   const review = () => setLibraryRequest(BATCH);
+  // Each 需要注意 entry opens the tidy-up narrowed to just its items, when that is possible.
+  const reviewIssue = (issue: LibraryIssue) => {
+    const scope = scopeForIssue(issue);
+    setLibraryRequest(scope ? { action: "batch", title: `整理：${issue.title}`, scope } : BATCH);
+  };
   const [allAgents, setAllAgents] = useState(false);
   const data = library.data;
   const shownAgents = data ? data.agents.filter((agent) => allAgents || !agent.collapsed) : [];
@@ -79,7 +87,7 @@ export function LibraryPage() {
                         {issue.names.length ? `（${issue.names.slice(0, 6).join("、")}${issue.names.length > 6 ? " 等" : ""}）` : ""}
                       </span>
                     </div>
-                    <button type="button" className="btn sm" onClick={review}>
+                    <button type="button" className="btn sm" onClick={() => reviewIssue(issue)}>
                       整理
                     </button>
                   </div>

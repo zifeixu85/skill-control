@@ -1,3 +1,4 @@
+import { historyIdOf } from "./history";
 import { asArray, asOptionalString, asRecord, asString, asStringList } from "./parse";
 
 /** /api/cli-tools shapes (docs/ARCHITECTURE.md · 统一技能库与 CLI 工具卡片). */
@@ -12,6 +13,8 @@ export interface CliBinary {
 
 export interface CliAgentRow {
   agentId: string;
+  /** Display name from the service, used when the scan doesn't know this Agent. */
+  agentName: string | null;
   pathSource: string;
   resolves: { path: string; version: string | null } | null;
   workspace: string | null;
@@ -31,6 +34,8 @@ export interface CliFix {
   applicable: boolean;
   reason: string | null;
   instructions: string | null;
+  /** Agents the fix is about; newer services send these instead of ids inside `reason`. */
+  agentIds: string[];
 }
 
 export interface CliTool {
@@ -49,7 +54,8 @@ export type CliPlan =
       planId: string;
       steps: { type: string; path: string; backup: string | null; diff: string | null }[];
       notes: string[];
-      skipped: { agentId: string | null; reason: string }[];
+      skipped: { agentId: string | null; agentName: string | null; reason: string }[];
+      expiresAt: string | null;
     }
   | { kind: "guide" | "none"; planId: null; instructions: string | null; message: string | null };
 
@@ -92,6 +98,7 @@ export function normalizeCliTools(raw: unknown): CliTool[] {
         const skill = asRecord(agent.skill);
         return {
           agentId: asString(agent.agentId),
+          agentName: asOptionalString(agent.agentName),
           pathSource: asString(agent.pathSource),
           resolves: Object.keys(resolves).length ? { path: asString(resolves.path), version: asOptionalString(resolves.version) } : null,
           workspace: asOptionalString(agent.workspace),
@@ -115,6 +122,7 @@ export function normalizeCliTools(raw: unknown): CliTool[] {
           applicable: fix.applicable === true,
           reason: asOptionalString(fix.reason),
           instructions: asOptionalString(fix.instructions),
+          agentIds: asStringList(fix.agentIds),
         };
       }),
     };
@@ -136,10 +144,15 @@ export function normalizeCliPlan(raw: unknown): CliPlan {
       skipped: asArray(record.skipped)
         .map((item) =>
           typeof item === "string"
-            ? { agentId: null, reason: item }
-            : { agentId: asOptionalString(asRecord(item).agentId), reason: asString(asRecord(item).reason) },
+            ? { agentId: null, agentName: null, reason: item }
+            : {
+                agentId: asOptionalString(asRecord(item).agentId),
+                agentName: asOptionalString(asRecord(item).agentName),
+                reason: asString(asRecord(item).reason),
+              },
         )
         .filter((item) => item.reason),
+      expiresAt: asOptionalString(record.expiresAt),
     };
   }
   return {
@@ -148,6 +161,47 @@ export function normalizeCliPlan(raw: unknown): CliPlan {
     instructions: asOptionalString(record.instructions),
     message: asOptionalString(record.message),
   };
+}
+
+export interface CliApplyResult {
+  changed: { path: string; backup: string | null }[];
+  historyId: string | null;
+}
+
+export function normalizeCliApply(raw: unknown): CliApplyResult {
+  const record = asRecord(raw);
+  return {
+    changed: asArray(record.changed)
+      .map((item) => ({ path: asString(asRecord(item).path), backup: asOptionalString(asRecord(item).backup) }))
+      .filter((item) => item.path),
+    historyId: historyIdOf(record),
+  };
+}
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * A fix's reason with Agent ids shown as names. Newer services already write names and
+ * send `agentIds` (shown as avatars); older ones put raw ids in the text, so any whole id
+ * from `agentIds` or the tool's own Agents is replaced by its name.
+ */
+export function fixReason(fix: CliFix, knownAgentIds: string[], agentName: (id: string) => string): string {
+  const reason = fix.reason || "";
+  const ids = [...new Set(fix.agentIds.length ? fix.agentIds : knownAgentIds)].filter(Boolean);
+  if (!ids.length) return reason;
+  // Whole ids only: not inside words, paths (~/.codex/…) or file names.
+  const alternatives = [...ids].sort((left, right) => right.length - left.length).map(escapeRegExp).join("|");
+  const pattern = new RegExp(`(?<![\\w./-])(${alternatives})(?![\\w./-])`, "g");
+  return reason.replace(pattern, (id) => agentName(id));
+}
+
+/** Lines of guide text that are shell commands (copyable), as opposed to prose. */
+export function commandLines(text: string): Set<string> {
+  const commands = new Set<string>();
+  for (const line of text.split("\n").map((item) => item.trim())) {
+    if (/^[a-z][\w.-]*(\s+[^\s，。；：、（）]+)+$/i.test(line) && !/[\u4e00-\u9fff]/.test(line)) commands.add(line);
+  }
+  return commands;
 }
 
 export type CheckState = "ok" | "warn" | "bad" | "na";
