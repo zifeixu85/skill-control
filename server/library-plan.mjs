@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readdir, readFile, rename, symlink } from "node:fs/promises";
+import { appendFile, mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
 import { classifyPath, relativeLinkTarget } from "./fs-links.mjs";
-import { compactHomePath, homeVariants, isWithin, object } from "./fs-safe.mjs";
-import { assertSafeWrite } from "./home-guard.mjs";
+import { compactHomePath, homeVariants, object } from "./fs-safe.mjs";
 import { tierOf } from "./library-agents.mjs";
 import { LibraryError, runOps } from "./library-ops.mjs";
 import { createHasher, readLibrary } from "./library.mjs";
 import { writeLibraryLock } from "./library-lock.mjs";
 import { disableOps } from "./library-switches.mjs";
+import { listTrash as listTrashEntries, restoreTrash } from "./trash.mjs";
 
 /**
  * Library plans: adopt, link, unlink, disable, remove and the batch clean-up. A plan is
@@ -275,7 +275,7 @@ export function createLibraryManager(context) {
         ops.push({
           op: "write",
           path: path.join(trashRoot, "manifest.json"),
-          content: `${JSON.stringify({ trashId, name: skill, originalPath: entry.path, kind: entry.kind, linkTarget: entry.kind === "real" ? null : entry.real, links, removedAt: new Date(now()).toISOString() }, null, 2)}\n`,
+          content: `${JSON.stringify({ trashId, name: skill, source: "library", originalPath: entry.path, kind: entry.kind === "real" ? "real" : "link", linkTarget: entry.kind === "real" ? null : entry.real, links, removedAt: new Date(now()).toISOString() }, null, 2)}\n`,
           backup: path.join(trashRoot, "manifest.previous.json"),
         });
         items.push({ id: `remove:${skill}`, title: `从库中移除 ${skill}（移到回收站，可恢复）`, kind: "remove", skill, choices: ["remove", "skip"], choice: "remove", ops, expect: [], trashId });
@@ -419,47 +419,18 @@ export function createLibraryManager(context) {
     };
   }
 
-  /** Puts a removed library entry back and recreates its links. */
+  /** Puts a removed library entry back and recreates its links (see server/trash.mjs). */
   async function restore({ trashId }) {
     await homesReady;
-    if (!/^[\w.@-]{1,200}$/u.test(String(trashId || ""))) throw new LibraryError(400, "回收站条目无效。");
-    const root = path.join(context.stateDirectory, "trash", trashId);
-    let manifest;
-    try {
-      manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
-    } catch {
-      throw new LibraryError(404, "回收站中没有这个条目。");
-    }
-    const libraryRoot = path.join(context.homeDirectory, ".agents", "skills");
-    if (!isWithin(libraryRoot, manifest.originalPath)) throw new LibraryError(400, "回收站条目的原位置不在库内。");
-    if ((await classifyPath(manifest.originalPath, null)).kind !== "absent") throw new LibraryError(409, "原位置已有同名条目，请先处理。");
-    await assertSafeWrite(manifest.originalPath, context.homeDirectory);
-    if (manifest.kind === "real") await rename(path.join(root, manifest.name), manifest.originalPath);
-    else if (manifest.linkTarget) await symlink(manifest.linkTarget, manifest.originalPath, "dir");
-    const restored = [];
-    for (const link of manifest.links || []) {
-      if ((await classifyPath(link.path, null)).kind !== "absent") continue;
-      await assertSafeWrite(link.path, context.homeDirectory);
-      await symlink(link.target, link.path, "dir");
-      restored.push(display(link.path));
-    }
-    await rename(root, `${root}.restored-${timestamp(now())}`);
-    return { trashId, name: manifest.name, path: display(manifest.originalPath), links: restored };
+    const state = await snapshot();
+    const allowedRoots = [state.libraryPath, ...state.agents.flatMap((agent) => agent.ownDirs)];
+    return restoreTrash({ trashId, stateDirectory: context.stateDirectory, homeDirectory: context.homeDirectory, allowedRoots, display, stamp: timestamp(now()) });
   }
 
-  async function listTrash() {
-    const root = path.join(context.stateDirectory, "trash");
-    const items = [];
-    for (const name of (await readdir(root).catch(() => [])).filter((entry) => !entry.includes(".restored-"))) {
-      try {
-        const manifest = JSON.parse(await readFile(path.join(root, name, "manifest.json"), "utf8"));
-        items.push({ trashId: manifest.trashId, name: manifest.name, removedAt: manifest.removedAt, links: (manifest.links || []).length });
-      } catch {
-        // Not a trash entry.
-      }
-    }
-    return items;
-  }
+  const listTrash = async () => {
+    await homesReady;
+    return listTrashEntries(context.stateDirectory, display);
+  };
 
   return { plan, apply, restore, listTrash };
 }

@@ -297,6 +297,8 @@ export function createUpdateExecutor(context) {
   }
 
   async function applyDelegate(stored) {
+    // Delegated updates download things: never in offline mode.
+    if (process.env.SKILL_MANAGER_UPDATES_OFFLINE === "1") throw new UpdateError(409, "离线模式下不执行会联网的更新命令。");
     const results = [];
     for (const step of stored.steps) await assertAllowedCommand(step.file);
     for (const step of stored.steps) {
@@ -331,6 +333,8 @@ export function createUpdateExecutor(context) {
       targets: result.changed?.map((item) => item.agentId) || [],
       backups: result.changed?.length || 0,
       exitCodes: result.commands?.map((command) => command.exitCode) || [],
+      // Self updates replace folders with backups: the same shape as sync history, so they can be undone.
+      actions: (result.changed || []).map((item) => ({ agentId: item.agentId, action: "replace", mode: "copy", destination: item.path, realDestination: item.path, backup: item.backup, afterHash: null })),
       createdAt: new Date(now()).toISOString(),
     };
     await mkdir(path.dirname(context.historyFile), { recursive: true });

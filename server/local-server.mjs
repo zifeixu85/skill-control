@@ -26,7 +26,8 @@ import { scanSmartOrder, scanSmartOrderConnectors } from "./smartorder.mjs";
 import { containsChinese } from "./skill-metadata.mjs";
 import { parseFrontmatter } from "./frontmatter.mjs";
 import { ACTIVITY_WINDOW_DAYS, scanAgentActivity } from "./agents-activity.mjs";
-import { defaultApplicationDirectories } from "./agent-icons.mjs";
+import { defaultApplicationDirectories, hasAgentIcon } from "./agent-icons.mjs";
+import { contentHash } from "./fs-links.mjs";
 import { createInsightRoutes, INSIGHT_ROUTES } from "./insight-routes.mjs";
 import { createManageRoutes, MANAGE_ROUTES } from "./manage-routes.mjs";
 import { applyPrecedence, detectionPaths, SKILL_ADAPTERS } from "./agent-adapters.mjs";
@@ -657,6 +658,8 @@ export function sanitizeConfig(input) {
     visibleAgentIds,
     primaryAgentIds,
     dismissedAgentIds,
+    // Set once the user changes which Agents are shown; until then every detected Agent is.
+    visibleCustomized: input?.visibleCustomized === true,
     // Update checks may read `gh auth token` only after the user turned this on.
     updates: { useGhAuth: input?.updates?.useGhAuth === true },
   };
@@ -710,15 +713,24 @@ export async function loadConfig() {
     if (configuredIds.has(agent.id) || dismissedAgentIds.has(agent.id)) continue;
     if (await agentDetected(agent)) newlyDetected.push(agent);
   }
+  const agents = [...config.agents, ...newlyDetected];
   return sanitizeConfig({
     ...config,
-    agents: [...config.agents, ...newlyDetected],
+    agents,
+    // Until the user picks, every detected Agent is shown; status still uses primary Agents only.
+    visibleAgentIds: config.visibleCustomized ? config.visibleAgentIds : agents.map((agent) => agent.id),
   });
 }
 
 async function saveConfig(input) {
   validateConfigInput(input);
-  const config = sanitizeConfig(input);
+  const previous = await loadConfig();
+  const sameSet = (left, right) => left.length === right.length && left.every((id) => right.includes(id));
+  const visibleChanged = Array.isArray(input.visibleAgentIds) && !sameSet([...new Set(input.visibleAgentIds.map(String))], previous.visibleAgentIds);
+  const config = sanitizeConfig({
+    ...input,
+    visibleCustomized: previous.visibleCustomized || input.visibleCustomized === true || visibleChanged,
+  });
   await mkdir(STATE_DIRECTORY, { recursive: true });
   const temporaryFile = `${CONFIG_FILE}.tmp-${process.pid}`;
   await writeFile(temporaryFile, `${JSON.stringify(config, null, 2)}\n`, "utf8");
@@ -1312,7 +1324,7 @@ function resolvePrimaryAgents(config, activity) {
 
 export async function scanAll(
   configInput,
-  { persistentCache = false, forceFingerprints = false, homeDirectory = HOME_DIRECTORY } = {},
+  { persistentCache = false, forceFingerprints = false, homeDirectory = HOME_DIRECTORY, ...options } = {},
 ) {
   const config = sanitizeConfig(configInput);
   const visibleAgentIds = new Set(config.visibleAgentIds);
@@ -1339,7 +1351,14 @@ export async function scanAll(
       agentIds: config.agents.map((agent) => agent.id),
     }),
   ]);
-  const agentResults = agentScans.map((agentScan) => agentScan.agent);
+  const iconDirectories = options.applicationDirectories || applicationDirectories();
+  const agentResults = await Promise.all(
+    agentScans.map(async (agentScan) => ({
+      ...agentScan.agent,
+      // The frontend asks /api/agent-icon only when a verified app bundle exists.
+      iconAvailable: await hasAgentIcon(agentScan.agent.id, { homeDirectory, applicationDirectories: iconDirectories }),
+    })),
+  );
   const allInstances = withInferredUsage(
     markSharedInstances(agentScans.flatMap((agentScan) => agentScan.instances)),
     activity,
@@ -2552,6 +2571,7 @@ async function executeImportInstall(input) {
       .filter((action) => action.result === "completed")
       .map((action) => action.agentName),
     backups: completed.filter((action) => action.backup).length,
+    actions: await restorableActions(completed),
     createdAt: new Date().toISOString(),
   };
   await mkdir(STATE_DIRECTORY, { recursive: true });
@@ -2562,6 +2582,27 @@ async function executeImportInstall(input) {
 
 function timestampLabel() {
   return new Date().toISOString().replace(/[:.]/g, "-");
+}
+
+/**
+ * What a history entry needs to undo a write: where it went, the backup of what was there,
+ * and a fingerprint of the result (so a later restore can tell whether it changed since).
+ */
+async function restorableActions(completed) {
+  const actions = [];
+  for (const action of completed) {
+    if (action.result !== "completed" || !["create", "replace"].includes(action.action)) continue;
+    actions.push({
+      agentId: action.agentId,
+      action: action.action,
+      mode: action.mode,
+      destination: action.destination,
+      realDestination: action.realDestination,
+      backup: action.backup || null,
+      afterHash: await contentHash(expandHome(action.realDestination)).catch(() => null),
+    });
+  }
+  return actions;
 }
 
 /** Internal plan with absolute write paths; use planSync() for the public view. */
@@ -2625,6 +2666,7 @@ async function executeSync(input) {
       .filter((action) => action.result === "completed")
       .map((action) => action.agentName),
     backups: completed.filter((action) => action.backup).length,
+    actions: await restorableActions(completed),
     createdAt: new Date().toISOString(),
   };
   await mkdir(STATE_DIRECTORY, { recursive: true });
@@ -2885,6 +2927,9 @@ function getManageRoutes() {
     backupDirectory: BACKUP_DIRECTORY,
     historyFile: HISTORY_FILE,
     getConfig: libraryConfig,
+    getScan: () => getScan(),
+    getAgents: updateTargetAgents,
+    materialize: materializeSkillDirectory,
     commandDirectories: commandDirectories(),
     readBody: readRequestBody,
     afterWrite: invalidateScanCache,

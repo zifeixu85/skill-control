@@ -106,6 +106,7 @@ Electron renderer 使用 `contextIsolation: true`、`nodeIntegration: false` 和
 | `server/library-switches.mjs` / `library-lock.mjs` | 各 Agent 原生停用开关的写入；`library-lock.json`（键排序） |
 | `server/library-service.mjs` / `manage-routes.mjs` | 技能库与 CLI 工具的接口 |
 | `server/cli-tools.mjs` / `cli-fixes.mjs` | CLI 工具卡片的检测（描述表驱动）与修复计划 |
+| `server/restore-service.mjs` / `trash.mjs` | 历史记录、恢复（可再撤销）、单个 Agent 卸载；技能库与卸载共用的回收站 |
 | `scripts/local-runner.mjs` | 源码模式下同时管理 Web 与本地服务 |
 | `desktop/main.mjs` | Electron 生命周期、本地服务、窗口和导航安全 |
 | `desktop/preload.cjs` | 受控的 renderer-to-main API |
@@ -853,8 +854,11 @@ delegate：`{ ..., kind: "delegate", ok, commands: [{ command, exitCode, stdout,
 `DO_NOT_TRACK=1`、`DISABLE_TELEMETRY=1`、`NO_COLOR=1`、`GIT_TERMINAL_PROMPT=0`。gstack 只给出 `/gstack-upgrade`
 指引；WorkBuddy、Codex 远程插件、SkillHub、ClawHub 只给出指引。
 
-测试与本地调试：`SKILL_MANAGER_UPDATES_OFFLINE=1` 让检查不联网；`SKILL_MANAGER_COMMAND_DIRS` 固定可查找与可执行
-命令的目录，设置后目录之外的二进制一律拒绝执行（测试服务器两者都设置，PATH 只保留系统目录）。
+测试与本地调试：`SKILL_MANAGER_UPDATES_OFFLINE=1` 时传输层在发出任何请求或启动任何子进程之前就返回离线
+（无论是否注入了 fetch / ls-remote 实现），检查结果保留上次事实并标 stale，委托执行的更新命令一律拒绝（409）；
+`SKILL_MANAGER_COMMAND_DIRS` 固定可查找与可执行命令的目录，设置后目录之外的二进制一律拒绝执行。`git ls-remote`
+默认用 `/usr/bin/git`，可注入实现；固定命令目录时只接受位于这些目录内的 `SKILL_MANAGER_GIT_PATH`，没有则视为没有
+git（ls-remote 返回 unavailable）。测试服务器设置离线、固定命令目录，PATH 只保留系统目录。
 
 体检报告读取缓存的更新结果（不联网），新增类别 `update-available`、`locally-modified`（只针对有来源的单元）、
 `lock-drift`，以及 `codex-tmp-leftovers`（`~/.codex/.tmp/git-*` 的数量与体积，统计有时间与条目上限）。
@@ -970,6 +974,52 @@ Gemini `tools.allowed`、已有配置的 Cursor CLI `permissions.allow` 与 Open
 
 体检报告新增 `library-drift`、`library-external-link`、`cli-version-skew`、`cli-workspace-unconfigured`、`cli-not-on-agent-path`。
 
+## 历史、恢复与卸载
+
+同步、导入与自更新的历史记录现在附带恢复所需的信息：每个写入的 `agentId`、`action`（create / replace）、真实目标、
+备份位置，以及写入后的内容指纹 `afterHash`。旧记录没有这些字段，列出时标为不可恢复。
+
+`GET /api/history?limit=50`（最多 500）→
+
+```ts
+{ entries: Array<{
+  id: string, at: string | null, action: "sync" | "import" | "update" | "restore" | "uninstall" | "library" | "cli-fix" | string,
+  skill: string | null, agents: string[], mode: "copy" | "symlink" | null,
+  backups: Array<{ agentId, path /* ~/… */, target, restorable: boolean, reason? }>,
+  trashId?: string,                 // uninstall：可从回收站恢复
+  restorable: boolean, reason?: string,
+}> }
+```
+
+`POST /api/history/plan-restore` `{ historyId }` →
+`{ planId, historyId, steps: [{ type: "restore-backup" | "trash-created" | "restore-trash", agentId?, target, from?, precondition /* 当前内容指纹前 16 位，或 "absent" */, trashId? }], warnings, expiresAt }`。
+replace 的反向是把备份放回原位（共享的真实目录只写一次），create 的反向是把创建出的目录移到回收站，卸载的反向是
+从回收站恢复。目标在那次写入之后又被修改过（`afterHash` 不同）会给出警告。
+
+`POST /api/history/apply-restore` `{ planId, confirm: true }` + `x-skill-manager-confirm: yes` →
+`{ planId, restored: [{ agentId, path, backup }], trashed: [{ agentId, path, trashId }], historyEntry }`。执行前逐个核对
+目标指纹与生成计划时一致，否则 409；放回前先把当前内容备份到 `backups/<时间>-restore/`，所以这次恢复本身也会作为
+`restore` 记录出现在历史里、可以再撤销。所有写入都经过写入保护。
+
+`POST /api/skills/plan-uninstall` `{ skillId, agentId }` →
+`{ planId, skillId, agentId, kind: "link" | "real", steps: [{ type: "unlink" | "move-to-trash", path, to?, description? }], alsoAffects: string[], warning?, expiresAt }`。
+链接只移除链接本身；实体目录移到 `~/.agent-skill-manager/trash/<id>/` 并写清单；只读或托管的实例（Codex 内置、
+插件缓存、Hermes 内置 / Hub、QClaw 同步等）拒绝并说明原因；目标必须在某个 Agent 技能目录或技能库内。
+`alsoAffects`：删除实体目录时，经同一真实目录看到它的其他 Agent；删除链接时，经同一路径（共享根目录）看到它的
+其他 Agent。`POST /api/skills/apply-uninstall` `{ planId, confirm: true }` + 确认头 → `{ planId, trashId, historyEntry }`。
+
+`GET /api/trash` → `{ items: [{ trashId, name, source: "library" | "uninstall" | "restore", agentId, kind: "real" | "link", originalPath, removedAt, links }] }`；
+`POST /api/trash/restore` `{ trashId, confirm: true }` + 确认头 → `{ trashId, name, path, links }`（原位置必须仍在某个 Agent
+技能目录或技能库内且为空）。`POST /api/library/restore` 保留，使用同一套回收站。
+
+**默认可见的 Agent**：配置新增 `visibleCustomized`（默认 false）。在用户第一次修改可见 Agent 之前（`PUT /api/config`
+中 `visibleAgentIds` 与当前不同，或请求显式带 `visibleCustomized: true`），所有检测到的 Agent 都可见，包括 Hermes、
+OpenClaw、QClaw；修改后按用户的选择保存。状态判断仍只看常用 Agent。本机实测 14 个 Agent 全部可见时 `scanAll`
+冷启动约 530 ms（与原先 6 个可见时相同），内存缓存后约 310 ms，因此可见 Agent 仍做完整元数据与指纹。
+
+`GET /api/scan` 的每个 Agent 新增 `iconAvailable: boolean`：只检查已知应用包是否存在并核对 Bundle ID 与图标文件，
+不转换图标；前端只在为 true 时请求 `/api/agent-icon`（未知仍返回 404）。
+
 ## 本地服务防护（新增）
 
 - 除 Origin 检查外，所有请求的 `Host` 必须是 `127.0.0.1:<端口>`、`localhost:<端口>`
@@ -1008,6 +1058,9 @@ Gemini `tools.allowed`、已有配置的 Cursor CLI `permissions.allow` 与 Open
 | `GET/PUT /api/config` | 新增 `updates: { useGhAuth: boolean }`（默认 false） |
 | `GET /api/library`；`POST /api/library/plan`、`/api/library/apply`、`/api/library/restore` | 见“统一技能库与 CLI 工具卡片” |
 | `GET /api/cli-tools`；`POST /api/cli-tools/plan`、`/api/cli-tools/apply` | 同上 |
+| `GET /api/history`、`/api/trash`；`POST /api/history/plan-restore`、`/api/history/apply-restore`、`/api/skills/plan-uninstall`、`/api/skills/apply-uninstall`、`/api/trash/restore` | 见“历史、恢复与卸载” |
+| `GET /api/scan` | Agent 新增 `iconAvailable` |
+| `GET/PUT /api/config` | 新增 `visibleCustomized`（见“历史、恢复与卸载”中的默认可见规则） |
 | `POST /api/sync`、`/api/import-install` | 动作新增 `realDestination`、`viaSymlink`、`reason`、`sharedWithAgentId`、`alsoVisibleTo`、`skippedLinks`；计划新增 `sharedDestinations`、`warnings` |
 
 ## 已知架构限制

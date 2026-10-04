@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { localTreeSha, sha256FolderHash, treeShaFromListing, gitBlobSha } from "../server/git-tree.mjs";
 import { materializeSkillDirectory, scanAll } from "../server/local-server.mjs";
-import { createTransport } from "../server/update-transport.mjs";
+import { createTransport, resolveGitPath } from "../server/update-transport.mjs";
 import { createUpdateService } from "../server/update-service.mjs";
 import { createMockNetwork, createUpdatesHome, GH_TOKEN, HEAD, testAgents, UPSTREAM } from "./fixtures/updates.mjs";
 
@@ -315,4 +315,46 @@ test("with pinned command folders, a binary outside them is never executed", { .
   const plan = await service.plan({ unitKey: lark.unitKey });
   await assert.rejects(service.apply({ planId: plan.planId, confirm: true }), /不在允许执行的目录/u);
   assert.deepEqual(executed, []);
+});
+
+test("offline mode attempts no request and no subprocess, injected or not", LIMIT, async (context) => {
+  const dir = await mkdtemp(path.join(tmpdir(), "offline-git-"));
+  context.after(() => rm(dir, { recursive: true, force: true }));
+  const marker = path.join(dir, "git-ran");
+  const fakeGit = path.join(dir, "git");
+  await writeFile(fakeGit, `#!/bin/sh\ntouch "${marker}"\n`);
+  await chmod(fakeGit, 0o755);
+  const calls = [];
+  const transport = createTransport({ offline: true, gitPath: fakeGit, fetchImpl: async () => calls.push("fetch") });
+  await assert.rejects(transport.getJson("https://registry.npmjs.org/@larksuite/cli/latest"), (error) => error.kind === "offline");
+  await assert.rejects(transport.head("https://download.codebuddy.cn/x.zip"), (error) => error.kind === "offline");
+  await assert.rejects(transport.lsRemote("https://github.com/acme/skills.git", "HEAD"), (error) => error.kind === "offline");
+  assert.deepEqual(calls, []);
+  await assert.rejects(readFile(marker), "git was never started");
+  assert.equal(transport.stats().requests, 0);
+
+  // The environment switch alone is enough, for checks and for delegated commands.
+  const previous = process.env.SKILL_MANAGER_UPDATES_OFFLINE;
+  process.env.SKILL_MANAGER_UPDATES_OFFLINE = "1";
+  try {
+    const { service, network } = await setup(context);
+    await service.check();
+    assert.deepEqual(network.calls, [], "no fetch and no ls-remote while offline");
+    const view = await service.view();
+    assert.equal(view.units.find((unit) => unit.title === "old-skill").error.kind, "offline");
+    const lark = view.units.find((unit) => unit.sourceType === "lark-cli");
+    const plan = await service.plan({ unitKey: lark.unitKey });
+    await assert.rejects(service.apply({ planId: plan.planId, confirm: true }), /离线模式下不执行/u);
+  } finally {
+    if (previous === undefined) delete process.env.SKILL_MANAGER_UPDATES_OFFLINE;
+    else process.env.SKILL_MANAGER_UPDATES_OFFLINE = previous;
+  }
+});
+
+test("git for ls-remote: /usr/bin/git normally, only a pinned SKILL_MANAGER_GIT_PATH in sandboxes", () => {
+  assert.equal(resolveGitPath({}), "/usr/bin/git");
+  assert.equal(resolveGitPath({ SKILL_MANAGER_COMMAND_DIRS: "/sandbox/bin", SKILL_MANAGER_GIT_PATH: "/sandbox/bin/git" }), "/sandbox/bin/git");
+  assert.equal(resolveGitPath({ SKILL_MANAGER_COMMAND_DIRS: "/sandbox/bin", SKILL_MANAGER_GIT_PATH: "/usr/bin/git" }), null, "outside the pinned folders");
+  assert.equal(resolveGitPath({ SKILL_MANAGER_COMMAND_DIRS: "/sandbox/bin" }), null, "pinned without a git: none");
+  assert.equal(resolveGitPath({ SKILL_MANAGER_GIT_PATH: "/tmp/evil/git" }), "/usr/bin/git", "ignored unless commands are pinned");
 });

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import path from "node:path";
 import { promisify } from "node:util";
 
 /**
@@ -18,6 +19,26 @@ export const UPDATE_HOSTS = [
   "api.skillhub.cn",
   "download.codebuddy.cn",
 ];
+
+export const updatesOffline = (env = process.env) => env.SKILL_MANAGER_UPDATES_OFFLINE === "1";
+
+/**
+ * The git used for `ls-remote`. Normally /usr/bin/git. When commands are pinned
+ * (SKILL_MANAGER_COMMAND_DIRS, used by tests and sandboxes) only SKILL_MANAGER_GIT_PATH inside
+ * those folders is accepted; otherwise there is no git and ls-remote reports unavailable.
+ */
+export function resolveGitPath(env = process.env) {
+  const pinned = String(env.SKILL_MANAGER_COMMAND_DIRS || "")
+    .split(path.delimiter)
+    .filter((entry) => entry && path.isAbsolute(entry));
+  if (!pinned.length) return "/usr/bin/git";
+  const configured = env.SKILL_MANAGER_GIT_PATH;
+  const inside = (directory, file) => {
+    const relative = path.relative(directory, file);
+    return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+  };
+  return configured && path.isAbsolute(configured) && pinned.some((directory) => inside(directory, path.resolve(configured))) ? path.resolve(configured) : null;
+}
 
 export class TransportError extends Error {
   constructor(kind, message, details = {}) {
@@ -56,7 +77,9 @@ async function readCapped(response, maxBytes) {
 export function createTransport({
   fetchImpl = globalThis.fetch,
   lsRemoteImpl = null,
-  gitPath = "/usr/bin/git",
+  gitPath = resolveGitPath(),
+  // Offline: no request and no subprocess is attempted, injected or not.
+  offline = updatesOffline(),
   timeoutMs = 12_000,
   maxBytes = 8 * 1024 * 1024,
   maxRequests = 60,
@@ -68,6 +91,10 @@ export function createTransport({
   const hosts = new Set();
   const github = { remaining: rateLimit.remaining ?? null, resetAt: rateLimit.resetAt ?? null };
 
+  const refuseOffline = () => {
+    if (offline) throw new TransportError("offline", "离线模式，未联网。");
+  };
+
   const spend = (host) => {
     if (requests >= maxRequests) throw new TransportError("budget", "本次检查的请求数已用完，其余来源下次再查。");
     requests += 1;
@@ -75,6 +102,7 @@ export function createTransport({
   };
 
   async function request(url, { method = "GET", headers = {}, accept = "application/json" } = {}) {
+    refuseOffline();
     let parsed;
     try {
       parsed = new URL(url);
@@ -136,7 +164,9 @@ export function createTransport({
       return { status: response.status, etag: response.headers.get("etag") };
     },
     async lsRemote(url, ref = "HEAD") {
+      refuseOffline();
       if (!GIT_URL.test(url) || !GIT_REF.test(ref)) throw new TransportError("invalid", "仓库地址无效。");
+      if (!lsRemoteImpl && !gitPath) throw new TransportError("unavailable", "当前环境没有可用的 git。");
       spend(new URL(url).hostname);
       if (lsRemoteImpl) return lsRemoteImpl(url, ref);
       try {
