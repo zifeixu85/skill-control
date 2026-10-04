@@ -1,6 +1,7 @@
 export const MAIN_PAGES = [
   "home",
   "skills",
+  "library",
   "plugins",
   "experts",
   "connectors",
@@ -21,6 +22,7 @@ export interface Route {
 export const PAGE_TITLES: Record<PageId, string> = {
   home: "概览",
   skills: "技能",
+  library: "技能库",
   plugins: "插件",
   experts: "专家与 Agent",
   connectors: "连接器与 MCP",

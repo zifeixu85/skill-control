@@ -9,6 +9,7 @@ import { ConnectorsPage } from "./pages/ConnectorsPage";
 import { ExpertsPage } from "./pages/ExpertsPage";
 import { HealthPage } from "./pages/HealthPage";
 import { HomePage } from "./pages/HomePage";
+import { LibraryPage } from "./pages/library/LibraryPage";
 import { PluginsPage } from "./pages/PluginsPage";
 import { SettingsPage, themeStore } from "./pages/SettingsPage";
 import { SkillsPage } from "./pages/skills/SkillsPage";
@@ -42,6 +43,8 @@ function CurrentPage() {
   switch (route.page) {
     case "skills":
       return <SkillsPage />;
+    case "library":
+      return <LibraryPage />;
     case "plugins":
       return <PluginsPage />;
     case "experts":

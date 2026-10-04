@@ -144,3 +144,9 @@ export const UpdateIcon = (props: IconProps) => (
     <path d="M4 14.5v1a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-1" />
   </Icon>
 );
+export const LibraryIcon = (props: IconProps) => (
+  <Icon strokeWidth={1.6} {...props}>
+    <path d="M4 4.5h3v11H4zM8.5 4.5h3v11h-3z" />
+    <path d="m13 5.2 2.8-.7 2.2 10.4-2.8.7z" />
+  </Icon>
+);

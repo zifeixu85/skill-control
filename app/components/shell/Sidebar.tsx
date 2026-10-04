@@ -11,6 +11,7 @@ import { api } from "../../lib/api";
 import {
   ConnectorsIcon,
   UpdateIcon,
+  LibraryIcon,
   ExpertsIcon,
   HealthIcon,
   HomeIcon,
@@ -65,12 +66,14 @@ function ScanState() {
 export function Sidebar() {
   const { views, integrations, capabilities, primary, agents, activityById } = useData();
   const updates = useResource("updates", () => api.updates());
+  const library = useResource("library", () => api.library());
   const { route, go } = useNav();
   const plugins = mergePlugins(integrations.data?.plugins || []);
   // Grouped so later sections (统一技能库、更新) slot into "管理" without reshuffling.
   const manage: NavItem[] = [
     { id: "home", label: "概览", Icon: HomeIcon },
     { id: "skills", label: "技能", Icon: SkillsIcon, count: views.length || undefined },
+    { id: "library", label: "技能库", Icon: LibraryIcon, count: library.data?.issues.length || undefined, badge: true },
     { id: "plugins", label: "插件", Icon: PluginsIcon, count: plugins.length || undefined },
     {
       id: "experts",

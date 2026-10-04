@@ -1,6 +1,8 @@
 import { normalizeAgentFile, normalizeAgentFiles, normalizeAgentTools } from "./agent-extras";
 import { resolveApiBase } from "./api-base";
+import { normalizeCliPlan, normalizeCliTools } from "./cli-tools";
 import { normalizeHealthReport } from "./health";
+import { normalizeLibrary, normalizeLibraryApply, normalizeLibraryPlan, type LibraryAction } from "./library";
 import {
   normalizeApply,
   normalizeChanges,
@@ -239,6 +241,23 @@ export const api = {
     normalizePlan(await sendJson<unknown>("POST", "/api/updates/plan", choice ? { unitKey, choice } : { unitKey })),
   applyUpdate: async (planId: string) =>
     normalizeApply(await sendJson<unknown>("POST", "/api/updates/apply", { planId, confirm: true }, true)),
+  library: async () => normalizeLibrary(await getJson<unknown>("/api/library")),
+  libraryPlan: async (input: {
+    action: LibraryAction;
+    skill?: string;
+    agents?: string[];
+    choice?: string;
+    choices?: Record<string, string>;
+  }) => normalizeLibraryPlan(await sendJson<unknown>("POST", "/api/library/plan", input)),
+  libraryApply: async (planId: string) =>
+    normalizeLibraryApply(await sendJson<unknown>("POST", "/api/library/apply", { planId, confirm: true }, true)),
+  libraryRestore: async (trashId: string) =>
+    sendJson<{ trashId: string; name: string; path: string }>("POST", "/api/library/restore", { trashId, confirm: true }, true),
+  cliTools: async () => normalizeCliTools(await getJson<unknown>("/api/cli-tools")),
+  cliPlan: async (toolId: string, fixId: string, agents?: string[]) =>
+    normalizeCliPlan(await sendJson<unknown>("POST", "/api/cli-tools/plan", agents?.length ? { toolId, fixId, agents } : { toolId, fixId })),
+  cliApply: async (planId: string) =>
+    sendJson<{ changed: { path: string; backup: string | null }[] }>("POST", "/api/cli-tools/apply", { planId, confirm: true }, true),
   healthReport: async (refresh?: boolean) =>
     normalizeHealthReport(await getJson<unknown>("/api/health-report", force(refresh))),
 };

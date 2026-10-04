@@ -10,6 +10,7 @@ import "./styles/inspector.css";
 import "./styles/catalog.css";
 import "./styles/insights.css";
 import "./styles/updates.css";
+import "./styles/library.css";
 import "./styles/content.css";
 
 export const metadata: Metadata = {
