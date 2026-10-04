@@ -1,13 +1,46 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- One skill library (green) shared with every Agent (white).
+       resources/icon.png is rendered from this file by scripts/build-icon.mjs. -->
   <defs>
-    <linearGradient id="background" x1="128" y1="96" x2="896" y2="928" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#E4FF82"/>
-      <stop offset="1" stop-color="#B8E94D"/>
+    <linearGradient id="bg" x1="0" y1="100" x2="0" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#303235"/>
+      <stop offset="1" stop-color="#131416"/>
     </linearGradient>
+    <linearGradient id="rim" x1="0" y1="100" x2="0" y2="924" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.18"/>
+      <stop offset="0.45" stop-color="#FFFFFF" stop-opacity="0.03"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.07"/>
+    </linearGradient>
+    <radialGradient id="library" cx="344" cy="486" r="112" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#86F3C6"/>
+      <stop offset="0.55" stop-color="#3CC48F"/>
+      <stop offset="1" stop-color="#1E9E6E"/>
+    </radialGradient>
+    <filter id="shadow" x="-10%" y="-8%" width="120%" height="126%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#000000" flood-opacity="0.3"/>
+    </filter>
+    <filter id="glow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="32"/>
+    </filter>
   </defs>
-  <rect width="1024" height="1024" rx="224" fill="#1F2420"/>
-  <path d="M226 289c0-34.8 28.2-63 63-63h446c34.8 0 63 28.2 63 63v446c0 34.8-28.2 63-63 63H289c-34.8 0-63-28.2-63-63V289Z" fill="url(#background)"/>
-  <path d="M353 385c0-17.7 14.3-32 32-32h254c17.7 0 32 14.3 32 32s-14.3 32-32 32H385c-17.7 0-32-14.3-32-32Zm0 127c0-17.7 14.3-32 32-32h254c17.7 0 32 14.3 32 32s-14.3 32-32 32H385c-17.7 0-32-14.3-32-32Zm0 127c0-17.7 14.3-32 32-32h150c17.7 0 32 14.3 32 32s-14.3 32-32 32H385c-17.7 0-32-14.3-32-32Z" fill="#1F2420"/>
-  <circle cx="669" cy="639" r="73" fill="#FF784D"/>
-  <path d="m637 640 22 22 43-48" fill="none" stroke="#1F2420" stroke-linecap="round" stroke-linejoin="round" stroke-width="24"/>
+  <g id="base">
+    <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)" filter="url(#shadow)"/>
+  </g>
+  <g id="glyph">
+    <rect x="101.5" y="101.5" width="821" height="821" rx="183.5" fill="none" stroke="url(#rim)" stroke-width="3"/>
+    <g transform="translate(8 0)">
+      <g fill="none" stroke="#FFFFFF" stroke-width="30" stroke-linecap="round" opacity="0.55">
+        <path d="M400 512C520 512 540 352 660 352"/>
+        <path d="M400 512H660"/>
+        <path d="M400 512C520 512 540 672 660 672"/>
+      </g>
+      <g fill="#F4F4F0">
+        <circle cx="690" cy="352" r="46"/>
+        <circle cx="690" cy="512" r="46"/>
+        <circle cx="690" cy="672" r="46"/>
+      </g>
+      <circle cx="352" cy="512" r="106" fill="#3CC48F" opacity="0.4" filter="url(#glow)"/>
+      <circle cx="352" cy="512" r="78" fill="url(#library)"/>
+    </g>
+  </g>
 </svg>

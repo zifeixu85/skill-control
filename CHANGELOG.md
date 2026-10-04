@@ -124,6 +124,11 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ### Changed
 
+- New app icon and sidebar mark: one skill library (green) shared with every
+  Agent. `resources/icon.png` is rendered from `resources/icon.svg` by
+  `node scripts/build-icon.mjs`, which dithers the background gradient so it
+  shows no banding.
+
 - Library adopt and link plans accept the `choices` map keyed by item id (the
   shape the UI sends), as batch plans already did.
 

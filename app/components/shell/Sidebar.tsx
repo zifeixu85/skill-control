@@ -36,9 +36,19 @@ type NavItem = {
 function BrandMark() {
   return (
     <span className="brand-mark" aria-hidden="true">
+      {/* Same mark as the app icon: one library (green) shared with every Agent. */}
       <svg viewBox="0 0 16 16" fill="none">
-        <path d="M3 4.5h6M3 8h10M3 11.5h7" stroke="#fff" strokeWidth="1.8" strokeLinecap="round" />
-        <circle cx="12" cy="4.5" r="1.6" fill="#3cc48f" />
+        <path
+          d="M5.8 8C8.4 8 8.9 3.9 11.4 3.9M5.8 8h5.6M5.8 8c2.6 0 3.1 4.1 5.6 4.1"
+          stroke="#fff"
+          strokeOpacity="0.55"
+          strokeWidth="1.1"
+          strokeLinecap="round"
+        />
+        <circle cx="12.2" cy="3.9" r="1.45" fill="#f4f4f0" />
+        <circle cx="12.2" cy="8" r="1.45" fill="#f4f4f0" />
+        <circle cx="12.2" cy="12.1" r="1.45" fill="#f4f4f0" />
+        <circle cx="4.6" cy="8" r="2.5" fill="#3cc48f" />
       </svg>
     </span>
   );
