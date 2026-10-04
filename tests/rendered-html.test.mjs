@@ -22,18 +22,19 @@ async function render() {
   );
 }
 
-test("renders the Chinese skill manager application shell", async () => {
+test("renders the Chinese Skill Control application shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(
-    html,
-    /<title>技能管理器 — 本地智能工具技能管理<\/title>/i,
-  );
-  assert.match(html, /技能/);
-  assert.match(html, /管理器/);
-  assert.match(html, /正在建立本地技能索引/);
+  // The desktop smoke test also expects "技能管理器" in the title and an .app-shell root.
+  assert.match(html, /<title>Skill Control — 本地技能管理器<\/title>/i);
+  assert.match(html, /class="app-shell"/);
+  assert.match(html, /aria-label="主导航"/);
+  for (const label of ["概览", "技能", "插件", "专家与 Agent", "连接器与 MCP", "数据", "体检", "设置"]) {
+    assert.ok(html.includes(`<span>${label}</span>`), `navigation shows ${label}`);
+  }
+  assert.match(html, /正在读取本机的技能和 Agent/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });

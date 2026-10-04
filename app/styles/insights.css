@@ -1,0 +1,470 @@
+/* 数据 / 体检 / Agent 工具 and charts. Chart ink comes from --chart tokens in both themes. */
+
+.ugrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 14px;
+}
+.ucard {
+  background: var(--panel);
+  border-radius: 16px;
+  box-shadow: var(--shadow-md), 0 0 0 1px var(--line-2);
+  padding: 16px 18px;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.ucard-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.ucard-title {
+  min-width: 0;
+  flex: 1;
+}
+.ucard-head h3 {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+}
+.ustats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--line-2);
+  border-radius: 10px;
+  background: var(--window);
+}
+.ustats > div {
+  padding: 8px 12px;
+  border-left: 1px solid var(--line-2);
+  min-width: 0;
+}
+.ustats > div:first-child {
+  border-left: 0;
+}
+.ustats b {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+.ustats span {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.token-split {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.source-badges {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+.conf {
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--hover);
+  color: var(--ink-2);
+  line-height: 1.7;
+}
+.conf.exact {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+.conf.inferred {
+  background: var(--warn-wash);
+  color: var(--warn);
+}
+.conf.reported {
+  background: var(--info-wash);
+  color: var(--info);
+}
+.conf-dot {
+  font-size: 9.5px;
+  margin-left: 3px;
+  color: var(--warn);
+  vertical-align: super;
+}
+.conf-dot.reported {
+  color: var(--info);
+}
+.usage-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.usage-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 22px;
+  margin-top: 18px;
+}
+.usage-columns h3 {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--ink-2);
+  margin-bottom: 10px;
+}
+.agent-usage .ustats {
+  margin-bottom: 14px;
+}
+
+.index-progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  background: var(--info-wash);
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+.index-progress b {
+  display: block;
+}
+.index-progress span {
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+.progress {
+  width: 180px;
+  height: 6px;
+  border-radius: 3px;
+  background: color-mix(in oklab, var(--info) 18%, transparent);
+  overflow: hidden;
+}
+.progress i {
+  display: block;
+  height: 100%;
+  background: var(--info);
+  transform-origin: left center;
+  transition: transform 0.4s var(--ease);
+}
+.index-note.error {
+  color: var(--danger);
+  background: var(--danger-wash);
+  border-radius: 10px;
+  padding: 8px 12px;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+
+.chart {
+  display: grid;
+  gap: 4px;
+}
+.chart-plot {
+  position: relative;
+}
+.chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.chart svg:focus-visible {
+  border-radius: 8px;
+}
+.chart-grid line {
+  stroke: var(--grid);
+  stroke-width: 1;
+}
+.chart-grid text,
+.chart-axis {
+  fill: var(--ink-3);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.chart-area {
+  fill: var(--chart-wash);
+}
+.chart-line {
+  fill: none;
+  stroke: var(--chart);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+.chart-end,
+.chart-cursor circle {
+  fill: var(--chart);
+  stroke: var(--panel);
+  stroke-width: 2;
+}
+.chart-cursor line {
+  stroke: var(--ink-3);
+  stroke-width: 1;
+}
+.chart-hit {
+  fill: transparent;
+  cursor: crosshair;
+}
+.chart-tip {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 12px));
+  background: var(--ink);
+  color: var(--window);
+  border-radius: 8px;
+  padding: 5px 9px;
+  font-size: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: var(--shadow-md);
+}
+.chart-tip span {
+  display: block;
+  opacity: 0.75;
+  font-size: 11px;
+}
+.chart-table summary {
+  font-size: 12px;
+  color: var(--ink-3);
+  cursor: pointer;
+  width: max-content;
+}
+.chart-table table {
+  margin-top: 6px;
+  font-size: 12px;
+  border-collapse: collapse;
+}
+.chart-table td,
+.chart-table th {
+  padding: 2px 12px 2px 0;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.health-summary {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.hs {
+  min-width: 120px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--line-2);
+  border-top: 3px solid var(--ink-3);
+}
+.hs b {
+  display: block;
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.2;
+}
+.hs span {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.hs.danger {
+  border-top-color: var(--danger);
+}
+.hs.warn {
+  border-top-color: var(--warn);
+}
+.hs.info {
+  border-top-color: var(--info);
+}
+.finding-group {
+  margin-bottom: 14px;
+}
+.finding-group h3,
+.tool-group h3,
+.afile-group h3 {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--ink-2);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.finding-group h3 em,
+.tool-group h3 em,
+.afile-group h3 em {
+  font-style: normal;
+  font-weight: 400;
+  color: var(--ink-3);
+}
+.tool-group h3 small {
+  font-weight: 400;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.findings,
+.tool-group ul {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.finding {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  background: var(--panel);
+  border-radius: var(--r-card);
+  padding: 11px 14px;
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+.sev {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: var(--hover);
+  color: var(--ink-2);
+}
+.sev svg {
+  width: 16px;
+  height: 16px;
+}
+.sev.danger {
+  background: var(--danger-wash);
+  color: var(--danger);
+}
+.sev.warn {
+  background: var(--warn-wash);
+  color: var(--warn);
+}
+.sev.info {
+  background: var(--info-wash);
+  color: var(--info);
+}
+.finding-main {
+  min-width: 0;
+}
+.finding-main b {
+  font-size: 13.5px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.finding-main p {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.finding-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  align-items: center;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.finding-meta code {
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+.meta-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.fix-label {
+  color: var(--ink-2);
+}
+.finding-acts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.tool-groups {
+  display: grid;
+  gap: 18px;
+}
+.tool {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  background: var(--panel);
+  border-radius: 10px;
+  padding: 8px 12px;
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+.tool-main {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.tool-name {
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+.tool-main > span {
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.tool-main summary {
+  font-size: 12px;
+  color: var(--ink-3);
+  cursor: pointer;
+  width: max-content;
+}
+.tool-main details .list-names {
+  margin-top: 6px;
+}
+.tool-tags {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.source-strip {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+@media (max-width: 880px) {
+  .ugrid {
+    grid-template-columns: 1fr;
+  }
+  .ustats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .ustats > div:nth-child(3) {
+    border-left: 0;
+  }
+  .ustats > div:nth-child(n + 3) {
+    border-top: 1px solid var(--line-2);
+  }
+  .finding {
+    grid-template-columns: 30px minmax(0, 1fr);
+  }
+  .finding-acts {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+  .progress {
+    width: 100%;
+  }
+}
+
+.more-findings {
+  margin-top: 6px;
+}

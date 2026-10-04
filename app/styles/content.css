@@ -1,0 +1,309 @@
+/* File browser (tree + viewer), agent file list, rendered Markdown and frontmatter. */
+
+.browser-wrap {
+  container-type: inline-size;
+  min-width: 0;
+}
+.browser {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  min-width: 0;
+}
+.browser-tree {
+  background: var(--panel);
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px var(--line-2);
+  padding: 6px;
+  max-height: 260px;
+  overflow: auto;
+  min-width: 0;
+}
+.browser-tree-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 2px 6px 6px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.browser-view {
+  min-width: 0;
+}
+@container (min-width: 720px) {
+  .browser {
+    grid-template-columns: 240px minmax(0, 1fr);
+    align-items: start;
+  }
+  .browser-tree {
+    max-height: 70vh;
+    position: sticky;
+    top: 0;
+  }
+}
+
+.tree-level {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.tree-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12.5px;
+  text-align: left;
+  color: var(--ink);
+}
+.tree-item:hover {
+  background: var(--hover);
+}
+.tree-item.on {
+  background: var(--accent-wash);
+  color: var(--accent);
+  font-weight: 600;
+}
+.tree-item svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--ink-3);
+}
+.tree-item.on svg {
+  color: var(--accent);
+}
+.tree-item .chev {
+  width: 12px;
+  height: 12px;
+  transition: transform 0.12s ease;
+}
+.tree-item .chev.open {
+  transform: rotate(90deg);
+}
+.chev-space {
+  width: 12px;
+  flex: none;
+}
+.tree-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree-item small {
+  margin-left: auto;
+  color: var(--ink-3);
+  font-size: 11px;
+  white-space: nowrap;
+  font-weight: 400;
+}
+
+.viewer {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.viewer-tools {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+.img-stage {
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  border-radius: 10px;
+  background: repeating-conic-gradient(var(--hover) 0% 25%, transparent 0% 50%) 50% / 16px 16px;
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+.img-stage img {
+  max-height: 60vh;
+  object-fit: contain;
+}
+
+.fm {
+  margin-bottom: 14px;
+}
+.fm h4 {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--ink-3);
+  margin-bottom: 6px;
+}
+
+.markdown {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.markdown > * + * {
+  margin-top: 0.75em;
+}
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 {
+  font-family: var(--font-display);
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  margin-top: 1.3em;
+}
+.markdown h1 {
+  font-size: 21px;
+  font-weight: 750;
+}
+.markdown h2 {
+  font-size: 17px;
+  font-weight: 700;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--line-2);
+}
+.markdown h3 {
+  font-size: 15px;
+  font-weight: 650;
+}
+.markdown h4 {
+  font-size: 14px;
+}
+.markdown > :first-child {
+  margin-top: 0;
+}
+.markdown ul,
+.markdown ol {
+  padding-left: 1.4em;
+}
+.markdown li + li {
+  margin-top: 0.2em;
+}
+.markdown a {
+  color: var(--accent);
+}
+.markdown code {
+  font-size: 0.88em;
+  background: var(--code);
+  padding: 1px 5px;
+  border-radius: 5px;
+}
+.markdown pre {
+  background: var(--code);
+  padding: 12px 14px;
+  border-radius: 10px;
+  overflow: auto;
+  box-shadow: 0 0 0 1px var(--line-2);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.markdown pre code {
+  background: none;
+  padding: 0;
+  font-size: inherit;
+}
+.markdown blockquote {
+  margin-left: 0;
+  margin-right: 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--line);
+  color: var(--ink-2);
+}
+.markdown hr {
+  border: 0;
+  border-top: 1px solid var(--line-2);
+}
+.md-table {
+  overflow-x: auto;
+}
+.markdown table {
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 100%;
+}
+.markdown th,
+.markdown td {
+  border: 1px solid var(--line-2);
+  padding: 5px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+.markdown th {
+  background: var(--window);
+  font-weight: 600;
+}
+.markdown input[type="checkbox"] {
+  accent-color: var(--accent);
+  margin-right: 6px;
+}
+.md-img {
+  border-radius: 8px;
+  max-height: 480px;
+}
+.md-link-inert {
+  color: var(--ink-2);
+  text-decoration: underline dotted;
+}
+
+.agent-files {
+  display: grid;
+  gap: 12px;
+}
+.agent-file-list {
+  display: grid;
+  gap: 10px;
+}
+.afile-group ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.afile {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 2px 8px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  border-radius: 7px;
+  padding: 5px 8px;
+  text-align: left;
+  align-items: center;
+}
+.afile:hover {
+  background: var(--hover);
+}
+.afile.on {
+  background: var(--accent-wash);
+}
+.afile svg {
+  width: 14px;
+  height: 14px;
+  color: var(--ink-3);
+}
+.afile-name {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.afile.on .afile-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+.afile small {
+  grid-column: 2;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.agent-files .browser-tree {
+  padding: 10px;
+}
+@container (min-width: 720px) {
+  .agent-files .browser {
+    grid-template-columns: 280px minmax(0, 1fr);
+  }
+}

@@ -1,0 +1,73 @@
+"use client";
+
+import { activityReason, MAX_PRIMARY_AGENTS } from "../../lib/agents";
+import type { ScanAgent } from "../../lib/types";
+import { useData } from "../providers/DataProvider";
+import { AgentAvatar } from "../ui/Avatar";
+
+/** Agents worth offering as "常用": installed with skills or recent activity, busiest first. */
+export function candidateAgents(agents: ScanAgent[], weight: (id: string) => number): ScanAgent[] {
+  return agents
+    .filter((agent) => agent.available && (agent.skillCount > 0 || weight(agent.id) > 0))
+    .sort((left, right) => weight(right.id) - weight(left.id) || right.skillCount - left.skillCount);
+}
+
+export function AgentPicker({
+  name,
+  selected,
+  onChange,
+  onLimit,
+}: {
+  name: string;
+  selected: string[];
+  onChange: (next: string[]) => void;
+  onLimit: (message: string) => void;
+}) {
+  const { agents, activityById, scan } = useData();
+  const suggested = new Set(scan.data?.suggestedPrimaryAgentIds || []);
+  const list = candidateAgents(agents, (id) => activityById.get(id)?.weight30d || 0);
+  const toggle = (id: string, checked: boolean) => {
+    if (checked) {
+      if (selected.length >= MAX_PRIMARY_AGENTS) {
+        onLimit(`最多选 ${MAX_PRIMARY_AGENTS} 个常用 Agent`);
+        return;
+      }
+      onChange([...selected, id]);
+      return;
+    }
+    if (selected.length <= 1) {
+      onLimit("至少保留一个常用 Agent");
+      return;
+    }
+    onChange(selected.filter((item) => item !== id));
+  };
+  return (
+    <fieldset className="pick">
+      <legend className="sr-only">常用 Agent</legend>
+      {list.map((agent) => {
+        const on = selected.includes(agent.id);
+        const reason = agent.refuseInstall
+          ? "技能由它自己管理 · 只读"
+          : activityReason(activityById.get(agent.id), suggested.has(agent.id));
+        return (
+          <label key={agent.id} className={on ? "on" : ""}>
+            <AgentAvatar id={agent.id} size="md" />
+            <span>
+              <b>{agent.name}</b>
+              <span>
+                {reason} · {agent.skillCount} 个技能
+              </span>
+            </span>
+            <input
+              type="checkbox"
+              name={name}
+              value={agent.id}
+              checked={on}
+              onChange={(event) => toggle(agent.id, event.target.checked)}
+            />
+          </label>
+        );
+      })}
+    </fieldset>
+  );
+}
