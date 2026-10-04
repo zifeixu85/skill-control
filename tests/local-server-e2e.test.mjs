@@ -351,7 +351,9 @@ test("synchronizes, backs up, exports, and reinstalls a skill through the local 
   assert.equal(migratedConfig.version, 3);
   assert.deepEqual(migratedConfig.dismissedAgentIds, []);
   assert.equal(migratedConfig.agents.find((agent) => agent.id === "smartorder").name, "订单来了");
-  assert.equal(migratedConfig.visibleAgentIds.includes("smartorder"), false);
+  // An older config never chose its visible Agents: every detected Agent is shown.
+  assert.equal(migratedConfig.visibleCustomized, false);
+  assert.equal(migratedConfig.visibleAgentIds.includes("smartorder"), true);
   const connectors = await requestJson("/api/connectors");
   assert.equal(connectors.connectors.length, 3);
   assert.doesNotMatch(JSON.stringify(connectors), /secret-|bearer_token|env_http_headers/);

@@ -296,9 +296,10 @@ test("update routes: offline checks, plans need confirmation, nothing leaks", { 
   assert.equal(plan.status, 200);
   assert.equal(plan.json.kind, "delegate");
   assert.equal((await post("apply:no-header", "/api/updates/apply", { planId: plan.json.planId, confirm: true })).status, 400);
+  // An offline server never runs network-capable commands, even with a confirmed plan.
   const applied = await post("apply", "/api/updates/apply", { planId: plan.json.planId, confirm: true }, { "x-skill-manager-confirm": "yes" });
-  assert.equal(applied.status, 200);
-  assert.equal(applied.json.commands[0].exitCode, 0);
+  assert.equal(applied.status, 409);
+  assert.match(applied.json.error, /离线模式下不执行/u);
   assert.equal((await post("apply:again", "/api/updates/apply", { planId: plan.json.planId, confirm: true }, { "x-skill-manager-confirm": "yes" })).status, 404);
   const health = await call("health", "/api/health-report?force=1");
   assert.ok(health.json.findings.some((finding) => finding.category === "update-available"));
@@ -347,6 +348,60 @@ test("library and CLI tool routes: plans, confirmed writes in the sandbox, nothi
     assert.equal((await request(pathname, { method: "POST", body: "{}", headers: { "Sec-Fetch-Site": "cross-site" } })).status, 403);
   }
   assert.equal((await request("/api/library", { headers: { Origin: "https://evil.example.test" } })).status, 403);
+});
+
+test("history, restore, uninstall, trash and default visibility through the API", { timeout: 60_000 }, async (context) => {
+  const home = await mkdtemp(path.join(tmpdir(), "leak-history-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  const skillText = (body) => `---\nname: demo\ndescription: demo\n---\n# demo\n\n${body}\n`;
+  await writeFixtureFile(home, ".codex/skills/demo/SKILL.md", skillText("v2 api_key=ZZ9historySkill01"));
+  await writeFixtureFile(home, ".claude/skills/demo/SKILL.md", skillText("v1"));
+  await writeFixtureFile(home, ".claude/skills/solo/SKILL.md", "---\nname: solo\ndescription: solo\n---\n# solo\n");
+  await writeFixtureFile(home, ".hermes/config.yaml", "model:\n  default: x\n");
+  const { request } = await startTestServer(context, home);
+  const bodies = [];
+  const call = async (label, pathname, options = {}) => {
+    const response = await request(pathname, options);
+    const body = await response.text();
+    bodies.push({ label, body });
+    return { status: response.status, json: JSON.parse(body) };
+  };
+  const confirmHeader = { "x-skill-manager-confirm": "yes" };
+  const post = (label, pathname, payload, headers = {}) => call(label, pathname, { method: "POST", body: JSON.stringify(payload), headers });
+
+  const config = (await call("config", "/api/config")).json;
+  assert.equal(config.visibleCustomized, false);
+  assert.ok(config.visibleAgentIds.includes("hermes"), "every detected Agent is shown by default");
+  const scan = (await call("scan", "/api/scan?force=1")).json;
+  assert.ok(scan.agents.every((agent) => typeof agent.iconAvailable === "boolean"));
+  const demo = scan.skills.find((skill) => skill.name === "demo");
+  const source = demo.instances.find((instance) => instance.agentId === "codex");
+  const synced = await post("sync", "/api/sync", { sourceInstanceId: source.id, targetAgentIds: ["claude"], mode: "copy", dryRun: false, confirm: true }, confirmHeader);
+  assert.equal(synced.status, 200);
+  const history = (await call("history", "/api/history?limit=5")).json.entries;
+  assert.deepEqual([history[0].action, history[0].skill, history[0].restorable], ["sync", "demo", true]);
+  assert.match(history[0].backups[0].path, /^~\/\.agent-skill-manager\/backups\//u);
+  const plan = await post("plan-restore", "/api/history/plan-restore", { historyId: history[0].id });
+  assert.equal(plan.status, 200);
+  assert.equal((await post("apply-restore:no-header", "/api/history/apply-restore", { planId: plan.json.planId, confirm: true })).status, 400);
+  assert.equal((await post("apply-restore", "/api/history/apply-restore", { planId: plan.json.planId, confirm: true }, confirmHeader)).status, 200);
+  assert.match(await readFile(path.join(home, ".claude", "skills", "demo", "SKILL.md"), "utf8"), /v1/u);
+
+  const fresh = (await call("scan:2", "/api/scan?force=1")).json;
+  const solo = fresh.skills.find((skill) => skill.name === "solo");
+  const uninstall = await post("plan-uninstall", "/api/skills/plan-uninstall", { skillId: solo.id, agentId: "claude" });
+  assert.deepEqual([uninstall.status, uninstall.json.kind], [200, "real"]);
+  assert.equal((await post("apply-uninstall", "/api/skills/apply-uninstall", { planId: uninstall.json.planId, confirm: true }, confirmHeader)).status, 200);
+  const trash = (await call("trash", "/api/trash")).json.items;
+  assert.deepEqual(trash.map((item) => [item.name, item.source, item.originalPath]), [["solo", "uninstall", "~/.claude/skills/solo"]]);
+  assert.equal((await post("trash-restore", "/api/trash/restore", { trashId: trash[0].trashId, confirm: true }, confirmHeader)).status, 200);
+  assert.match(await readFile(path.join(home, ".claude", "skills", "solo", "SKILL.md"), "utf8"), /solo/u);
+
+  const customized = await call("config:put", "/api/config", { method: "PUT", body: JSON.stringify({ ...config, visibleAgentIds: ["codex", "claude"] }) });
+  assert.deepEqual([customized.json.visibleCustomized, customized.json.visibleAgentIds.includes("hermes")], [true, false]);
+  assert.deepEqual(bodies.filter((item) => /ZZ9/u.test(item.body)).map((item) => item.label), []);
+  assert.deepEqual(bodies.filter((item) => item.body.includes(home)).map((item) => item.label), []);
+  assert.equal((await request("/api/history/plan-restore", { method: "POST", body: "{}", headers: { "Sec-Fetch-Site": "cross-site" } })).status, 403);
 });
 
 test("refuses cross-site reads of configuration and assets", async (context) => {

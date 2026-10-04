@@ -3,6 +3,7 @@ import { createCliManager, fixesFor } from "./cli-fixes.mjs";
 import { AGENT_PATH_SOURCES, detectCliTools } from "./cli-tools.mjs";
 import { object, readBoundedJson } from "./fs-safe.mjs";
 import { createLibraryService } from "./library-service.mjs";
+import { createRestoreService } from "./restore-service.mjs";
 import { defaultSearchDirectories, findCommand } from "./path-lookup.mjs";
 import { runCommand } from "./update-apply.mjs";
 
@@ -20,6 +21,13 @@ export const MANAGE_ROUTES = [
   "/api/cli-tools",
   "/api/cli-tools/plan",
   "/api/cli-tools/apply",
+  "/api/history",
+  "/api/history/plan-restore",
+  "/api/history/apply-restore",
+  "/api/skills/plan-uninstall",
+  "/api/skills/apply-uninstall",
+  "/api/trash",
+  "/api/trash/restore",
 ];
 
 class RouteError extends Error {
@@ -33,7 +41,7 @@ const ACTIONS = ["adopt", "link", "unlink", "disable", "remove", "batch"];
 
 /**
  * `context`: { homeDirectory, homes, stateDirectory, backupDirectory, historyFile, getConfig,
- *   commandDirectories, readBody, afterWrite, json }
+ *   getScan, getAgents, materialize, commandDirectories, readBody, afterWrite, json }
  */
 export function createManageRoutes(context) {
   const searchDirectories = async () => context.commandDirectories || (await defaultSearchDirectories({ homeDirectory: context.homeDirectory }));
@@ -76,6 +84,17 @@ export function createManageRoutes(context) {
     });
   }
 
+  const restore = createRestoreService({
+    homeDirectory: context.homeDirectory,
+    homes: context.homes,
+    stateDirectory: context.stateDirectory,
+    backupDirectory: context.backupDirectory,
+    historyFile: context.historyFile,
+    getScan: context.getScan,
+    getAgents: context.getAgents,
+    materialize: context.materialize,
+  });
+
   const cli = createCliManager({
     homeDirectory: context.homeDirectory,
     homes: context.homes,
@@ -98,6 +117,8 @@ export function createManageRoutes(context) {
   const getRoutes = {
     "/api/library": () => library.view(),
     "/api/cli-tools": async () => ({ tools: await publicTools() }),
+    "/api/history": (url) => restore.listHistory(url.searchParams.get("limit")),
+    "/api/trash": () => restore.listTrash(),
   };
   const postRoutes = {
     async "/api/library/plan"(body) {
@@ -130,11 +151,37 @@ export function createManageRoutes(context) {
       confirmed(request, body);
       return cli.apply({ planId: body.planId, confirm: true });
     },
+    async "/api/history/plan-restore"(body) {
+      if (typeof body.historyId !== "string" || !/^[\w-]{1,64}$/u.test(body.historyId)) throw new RouteError(400, "历史记录无效。");
+      return restore.planRestore({ historyId: body.historyId });
+    },
+    async "/api/history/apply-restore"(body, request) {
+      confirmed(request, body);
+      const result = await restore.applyRestore({ planId: body.planId, confirm: true });
+      context.afterWrite?.();
+      return result;
+    },
+    async "/api/skills/plan-uninstall"(body) {
+      if (typeof body.skillId !== "string" || typeof body.agentId !== "string") throw new RouteError(400, "缺少技能或 Agent。");
+      return restore.planUninstall({ skillId: body.skillId, agentId: body.agentId });
+    },
+    async "/api/skills/apply-uninstall"(body, request) {
+      confirmed(request, body);
+      const result = await restore.applyUninstall({ planId: body.planId, confirm: true });
+      context.afterWrite?.();
+      return result;
+    },
+    async "/api/trash/restore"(body, request) {
+      confirmed(request, body);
+      const result = await restore.trashRestore({ trashId: body.trashId });
+      context.afterWrite?.();
+      return result;
+    },
   };
 
   async function handle(request, url, response, origin) {
     if (request.method === "GET" && getRoutes[url.pathname]) {
-      context.json(response, 200, await getRoutes[url.pathname](), origin);
+      context.json(response, 200, await getRoutes[url.pathname](url), origin);
       return true;
     }
     if (request.method === "POST" && postRoutes[url.pathname]) {

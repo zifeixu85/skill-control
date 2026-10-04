@@ -107,8 +107,23 @@ on Keep a Changelog and the project follows Semantic Versioning.
   rule fixes; gh and uv are detected through the same descriptor table.
 - Health report categories `library-drift`, `library-external-link`,
   `cli-version-skew`, `cli-workspace-unconfigured`, `cli-not-on-agent-path`.
+- History and restore (`GET /api/history`, `POST /api/history/plan-restore`,
+  `/api/history/apply-restore`): sync, import and update writes record their
+  backups and result fingerprints; a restore puts backups back (or moves a
+  created folder to the trash) after backing up the current state, so it can
+  be undone too.
+- Uninstall from one Agent (`POST /api/skills/plan-uninstall`,
+  `/api/skills/apply-uninstall`) with shared-folder warnings, and a shared
+  trash (`GET /api/trash`, `POST /api/trash/restore`).
+- `iconAvailable` for each Agent in `/api/scan`.
 
 ### Changed
+
+- Every detected Agent is visible by default until the user changes the visible
+  list (`visibleCustomized`); status is still judged against primary Agents.
+- Offline mode (`SKILL_MANAGER_UPDATES_OFFLINE=1`) now blocks `git ls-remote`
+  and delegated update commands as well as HTTP; the git used for checks can be
+  pinned with `SKILL_MANAGER_GIT_PATH` inside `SKILL_MANAGER_COMMAND_DIRS`.
 
 - Primary-agent suggestions rank by `weight30d` (session bytes, or tokens × 4
   for token-based products) instead of `bytes30d`.

@@ -59,6 +59,12 @@ async function findApp(agentId, applicationDirectories) {
   return null;
 }
 
+/** Cheap check for the scan: a known, verified app bundle with an icon file (no conversion). */
+export async function hasAgentIcon(agentId, { homeDirectory = homedir(), applicationDirectories = defaultApplicationDirectories(homeDirectory), platform = process.platform } = {}) {
+  if (platform !== "darwin" || !Object.hasOwn(AGENT_APPS, agentId)) return false;
+  return Boolean(await findApp(agentId, applicationDirectories).catch(() => null));
+}
+
 async function convertWithSips(source, destination) {
   await run("/usr/bin/sips", ["-s", "format", "png", "-Z", "128", source, "--out", destination], {
     timeout: 10_000,
