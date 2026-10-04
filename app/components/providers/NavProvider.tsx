@@ -10,6 +10,7 @@ import {
   type PageId,
   type Route,
 } from "../../lib/navigation";
+import type { LibraryAction } from "../../lib/library";
 import { persistentStore } from "../../lib/storage";
 
 const routeStore = persistentStore<string>("route", "home", isValidRoute);
@@ -38,6 +39,16 @@ export interface Nav {
   /** History entry whose undo dialog is open. */
   restoreHistoryId: string | null;
   setRestoreHistoryId: (id: string | null) => void;
+  /** A library plan under review; lives above pages so its result survives the skill disappearing. */
+  libraryRequest: LibraryRequest | null;
+  setLibraryRequest: (request: LibraryRequest | null) => void;
+}
+
+export interface LibraryRequest {
+  action: LibraryAction;
+  skill?: string;
+  agents?: string[];
+  title: string;
 }
 
 const NavContext = createContext<Nav | null>(null);
@@ -58,6 +69,7 @@ export function NavProvider({ children }: { children: ReactNode }) {
   const [query, setQuery] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [restoreHistoryId, setRestoreHistoryId] = useState<string | null>(null);
+  const [libraryRequest, setLibraryRequest] = useState<LibraryRequest | null>(null);
 
   const go = useCallback(
     (page: PageId, options: GoOptions = {}) => {
@@ -92,8 +104,10 @@ export function NavProvider({ children }: { children: ReactNode }) {
       setImportOpen,
       restoreHistoryId,
       setRestoreHistoryId,
+      libraryRequest,
+      setLibraryRequest,
     }),
-    [routeText, go, drawer, skillFilter, setSkillFilter, selectedSkillId, query, importOpen, restoreHistoryId],
+    [routeText, go, drawer, skillFilter, setSkillFilter, selectedSkillId, query, importOpen, restoreHistoryId, libraryRequest],
   );
 
   return <NavContext.Provider value={value}>{children}</NavContext.Provider>;

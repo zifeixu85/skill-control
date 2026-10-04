@@ -5,12 +5,14 @@ import { ExpertDrawer } from "./ExpertDrawer";
 import { McpDrawer } from "./McpDrawer";
 import { PluginDrawer } from "./PluginDrawer";
 import { ImportDialog } from "./ImportDialog";
+import { PlanReview } from "../pages/library/PlanReview";
 import { RestoreDialog } from "./RestoreDialog";
 import { UpdateDrawer } from "./UpdateDrawer";
 
 /** Drawers and dialogs that any page can open. Keyed by target so a new item starts fresh. */
 export function DrawerHost() {
-  const { drawer, closeDrawer, importOpen, setImportOpen, restoreHistoryId, setRestoreHistoryId } = useNav();
+  const { drawer, closeDrawer, importOpen, setImportOpen, restoreHistoryId, setRestoreHistoryId, libraryRequest, setLibraryRequest } =
+    useNav();
   return (
     <>
       {drawer?.kind === "plugin" ? <PluginDrawer key={drawer.id} pluginKey={drawer.id} onClose={closeDrawer} /> : null}
@@ -18,6 +20,7 @@ export function DrawerHost() {
       {drawer?.kind === "mcp" ? <McpDrawer key={drawer.id} name={drawer.id} onClose={closeDrawer} /> : null}
       {drawer?.kind === "update" ? <UpdateDrawer key={drawer.id} unitKey={drawer.id} onClose={closeDrawer} /> : null}
       {importOpen ? <ImportDialog onClose={() => setImportOpen(false)} /> : null}
+      {libraryRequest ? <PlanReview request={libraryRequest} onClose={() => setLibraryRequest(null)} /> : null}
       {restoreHistoryId ? (
         <RestoreDialog key={restoreHistoryId} historyId={restoreHistoryId} onClose={() => setRestoreHistoryId(null)} />
       ) : null}

@@ -162,7 +162,7 @@ export function agentChecks(row: CliAgentRow, latest: string | null) {
           state: latest && row.resolves.version && row.resolves.version !== latest ? "warn" : "ok",
           detail: `${row.resolves.path}${row.resolves.version ? `（${row.resolves.version}）` : ""} · 来自 ${row.pathSource}`,
         }
-      : { label: "找得到命令", state: "bad", detail: `在 ${row.pathSource || "它的 PATH"} 里找不到这个命令` },
+      : { label: "找不到命令", state: "bad", detail: `它的 PATH（${row.pathSource || "未知来源"}）里没有这个命令` },
   );
   if (row.workspace) {
     checks.push({

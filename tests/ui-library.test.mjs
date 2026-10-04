@@ -73,7 +73,8 @@ test("CLI tools: checks explain each column in plain words", () => {
   assert.deepEqual(codex.map((check) => check.state), ["ok", "ok", "bad", "ok", "warn", "bad"]);
   const openclaw = cli.agentChecks(tool.agents[1], tool.latest);
   assert.equal(openclaw[0].state, "bad");
-  assert.match(openclaw[0].detail, /找不到/);
+  assert.equal(openclaw[0].label, "找不到命令");
+  assert.match(openclaw[0].detail, /PATH/);
   assert.equal(openclaw[1].detail, "OpenClaw 工作区还没有配置");
   assert.equal(tool.fixes[1].kind, "guide");
   const plan = cli.normalizeCliPlan({ planId: "p", kind: "self", steps: [{ type: "write", path: "~/.codex/rules/default.rules", diff: "+ x" }], notes: ["n"], skipped: [{ agentId: "hermes", reason: "无需放行" }] });

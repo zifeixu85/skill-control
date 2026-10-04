@@ -1,23 +1,20 @@
 "use client";
 
-import { useState } from "react";
 import { isUnsupported, useResource } from "../../../hooks/useResource";
 import { api } from "../../../lib/api";
 import { KIND_LABELS, STATE_LABELS, TIER_LABELS, type LibraryAction } from "../../../lib/library";
 import type { SkillView } from "../../../lib/skill-model";
 import { useNav } from "../../providers/NavProvider";
 import { AgentAvatar } from "../../ui/Avatar";
-import { PlanReview, type PlanRequest } from "../library/PlanReview";
 
 /** 技能库 actions for one skill; every action opens the plan review before anything is written. */
 export function LibraryActions({ view }: { view: SkillView }) {
   const library = useResource("library", () => api.library());
-  const { go } = useNav();
-  const [request, setRequest] = useState<PlanRequest | null>(null);
+  const { go, setLibraryRequest } = useNav();
   if (!library.data || isUnsupported(library.error)) return null;
   const entry = library.data.entries.find((item) => item.name.toLowerCase() === view.techName.toLowerCase());
   const ask = (action: LibraryAction, title: string, agentId?: string) =>
-    setRequest({ action, skill: view.techName, agents: agentId ? [agentId] : undefined, title });
+    setLibraryRequest({ action, skill: view.techName, agents: agentId ? [agentId] : undefined, title });
 
   return (
     <section>
@@ -77,7 +74,6 @@ export function LibraryActions({ view }: { view: SkillView }) {
           </button>
         </div>
       )}
-      {request ? <PlanReview request={request} onClose={() => setRequest(null)} /> : null}
     </section>
   );
 }

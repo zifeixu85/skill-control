@@ -131,7 +131,7 @@ export const STATE_LABELS: Record<FanoutState, string> = {
 };
 
 export const ITEM_KIND_LABELS: Record<string, string> = {
-  adopt: "收编反向链接",
+  adopt: "收编进技能库",
   dedupe: "Codex 去重",
   link: "改为链接",
   conflict: "冲突",
@@ -165,7 +165,7 @@ export const CHOICE_LABELS: Record<string, { title: string; detail: string }> = 
 export const STEP_TYPE_LABELS: Record<string, string> = {
   backup: "备份",
   move: "移动",
-  stash: "移到备份",
+  stash: "移走（可恢复）",
   unlink: "删除链接",
   link: "建立链接",
   write: "改写文件",

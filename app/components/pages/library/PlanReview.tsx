@@ -10,23 +10,18 @@ import {
   CHOICE_LABELS,
   enabledChoice,
   ITEM_KIND_LABELS,
-  type LibraryAction,
   type LibraryApplyResult,
   type LibraryPlan,
   type LibraryPlanItem,
 } from "../../../lib/library";
 import { useData } from "../../providers/DataProvider";
+import type { LibraryRequest } from "../../providers/NavProvider";
 import { useToast } from "../../providers/ToastProvider";
 import { AgentAvatar } from "../../ui/Avatar";
 import { ApplyOutcome } from "./ApplyOutcome";
 import { StepList } from "./StepList";
 
-export interface PlanRequest {
-  action: LibraryAction;
-  skill?: string;
-  agents?: string[];
-  title: string;
-}
+export type PlanRequest = LibraryRequest;
 
 function ItemRow({
   item,

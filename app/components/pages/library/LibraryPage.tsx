@@ -7,7 +7,8 @@ import { api, errorMessage } from "../../../lib/api";
 import { CheckIcon, WarnIcon } from "../../icons";
 import { EmptyState, Loading, SectionHeading, TopBar } from "../../ui/basics";
 import { AgentStrip, EntriesTable, TrashList } from "./LibraryParts";
-import { PlanReview, type PlanRequest } from "./PlanReview";
+import { useNav } from "../../providers/NavProvider";
+import type { PlanRequest } from "./PlanReview";
 
 export const LIBRARY_KEY = "library";
 
@@ -16,7 +17,8 @@ const BATCH: PlanRequest = { action: "batch", title: "一键整理技能库" };
 export function LibraryPage() {
   const library = useResource(LIBRARY_KEY, () => api.library());
   const scrollRef = useScrollMemory<HTMLDivElement>("library");
-  const [reviewing, setReviewing] = useState(false);
+  const { setLibraryRequest } = useNav();
+  const review = () => setLibraryRequest(BATCH);
   const [allAgents, setAllAgents] = useState(false);
   const data = library.data;
   const shownAgents = data ? data.agents.filter((agent) => allAgents || !agent.collapsed) : [];
@@ -28,7 +30,7 @@ export function LibraryPage() {
         title={<span id="page-title">技能库</span>}
         sub="技能库 = ~/.agents/skills。装一次，常用 Agent 都能用；每个 Agent 按自己的方式读取它"
       >
-        <button type="button" className="btn primary" disabled={!data} onClick={() => setReviewing(true)}>
+        <button type="button" className="btn primary" disabled={!data} onClick={review}>
           一键整理
         </button>
       </TopBar>
@@ -77,7 +79,7 @@ export function LibraryPage() {
                         {issue.names.length ? `（${issue.names.slice(0, 6).join("、")}${issue.names.length > 6 ? " 等" : ""}）` : ""}
                       </span>
                     </div>
-                    <button type="button" className="btn sm" onClick={() => setReviewing(true)}>
+                    <button type="button" className="btn sm" onClick={review}>
                       整理
                     </button>
                   </div>
@@ -100,7 +102,6 @@ export function LibraryPage() {
           </>
         )}
       </div>
-      {reviewing ? <PlanReview request={BATCH} onClose={() => setReviewing(false)} /> : null}
     </section>
   );
 }
