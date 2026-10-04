@@ -101,6 +101,8 @@ export function flowView<P, R>(
   };
 }
 
+const STALE_HINT = /重新生成|有变化|已过期|已变化|changed|expired/iu;
+
 /** Structural check, so errors from any copy of the client module are recognized. */
 function asApiError(error: unknown): ApiError | null {
   return error instanceof Error && error.name === "ApiError" && typeof (error as ApiError).status === "number" ? (error as ApiError) : null;
@@ -111,7 +113,10 @@ export function classifyApplyError(error: unknown): ApplyFailure {
   if (apiError) {
     // No answer (connection lost or timed out): the write may or may not have happened.
     if (apiError.status === 0) return "unknown";
-    if (apiError.status === 409 || (apiError.status === 404 && !apiError.unsupported)) return "stale";
+    if (apiError.status === 404 && !apiError.unsupported) return "stale";
+    // 409 is either "changed since the plan" (re-plan) or a refusal such as offline mode,
+    // which must stay an error instead of silently producing the same plan again.
+    if (apiError.status === 409 && STALE_HINT.test(apiError.message)) return "stale";
   }
   return "failed";
 }
@@ -121,5 +126,8 @@ export const UNKNOWN_OUTCOME = "连接中断，不知道这次有没有写入。
 export function applyFailureMessage(failure: ApplyFailure, error: unknown, fallback: string): string {
   if (failure === "unknown") return UNKNOWN_OUTCOME;
   const message = error instanceof Error && error.message ? error.message : fallback;
-  return failure === "stale" ? `${message.replace(/[。.]?$/, "。")}已重新生成计划，请再看一遍。` : message;
+  if (failure !== "stale") return message;
+  // The service says "…，请重新生成。"; we already did, so say that instead.
+  const reason = message.replace(/[，,]?\s*请重新生成[^。]*。?$/u, "").replace(/[。.]?$/u, "。");
+  return `${reason}已重新生成计划，请再看一遍。`;
 }

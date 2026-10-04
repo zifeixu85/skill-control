@@ -100,7 +100,12 @@ export function RestoreDialog({ historyId, onClose }: { historyId: string; onClo
             <InstallSteps steps={plan.steps} />
           )}
           {plan.warnings
-            .filter((warning) => !unitMode || !plan.units.some((unit) => warning.startsWith(`${unit.title}：`)))
+            // Unit rows already show their own conflict or reason.
+            .filter(
+              (warning) =>
+                !unitMode ||
+                !plan.units.some((unit) => warning.startsWith(`${unit.title}：`) || warning === unit.conflict || warning === unit.unrestorable),
+            )
             .map((warning) => (
               <p key={warning} className="plan-warning">
                 {warning}

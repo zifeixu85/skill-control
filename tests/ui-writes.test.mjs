@@ -117,7 +117,8 @@ test("plan flow: no double submit, empty plan ids and expired plans never apply"
 
 test("plan flow: 404 / 409 re-plan with a notice, lost connections are 'unknown', other errors stay errors", () => {
   assert.equal(flow.classifyApplyError(new ApiError("计划不存在或已过期", 404)), "stale");
-  assert.equal(flow.classifyApplyError(new ApiError("有变化", 409)), "stale");
+  assert.equal(flow.classifyApplyError(new ApiError("~/x 在生成计划后有变化，请重新生成恢复计划。", 409)), "stale");
+  assert.equal(flow.classifyApplyError(new ApiError("离线模式下不执行会联网的更新命令。", 409)), "failed", "a refusal is not a stale plan");
   assert.equal(flow.classifyApplyError(new ApiError("接口不存在。", 404, true)), "failed", "a missing route is not a stale plan");
   assert.equal(flow.classifyApplyError(new ApiError("连不上", 0)), "unknown");
   assert.equal(flow.classifyApplyError(new ApiError("超时", 0, false, true)), "unknown");
@@ -129,7 +130,11 @@ test("plan flow: 404 / 409 re-plan with a notice, lost connections are 'unknown'
   const stale = flow.flowReducer(started, { type: "apply-failed", failure: "stale", message: flow.applyFailureMessage("stale", new ApiError("计划不存在或已过期（10 分钟），请重新生成。", 404), "x") });
   assert.equal(stale.plan, null);
   assert.equal(stale.applying, false);
-  assert.match(stale.notice, /已重新生成计划/);
+  assert.equal(stale.notice, "计划不存在或已过期（10 分钟）。已重新生成计划，请再看一遍。");
+  assert.equal(
+    flow.applyFailureMessage("stale", new ApiError("~/.claude/skills/x 在生成计划后有变化，请重新生成恢复计划。", 409), "x"),
+    "~/.claude/skills/x 在生成计划后有变化。已重新生成计划，请再看一遍。",
+  );
   assert.equal(stale.error, "");
   assert.equal(flow.flowView(stale, key(1), idOf).planning, true, "waits for the new plan");
 
