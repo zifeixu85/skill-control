@@ -57,6 +57,9 @@ test("indexing state drives the progress banner; finished indexes never show it"
   const refreshing = usage.normalizeUsageStatus({ state: "indexing", indexedFiles: 5, totalFiles: 5 });
   assert.equal(usage.isIndexing(refreshing, { complete: true, updatedAt: "x", indexedFiles: 5, totalFiles: 5 }), false);
   assert.equal(usage.normalizeUsageStatus({ state: "weird" }).state, "unknown");
+  assert.equal(usage.shouldPollUsage(summary.status, summary.index), true);
+  assert.equal(usage.shouldPollUsage(usage.normalizeUsageStatus({ state: "partial" }), null), false, "partial does not poll");
+  assert.equal(usage.isIndexing(usage.normalizeUsageStatus({ state: "partial" }), null), true, "but still shows progress");
   assert.equal(usage.normalizeUsageStatus(null), null);
 });
 

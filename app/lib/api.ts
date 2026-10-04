@@ -128,12 +128,34 @@ async function sendJson<T>(
 
 const force = (value?: boolean) => (value ? { force: 1 } : undefined);
 
+const isList = (value: unknown) => Array.isArray(value);
+
+/** Guards the core payloads so a mismatched service shows one clear message, not TypeErrors. */
+function expectShape<T>(value: unknown, what: string, ...lists: string[]): T {
+  const record = value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+  if (!record || !lists.every((key) => isList(record[key]))) {
+    throw new ApiError(`服务版本不匹配：本地服务返回的${what}格式和界面不一致。请把 Skill Control 更新到同一版本。`, 200);
+  }
+  return value as T;
+}
+
 export const api = {
-  scan: (refresh?: boolean) => getJson<ScanData>("/api/scan", force(refresh)),
-  config: () => getJson<ManagerConfig>("/api/config"),
-  saveConfig: (config: ManagerConfig) => sendJson<ManagerConfig>("PUT", "/api/config", config),
-  integrations: (refresh?: boolean) => getJson<IntegrationsData>("/api/integrations", force(refresh)),
-  capabilities: (refresh?: boolean) => getJson<CapabilityCatalog>("/api/capabilities", force(refresh)),
+  scan: async (refresh?: boolean) =>
+    expectShape<ScanData>(await getJson<unknown>("/api/scan", force(refresh)), "技能扫描", "skills", "agents"),
+  config: async () => expectShape<ManagerConfig>(await getJson<unknown>("/api/config"), "配置", "agents", "visibleAgentIds"),
+  saveConfig: async (config: ManagerConfig) =>
+    expectShape<ManagerConfig>(await sendJson<unknown>("PUT", "/api/config", config), "配置", "agents", "visibleAgentIds"),
+  integrations: async (refresh?: boolean) =>
+    expectShape<IntegrationsData>(
+      await getJson<unknown>("/api/integrations", force(refresh)),
+      "插件与 MCP",
+      "plugins",
+      "connectors",
+      "mcpServers",
+      "mcpMatrix",
+    ),
+  capabilities: async (refresh?: boolean) =>
+    expectShape<CapabilityCatalog>(await getJson<unknown>("/api/capabilities", force(refresh)), "专家", "products"),
   activity: (refresh?: boolean) => getJson<AgentActivity>("/api/agents/activity", force(refresh)),
   configDetail: (kind: string, id: string, instance?: string) =>
     getJson<ConfigDetail>("/api/config-detail", { kind, id, instance }),
@@ -145,6 +167,7 @@ export const api = {
     getJson<FileListing>("/api/capability-files", { capabilityId }),
   capabilityFile: (capabilityId: string, path: string) =>
     getJson<FileContent>("/api/capability-file", { capabilityId, path }),
+  importFile: (importId: string, path: string) => getJson<FileContent>("/api/import-file", { importId, path }),
 
   planSync: (input: { sourceInstanceId: string; targetAgentIds: string[]; mode: SyncMode }) =>
     sendJson<SyncPlan>("POST", "/api/sync", { ...input, dryRun: true }),
@@ -208,6 +231,7 @@ export const assetUrl = {
   capability: (capabilityId: string, path: string) =>
     url("/api/capability-asset", { capabilityId, path }),
   plugin: (id: string) => url("/api/plugin-asset", { id }),
+  importAsset: (importId: string, path: string) => url("/api/import-asset", { importId, path }),
   expertAvatar: (id: string) => url("/api/expert-avatar", { id }),
   agentIcon: (id: string) => url("/api/agent-icon", { id }),
 };

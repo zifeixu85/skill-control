@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { api } from "../lib/api";
 
 /**
@@ -10,51 +10,79 @@ import { api } from "../lib/api";
  */
 export type ImageBlobState = { status: "loading" } | { status: "ready"; url: string } | { status: "failed" };
 
+interface Entry {
+  state: ImageBlobState;
+  failedAt: number;
+}
+
 const LOADING: ImageBlobState = { status: "loading" };
 const FAILED: ImageBlobState = { status: "failed" };
-const cache = new Map<string, ImageBlobState>();
-const listeners = new Set<() => void>();
+/** A failed icon (e.g. app not installed) is retried after this long. */
+const RETRY_FAILED_MS = 5 * 60_000;
 const LIMIT = 300;
+
+const cache = new Map<string, Entry>();
+const subscribers = new Map<string, number>();
+const listeners = new Set<() => void>();
 
 function notify() {
   listeners.forEach((listener) => listener());
 }
 
-function ensure(src: string) {
-  if (cache.has(src)) return;
-  if (cache.size >= LIMIT) {
-    for (const [key, value] of cache) {
-      if (value.status === "ready") URL.revokeObjectURL(value.url);
-      cache.delete(key);
-      if (cache.size < LIMIT / 2) break;
-    }
+/** Drops (and revokes) the oldest images nobody is showing. */
+function evict() {
+  if (cache.size <= LIMIT) return;
+  for (const [src, entry] of cache) {
+    if (cache.size <= LIMIT * 0.75) break;
+    if ((subscribers.get(src) || 0) > 0 || entry.state.status === "loading") continue;
+    if (entry.state.status === "ready") URL.revokeObjectURL(entry.state.url);
+    cache.delete(src);
   }
-  cache.set(src, LOADING);
+}
+
+function ensure(src: string) {
+  const existing = cache.get(src);
+  if (existing && !(existing.state.status === "failed" && Date.now() - existing.failedAt > RETRY_FAILED_MS)) return;
+  cache.set(src, { state: LOADING, failedAt: 0 });
+  evict();
   api.fetchBlob(src).then(
     (blob) => {
-      cache.set(src, blob.type.startsWith("image/") ? { status: "ready", url: URL.createObjectURL(blob) } : FAILED);
+      cache.set(
+        src,
+        blob.type.startsWith("image/")
+          ? { state: { status: "ready", url: URL.createObjectURL(blob) }, failedAt: 0 }
+          : { state: FAILED, failedAt: Date.now() },
+      );
       notify();
     },
     () => {
-      cache.set(src, FAILED);
+      cache.set(src, { state: FAILED, failedAt: Date.now() });
       notify();
     },
   );
 }
 
-function subscribe(listener: () => void) {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
 export function useImageBlob(src: string | null): ImageBlobState {
+  const subscribe = useCallback(
+    (listener: () => void) => {
+      listeners.add(listener);
+      if (src) subscribers.set(src, (subscribers.get(src) || 0) + 1);
+      return () => {
+        listeners.delete(listener);
+        if (src) subscribers.set(src, Math.max(0, (subscribers.get(src) || 1) - 1));
+      };
+    },
+    [src],
+  );
   const state = useSyncExternalStore(
     subscribe,
-    () => (src ? (cache.get(src) ?? LOADING) : FAILED),
+    () => (src ? (cache.get(src)?.state ?? LOADING) : FAILED),
     () => (src ? LOADING : FAILED),
   );
+  // Also re-requests when the entry was evicted or a failure has aged out.
+  const missing = Boolean(src) && state === LOADING && !cache.has(src || "");
   useEffect(() => {
     if (src) ensure(src);
-  }, [src]);
+  }, [src, missing]);
   return state;
 }

@@ -12,7 +12,7 @@ import { AgentPicker } from "./AgentPicker";
 
 /** First run: config.primaryAgentIds is null. Saving writes it through PUT /api/config. */
 export function OnboardingSheet({ onDismiss }: { onDismiss: () => void }) {
-  const { scan, config, saveConfig, agentName } = useData();
+  const { scan, config, updateConfig, agentName } = useData();
   const toast = useToast();
   const suggested = (scan.data?.suggestedPrimaryAgentIds || []).filter((id) =>
     scan.data?.agents.some((agent) => agent.id === id),
@@ -31,7 +31,7 @@ export function OnboardingSheet({ onDismiss }: { onDismiss: () => void }) {
     setSaving(true);
     setError("");
     try {
-      await saveConfig({ ...config.data, primaryAgentIds: selected });
+      await updateConfig({ primaryAgentIds: selected });
       toast.show(`已设为常用：${joinNames(selected.map(agentName))}`);
     } catch (saveError) {
       setError(errorMessage(saveError, "保存失败。"));
@@ -50,7 +50,7 @@ export function OnboardingSheet({ onDismiss }: { onDismiss: () => void }) {
             : "还没有足够的会话记录来推荐，先挑你最常用的就好。"}
           Skill Control 会围绕你选的 Agent 整理技能，其他 Agent 照常显示，但不会提醒你安装。
         </p>
-        <AgentPicker name="primary-onboarding" selected={selected} onChange={setSelected} onLimit={(message) => toast.show(message)} />
+        <AgentPicker name="primary-onboarding" selected={selected} onChange={setSelected} onLimit={(message) => toast.show(message)} disabled={saving} />
         {error ? (
           <p className="form-error" role="alert">
             {error}

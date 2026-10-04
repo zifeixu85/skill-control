@@ -79,7 +79,12 @@ export function resolveRelativePath(fromFile: string, href: string): string | nu
   if (!href || /^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith("//") || href.startsWith("#")) {
     return null;
   }
-  const target = decodeURIComponent(href.split("#")[0].split("?")[0]);
+  let target: string;
+  try {
+    target = decodeURIComponent(href.split("#")[0].split("?")[0]);
+  } catch {
+    return null;
+  }
   const base = target.startsWith("/") ? [] : fromFile.split("/").slice(0, -1);
   const parts = [...base];
   for (const part of target.split("/")) {

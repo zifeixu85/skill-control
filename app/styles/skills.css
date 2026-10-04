@@ -1,18 +1,54 @@
 /* 技能: filter chips, table with per-Agent slots, inspector panel and install plan. */
 
 .split {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 0;
   min-height: 0;
   transition: grid-template-columns 0.25s var(--ease);
 }
 .split.open {
-  grid-template-columns: minmax(0, 1fr) var(--inspector-width);
+  grid-template-columns: minmax(0, 1fr) var(--inspector-width, 440px);
 }
-.split.open.wide {
-  grid-template-columns: minmax(0, 1fr) var(--inspector-wide);
+body.resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+body.resizing .split {
+  transition: none;
+}
+.inspector-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: var(--inspector-width, 440px);
+  width: 10px;
+  transform: translateX(5px);
+  cursor: col-resize;
+  z-index: 3;
+  touch-action: none;
+}
+.inspector-resizer::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background 0.15s ease;
+}
+.inspector-resizer:hover::after,
+.inspector-resizer:focus-visible::after,
+body.resizing .inspector-resizer::after {
+  background: var(--accent);
+}
+.inspector-resizer:focus-visible {
+  box-shadow: none;
 }
 .split-list {
+  container-type: inline-size;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
@@ -59,6 +95,7 @@
 }
 
 .table {
+  --slot-w: 118px;
   background: var(--panel);
   border-radius: var(--r-card);
   box-shadow: 0 0 0 1px var(--line-2);
@@ -66,8 +103,26 @@
 .thead,
 .row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--cols) 88px;
+  grid-template-columns: minmax(240px, 1fr) var(--cols) 88px;
   align-items: center;
+}
+/* A narrow list first drops the description line and slims the Agent columns, keeping names readable. */
+@container (max-width: 720px) {
+  .table {
+    --slot-w: 64px;
+  }
+  .thead .agname {
+    display: none;
+  }
+}
+@container (max-width: 620px) {
+  .row .desc {
+    display: none;
+  }
+  .thead,
+  .row {
+    grid-template-columns: minmax(200px, 1fr) var(--cols) 64px;
+  }
 }
 .thead {
   position: sticky;
@@ -268,12 +323,6 @@
   height: 8px;
   border-radius: 50%;
   background: var(--warn);
-}
-
-@media (max-width: 1180px) {
-  :root {
-    --inspector-wide: min(560px, 58vw);
-  }
 }
 
 @media (max-width: 880px) {

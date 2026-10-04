@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { usePersistent } from "../../hooks/usePersistent";
 import { useScrollMemory } from "../../hooks/useScrollMemory";
 import { errorMessage } from "../../lib/api";
@@ -19,37 +18,27 @@ export const themeStore = persistentStore<ThemeChoice>("theme", "system", (value
 );
 
 function useConfigWriter() {
-  const { config, saveConfig } = useData();
+  const { updateConfig, savingConfig } = useData();
   const toast = useToast();
-  const [saving, setSaving] = useState(false);
   const write = async (patch: Partial<ManagerConfig>, message: string, undoable = true) => {
-    const previous = config.data;
-    if (!previous) return;
-    setSaving(true);
     try {
-      await saveConfig({ ...previous, ...patch });
+      const { previous } = await updateConfig(patch);
       toast.show(message, {
         action: undoable
           ? {
               label: "撤销",
               run: async () => {
-                try {
-                  await saveConfig(previous);
-                  toast.show("已撤销");
-                } catch (error) {
-                  toast.show(errorMessage(error, "撤销失败。"), { tone: "error" });
-                }
+                await updateConfig(previous);
+                toast.show("已撤销");
               },
             }
           : undefined,
       });
     } catch (error) {
       toast.show(errorMessage(error, "保存失败。"), { tone: "error" });
-    } finally {
-      setSaving(false);
     }
   };
-  return { write, saving };
+  return { write, saving: savingConfig };
 }
 
 function Choice<T extends string>({
@@ -105,6 +94,7 @@ export function SettingsPage() {
                 selected={primary}
                 onChange={(next) => void write({ primaryAgentIds: next }, `已设为常用：${joinNames(next.map(agentName))}`)}
                 onLimit={(message) => toast.show(message)}
+                disabled={saving}
               />
             </section>
             <section className="set-block" aria-labelledby="set-mode">
@@ -189,7 +179,7 @@ export function SettingsPage() {
                   )}
               </div>
             </section>
-            {integrations.data?.relatedProducts.length ? (
+            {integrations.data?.relatedProducts?.length ? (
               <section className="set-block" aria-labelledby="set-related">
                 <h2 id="set-related">也检测到这些相关产品</h2>
                 <p>它们不是 Agent 本身，Skill Control 只显示，不改动。</p>

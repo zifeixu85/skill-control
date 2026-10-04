@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { pluginConnectors, pluginDetailId, pluginState } from "../../lib/plugins";
+import { componentsOf, pluginConnectors, pluginDetailId, pluginState } from "../../lib/plugins";
 import { baseName, formatMonthDay } from "../../lib/format";
 import type { Plugin } from "../../lib/types";
 import { ConfigDetailView } from "../files/ConfigDetailView";
@@ -31,7 +31,7 @@ function Overview({ plugin, variants }: { plugin: Plugin; variants: Plugin[] }) 
   const { integrations, agentName } = useData();
   const state = pluginState(plugin);
   const connectors = pluginConnectors(plugin, integrations.data?.connectors || []);
-  const components = plugin.components;
+  const components = componentsOf(plugin);
   return (
     <>
       <p className="desc">{plugin.longDescription || plugin.shortDescription || "没有介绍"}</p>
@@ -67,9 +67,9 @@ function Overview({ plugin, variants }: { plugin: Plugin; variants: Plugin[] }) 
         </section>
       ) : null}
       <NameList title="MCP 服务" names={components.mcpServers.map((server) => server.name)} />
-      <NameList title="子代理" names={components.agents || []} />
-      <NameList title="命令" names={components.commands || []} />
-      <NameList title="频道" names={components.channels || []} />
+      <NameList title="子代理" names={components.agents} />
+      <NameList title="命令" names={components.commands} />
+      <NameList title="频道" names={components.channels} />
       {components.hooks ? <p className="muted small">这个插件带有 Hook，会在 Agent 的特定时机自动运行。</p> : null}
       <section>
         <h3>来源</h3>

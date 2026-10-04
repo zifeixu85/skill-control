@@ -100,6 +100,21 @@ test("frontmatter: every key in order, nested values as YAML, invalid YAML repor
   assert.equal(frontmatter.splitFrontmatter("# No header").frontmatter, null);
 });
 
+test("frontmatter: YAML alias bombs stay small and long values are capped", () => {
+  const bomb = [
+    "a: &a [x, x, x, x, x, x, x, x, x]",
+    "b: &b [*a, *a, *a, *a, *a, *a, *a, *a, *a]",
+    "c: &c [*b, *b, *b, *b, *b, *b, *b, *b, *b]",
+    "d: &d [*c, *c, *c, *c, *c, *c, *c, *c, *c]",
+    "e: [*d, *d, *d, *d, *d, *d, *d, *d, *d]",
+  ].join("\n");
+  const rows = frontmatter.frontmatterRows(bomb);
+  const total = rows.reduce((sum, row) => sum + row.value.length, 0);
+  assert.ok(total < 5 * (frontmatter.VALUE_LIMIT + 40), `rendered ${total} characters`);
+  const long = frontmatter.frontmatterRows(`text: ${"x".repeat(30_000)}`);
+  assert.ok(long[0].value.endsWith(frontmatter.TRUNCATED_NOTE));
+});
+
 test("file tree nests paths, puts SKILL.md first and resolves relative links safely", () => {
   const entry = (path, type = "file") => ({ path, name: path.split("/").pop(), type, size: 1, modifiedAt: "", language: null, linkTarget: null });
   const nodes = tree.buildFileTree([entry("scripts/run.py"), entry("README.md"), entry("SKILL.md"), entry("assets", "directory"), entry("assets/logo.png")]);
@@ -112,6 +127,7 @@ test("file tree nests paths, puts SKILL.md first and resolves relative links saf
   assert.equal(tree.resolveRelativePath("SKILL.md", "../../etc/passwd"), null);
   assert.equal(tree.resolveRelativePath("SKILL.md", "https://example.com/x.png"), null);
   assert.equal(tree.resolveRelativePath("SKILL.md", "#heading"), null);
+  assert.equal(tree.resolveRelativePath("SKILL.md", "%zz"), null, "malformed escapes do not throw");
   assert.deepEqual(tree.ancestorPaths("a/b/c.md"), ["a", "a/b"]);
 });
 

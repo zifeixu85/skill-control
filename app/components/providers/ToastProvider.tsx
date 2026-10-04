@@ -53,7 +53,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
                 onClick={() => {
                   const action = toast.action;
                   setToast(null);
-                  void action?.run();
+                  if (!action) return;
+                  Promise.resolve()
+                    .then(() => action.run())
+                    .catch((error: unknown) =>
+                      show(error instanceof Error && error.message ? error.message : "操作失败。", { tone: "error" }),
+                    );
                 }}
               >
                 {toast.action.label}

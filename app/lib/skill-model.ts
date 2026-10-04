@@ -85,7 +85,7 @@ export function buildPluginSkillIndex(plugins: Plugin[]): Map<string, Map<string
   for (const plugin of plugins) {
     if (plugin.enabled !== true) continue;
     const byName = index.get(plugin.agentId) || new Map<string, string>();
-    for (const skillPath of plugin.components?.skills || []) {
+    for (const skillPath of Array.isArray(plugin.components?.skills) ? plugin.components.skills : []) {
       const name = baseName(skillPath).toLowerCase();
       if (name && name !== "skills" && !byName.has(name)) {
         byName.set(name, plugin.displayName || plugin.name);

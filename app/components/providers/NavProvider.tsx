@@ -39,6 +39,14 @@ export interface Nav {
 
 const NavContext = createContext<Nav | null>(null);
 
+/** A skill to scroll into view once the skills list mounts (set by go(..., { skillId })). */
+let revealTarget: string | null = null;
+export function takeRevealTarget(): string | null {
+  const target = revealTarget;
+  revealTarget = null;
+  return target;
+}
+
 export function NavProvider({ children }: { children: ReactNode }) {
   const [routeText, setRouteText] = usePersistent(routeStore);
   const [skillFilter, setSkillFilter] = usePersistent(filterStore);
@@ -53,6 +61,12 @@ export function NavProvider({ children }: { children: ReactNode }) {
       setDrawer(null);
       if (options.filter !== undefined) setSkillFilter(options.filter);
       if (options.skillId !== undefined) setSelectedSkillId(options.skillId);
+      if (options.skillId) {
+        // Opening a specific skill: clear filters that could hide it and scroll to it.
+        if (options.filter === undefined) setSkillFilter("all");
+        setQuery("");
+        revealTarget = options.skillId;
+      }
     },
     [setRouteText, setSkillFilter],
   );

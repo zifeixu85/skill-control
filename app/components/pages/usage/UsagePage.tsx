@@ -7,7 +7,7 @@ import { isUnsupported, useResource } from "../../../hooks/useResource";
 import { useScrollMemory } from "../../../hooks/useScrollMemory";
 import { api, errorMessage } from "../../../lib/api";
 import { formatCompact, formatRelative } from "../../../lib/format";
-import { CONFIDENCE_HINTS, confidenceLabel, isIndexing, localDate, type TopSkill, type UsageSummary } from "../../../lib/usage";
+import { CONFIDENCE_HINTS, confidenceLabel, isIndexing, localDate, shouldPollUsage, type TopSkill, type UsageSummary } from "../../../lib/usage";
 import { useData } from "../../providers/DataProvider";
 import { useNav } from "../../providers/NavProvider";
 import { AgentAvatar } from "../../ui/Avatar";
@@ -173,8 +173,7 @@ export function UsagePage() {
   const now = useNow();
   const summary = useResource(`usage:summary:${days}`, () => api.usageSummary(Number(days)));
   const data = summary.data;
-  const indexing = Boolean(data && isIndexing(data.status, data.index));
-  usePolling(indexing, () => void summary.reload(), 3_000);
+  usePolling(Boolean(data && shouldPollUsage(data.status, data.index)), () => void summary.reload(), 3_000);
   const unsupported = isUnsupported(summary.error);
   const updatedAt = data?.index?.updatedAt || data?.status?.updatedAt;
 

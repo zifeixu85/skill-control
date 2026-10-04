@@ -5,7 +5,7 @@ import { useNow } from "../../hooks/useNow";
 import { useScrollMemory } from "../../hooks/useScrollMemory";
 import { errorMessage } from "../../lib/api";
 import { formatRelative } from "../../lib/format";
-import { mergePlugins } from "../../lib/plugins";
+import { mergePlugins, pluginConnectors } from "../../lib/plugins";
 import type { Connector } from "../../lib/types";
 import { useData } from "../providers/DataProvider";
 import { useNav } from "../providers/NavProvider";
@@ -15,9 +15,7 @@ import { EmptyState, Loading, SectionHeading, TopBar } from "../ui/basics";
 function ConnectorRow({ connector }: { connector: Connector }) {
   const { integrations } = useData();
   const plugins = mergePlugins(integrations.data?.plugins || []);
-  const provider = plugins.find((plugin) =>
-    connector.providedByPlugins.some((id) => id === plugin.id || id.split("@")[0] === plugin.name.toLowerCase()),
-  );
+  const provider = plugins.find((plugin) => pluginConnectors(plugin, [connector]).length > 0);
   return (
     <div className="crow">
       {provider ? <PluginLogo plugin={provider} /> : <LetterLogo text={connector.name} />}

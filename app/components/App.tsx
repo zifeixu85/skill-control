@@ -18,6 +18,7 @@ import { NavProvider, useNav } from "./providers/NavProvider";
 import { ToastProvider } from "./providers/ToastProvider";
 import { OnboardingSheet } from "./shell/OnboardingSheet";
 import { Sidebar } from "./shell/Sidebar";
+import { ErrorBoundary } from "./shell/ErrorBoundary";
 import { ServiceGate } from "./shell/ServiceGate";
 
 function focusSearchSoon() {
@@ -60,7 +61,7 @@ function CurrentPage() {
 }
 
 function Shell() {
-  const { route, go } = useNav();
+  const { route, go, drawer } = useNav();
   const { needsOnboarding, scan } = useData();
   const [theme] = usePersistent(themeStore);
   const [dismissed, setDismissed] = useState(() =>
@@ -86,14 +87,20 @@ function Shell() {
   }, [go]);
 
   const showOnboarding = needsOnboarding && !dismissed && Boolean(scan.data);
+  const pageKey = route.page === "agent" ? `agent:${route.agentId}` : route.page;
+  const drawerKey = drawer ? `${drawer.kind}:${drawer.id}` : "none";
   return (
     <div className="app-shell" data-page={route.page}>
       <Sidebar />
       <main className="main" id="main" aria-busy={!scan.data}>
         <ServiceGate>
-          <CurrentPage key={route.page === "agent" ? `agent:${route.agentId}` : route.page} />
+          <ErrorBoundary key={pageKey}>
+            <CurrentPage key={pageKey} />
+          </ErrorBoundary>
         </ServiceGate>
-        <DrawerHost />
+        <ErrorBoundary quiet key={drawerKey}>
+          <DrawerHost />
+        </ErrorBoundary>
       </main>
       {showOnboarding ? (
         <OnboardingSheet

@@ -4,7 +4,7 @@ import type { CSSProperties } from "react";
 import { agentMeta, tintFor } from "../../../lib/agents";
 import { formatCompact, shortTitle } from "../../../lib/format";
 import type { PageId } from "../../../lib/navigation";
-import { mergePlugins } from "../../../lib/plugins";
+import { componentsOf, mergePlugins } from "../../../lib/plugins";
 import type { ActivityAgent } from "../../../lib/types";
 import { useData } from "../../providers/DataProvider";
 import { useNav } from "../../providers/NavProvider";
@@ -47,7 +47,7 @@ export function AgentCard({ agentId }: { agentId: string }) {
       : agentId === "claude"
         ? {
             label: "子代理",
-            value: plugins.reduce((sum, plugin) => sum + (plugin.components.agents?.length || 0), 0),
+            value: plugins.reduce((sum, plugin) => sum + componentsOf(plugin).agents.length, 0),
           }
         : agentId === "workbuddy"
           ? { label: "专家", value: profiles.length, onClick: goTo("experts") }

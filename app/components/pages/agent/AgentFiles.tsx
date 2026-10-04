@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNow } from "../../../hooks/useNow";
 import { isUnsupported, useResource } from "../../../hooks/useResource";
 import { AGENT_FILE_KIND_LABELS, type AgentFileEntry, type AgentFiles as AgentFilesData } from "../../../lib/agent-extras";
 import { api, errorMessage } from "../../../lib/api";
+import { revealTop } from "../../../lib/dom";
 import { formatBytes, formatRelative } from "../../../lib/format";
 import { isMarkdownPath } from "../../../lib/file-tree";
 import { MarkdownFile } from "../../files/FileViewer";
@@ -86,6 +87,11 @@ export function AgentFiles({ agentId, agentName }: { agentId: string; agentName:
   const key = `agent-files:${agentId}:${scope.profile || ""}:${scope.agent || ""}`;
   const files = useResource(key, () => api.agentFiles(agentId, { profile: scope.profile, agentId: scope.agent }));
   const [selected, setSelected] = useState<string | null>(null);
+  const viewRef = useRef<HTMLDivElement>(null);
+  const open = (id: string) => {
+    setSelected(id);
+    revealTop(viewRef.current);
+  };
 
   if (isUnsupported(files.error)) {
     return <EmptyState title="本地服务还没有提供这项数据">更新 Skill Control 后可以查看 {agentName} 的指令、人格和记忆文件。</EmptyState>;
@@ -132,9 +138,11 @@ export function AgentFiles({ agentId, agentName }: { agentId: string; agentName:
         <div className="browser-wrap">
           <div className="browser">
             <div className="browser-tree">
-              <FileList data={data} selected={current?.id || null} onSelect={setSelected} />
+              <FileList data={data} selected={current?.id || null} onSelect={open} />
             </div>
-            <div className="browser-view">{current ? <AgentFileView key={current.id} file={current} /> : null}</div>
+            <div className="browser-view" ref={viewRef}>
+              {current ? <AgentFileView key={current.id} file={current} /> : null}
+            </div>
           </div>
         </div>
       )}

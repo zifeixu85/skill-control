@@ -222,6 +222,12 @@ export function isIndexing(status: UsageStatus | null, index?: UsageIndex | null
   return Boolean(index && !index.complete && index.totalFiles > 0);
 }
 
+/** Poll only while the background index is actively running (not when partial or done). */
+export function shouldPollUsage(status: UsageStatus | null, index?: UsageIndex | null): boolean {
+  if (index?.complete) return false;
+  return status?.state === "indexing";
+}
+
 export function indexProgress(status: UsageStatus | null, index?: UsageIndex | null) {
   const indexed = status?.indexedFiles || index?.indexedFiles || 0;
   const total = status?.totalFiles || index?.totalFiles || 0;

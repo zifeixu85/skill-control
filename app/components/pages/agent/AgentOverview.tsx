@@ -19,7 +19,7 @@ const PROFILE_TITLES: Record<string, string> = {
 };
 
 function SkillFolders({ agent }: { agent: ScanAgent }) {
-  const { config, saveConfig, primary } = useData();
+  const { config, updateConfig, primary, savingConfig } = useData();
   const toast = useToast();
   const [saving, setSaving] = useState(false);
   const scanned = agent.visible || primary.includes(agent.id);
@@ -27,7 +27,7 @@ function SkillFolders({ agent }: { agent: ScanAgent }) {
     if (!config.data) return;
     setSaving(true);
     try {
-      await saveConfig({ ...config.data, visibleAgentIds: [...new Set([...config.data.visibleAgentIds, agent.id])] });
+      await updateConfig({ visibleAgentIds: [...new Set([...config.data.visibleAgentIds, agent.id])] });
       toast.show(`开始读取 ${agent.name} 的技能`);
     } catch (error) {
       toast.show(errorMessage(error, "保存失败。"), { tone: "error" });
@@ -68,7 +68,7 @@ function SkillFolders({ agent }: { agent: ScanAgent }) {
       {!scanned ? (
         <div className="inline-note">
           <span>还没有读取 {agent.name} 的技能内容，所以它不会出现在技能列表里。</span>
-          <button type="button" className="btn sm" disabled={saving} onClick={startReading}>
+          <button type="button" className="btn sm" disabled={saving || savingConfig} onClick={startReading}>
             读取它的技能
           </button>
         </div>

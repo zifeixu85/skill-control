@@ -1,4 +1,19 @@
-import type { Connector, Plugin } from "./types";
+import type { Connector, Plugin, PluginComponents } from "./types";
+
+/** Components with every list present, whatever the scanner returned. */
+export function componentsOf(plugin: Plugin): Required<PluginComponents> {
+  const raw: Partial<PluginComponents> = plugin.components || {};
+  const list = <T,>(value: T[] | undefined): T[] => (Array.isArray(value) ? value : []);
+  return {
+    skills: list(raw.skills),
+    mcpServers: list(raw.mcpServers),
+    apps: list(raw.apps),
+    hooks: Boolean(raw.hooks),
+    agents: list(raw.agents),
+    commands: list(raw.commands),
+    channels: list(raw.channels),
+  };
+}
 
 export interface PluginView extends Plugin {
   /** Other cached versions or scopes merged under the same name. */
@@ -6,13 +21,13 @@ export interface PluginView extends Plugin {
 }
 
 function pluginScore(plugin: Plugin): number {
-  const components = plugin.components || { skills: [], mcpServers: [], apps: [] };
+  const components = componentsOf(plugin);
   return (
     (plugin.enabled === true ? 100 : 0) +
     (plugin.scope === "user" ? 10 : 0) +
-    (components.skills?.length || 0) +
-    (components.mcpServers?.length || 0) * 2 +
-    (components.apps?.length || 0)
+    components.skills.length +
+    components.mcpServers.length * 2 +
+    components.apps.length
   );
 }
 
@@ -54,23 +69,26 @@ export interface InsideTag {
 }
 
 export function pluginInside(plugin: Plugin): InsideTag[] {
-  const components = plugin.components || { skills: [], mcpServers: [], apps: [], hooks: false };
+  const components = componentsOf(plugin);
   const tags: InsideTag[] = [];
-  if (components.skills?.length) tags.push({ label: `${components.skills.length} 个技能`, tone: "mute" });
-  if (components.apps?.length) tags.push({ label: "连接器", tone: "info" });
-  if (components.mcpServers?.length) tags.push({ label: "MCP", tone: "mute" });
+  if (components.skills.length) tags.push({ label: `${components.skills.length} 个技能`, tone: "mute" });
+  if (components.apps.length) tags.push({ label: "连接器", tone: "info" });
+  if (components.mcpServers.length) tags.push({ label: "MCP", tone: "mute" });
   if (components.hooks) tags.push({ label: "Hook", tone: "mute" });
-  if (components.agents?.length) tags.push({ label: `${components.agents.length} 个子代理`, tone: "mute" });
-  if (components.commands?.length) tags.push({ label: `${components.commands.length} 个命令`, tone: "mute" });
-  if (components.channels?.length) tags.push({ label: `${components.channels.length} 个频道`, tone: "mute" });
+  if (components.agents.length) tags.push({ label: `${components.agents.length} 个子代理`, tone: "mute" });
+  if (components.commands.length) tags.push({ label: `${components.commands.length} 个命令`, tone: "mute" });
+  if (components.channels.length) tags.push({ label: `${components.channels.length} 个频道`, tone: "mute" });
   return tags;
 }
 
 export function pluginConnectors(plugin: Plugin, connectors: Connector[]): Connector[] {
-  return connectors.filter((connector) =>
-    connector.providedByPlugins.some(
-      (id) => id === plugin.id || id.split("@")[0] === plugin.name.toLowerCase(),
-    ),
+  const declared = new Set(componentsOf(plugin).apps.map((app) => app.connectorId).filter(Boolean));
+  return connectors.filter(
+    (connector) =>
+      declared.has(connector.id) ||
+      (connector.providedByPlugins || []).some(
+        (id) => id === plugin.id || id.split("@")[0] === plugin.name.toLowerCase(),
+      ),
   );
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { frontmatterRows, splitFrontmatter } from "../../lib/frontmatter";
 import { isMarkdownPath } from "../../lib/file-tree";
 import { formatBytes } from "../../lib/format";
@@ -13,7 +13,7 @@ import { MarkdownView } from "../ui/MarkdownView";
 export type ViewMode = "rendered" | "source";
 
 export function FrontmatterTable({ frontmatter }: { frontmatter: string }) {
-  const rows = frontmatterRows(frontmatter);
+  const rows = useMemo(() => frontmatterRows(frontmatter), [frontmatter]);
   if (rows === null) {
     return (
       <div className="fm">
@@ -52,7 +52,7 @@ export function MarkdownFile({
   onOpenFile?: (path: string) => void;
 }) {
   const [mode, setMode] = useState<ViewMode>("rendered");
-  const { frontmatter, body } = splitFrontmatter(text);
+  const { frontmatter, body } = useMemo(() => splitFrontmatter(text), [text]);
   return (
     <div className="md-file">
       <div className="viewer-tools">

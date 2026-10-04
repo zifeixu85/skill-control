@@ -205,10 +205,15 @@ export interface ManagerConfig {
   dismissedAgentIds: string[];
 }
 
+export interface PluginApp {
+  key: string;
+  connectorId?: string | null;
+}
+
 export interface PluginComponents {
   skills: string[];
   mcpServers: { name: string; transport?: string }[];
-  apps: string[];
+  apps: PluginApp[];
   hooks: boolean;
   agents?: string[];
   commands?: string[];

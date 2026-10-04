@@ -25,10 +25,12 @@ function CopyPicker({ view, value, onChange }: { view: SkillView; value: string;
   const { agents, agentName } = useData();
   const groups = groupCopies(view, agents.map((agent) => agent.id));
   if (groups.length < 2) return null;
+  // Several instances can share a directory; select the option of the group holding `value`.
+  const current = groups.find((group) => group.instances.some((instance) => instance.id === value)) || groups[0];
   return (
     <label className="field inline">
       <span>查看哪一份</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
+      <select value={current.instances[0].id} onChange={(event) => onChange(event.target.value)}>
         {groups.map((group) => (
           <option key={group.key} value={group.instances[0].id}>
             {group.agentIds.map(agentName).join("、")} · {group.path}

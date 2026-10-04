@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useResource } from "../../hooks/useResource";
 import { errorMessage } from "../../lib/api";
+import { revealTop } from "../../lib/dom";
 import { buildFileTree, defaultFilePath } from "../../lib/file-tree";
 import type { FileContent, FileListing } from "../../lib/types";
 import { EmptyState, Loading } from "../ui/basics";
@@ -31,11 +32,23 @@ function SelectedFile({ source, path, onOpenFile }: { source: FileSource; path: 
 export function FileBrowser({ source }: { source: FileSource }) {
   const listing = useResource(`files:${source.key}`, source.list);
   const [chosen, setChosen] = useState<string | null>(null);
+  const [missing, setMissing] = useState<string | null>(null);
+  const viewRef = useRef<HTMLDivElement>(null);
   const entries = useMemo(() => listing.data?.entries || [], [listing.data]);
   const tree = useMemo(() => buildFileTree(entries), [entries]);
   const fileCount = entries.filter((entry) => entry.type !== "directory").length;
   const selected =
     chosen && entries.some((entry) => entry.path === chosen) ? chosen : defaultFilePath(entries, source.preferred);
+
+  const open = (path: string) => {
+    if (!entries.some((entry) => entry.path === path && entry.type !== "directory")) {
+      setMissing(path);
+      return;
+    }
+    setMissing(null);
+    setChosen(path);
+    revealTop(viewRef.current);
+  };
 
   if (listing.status === "error") {
     return <EmptyState tone="error" title="读取文件列表失败">{errorMessage(listing.error)}</EmptyState>;
@@ -51,10 +64,20 @@ export function FileBrowser({ source }: { source: FileSource }) {
             <span>{fileCount} 个文件</span>
             {listing.data.truncated ? <span className="tag warn">只列出前 1,500 项</span> : null}
           </div>
-          <FileTree nodes={tree} selected={selected} onSelect={setChosen} expandAll={entries.length <= 40} />
+          <FileTree nodes={tree} selected={selected} onSelect={open} expandAll={entries.length <= 40} />
         </div>
-        <div className="browser-view">
-          {selected ? <SelectedFile key={selected} source={source} path={selected} onOpenFile={setChosen} /> : null}
+        <div className="browser-view" ref={viewRef}>
+          {missing ? (
+            <p className="inline-note warn" role="status">
+              <span>
+                链接指向的文件不存在：<code>{missing}</code>
+              </span>
+              <button type="button" className="btn sm ghost" onClick={() => setMissing(null)}>
+                知道了
+              </button>
+            </p>
+          ) : null}
+          {selected ? <SelectedFile key={selected} source={source} path={selected} onOpenFile={open} /> : null}
         </div>
       </div>
     </div>

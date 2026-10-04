@@ -1,10 +1,18 @@
 "use client";
 
-import { createContext, useCallback, useContext, useMemo, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useMemo, useRef, useState, type ReactNode } from "react";
 import { usePolling } from "../../hooks/usePolling";
-import { loadResource, reloadResources, useResource, type ResourceState } from "../../hooks/useResource";
+import {
+  cachedResourceKeys,
+  invalidateResources,
+  loadResource,
+  peekResource,
+  primeResource,
+  useResource,
+  type ResourceState,
+} from "../../hooks/useResource";
 import { agentMeta } from "../../lib/agents";
-import { api } from "../../lib/api";
+import { api, errorMessage } from "../../lib/api";
 import {
   buildPluginSkillIndex,
   buildSkillView,
@@ -19,7 +27,13 @@ import type {
   ScanAgent,
   ScanData,
 } from "../../lib/types";
-import { isIndexing, type UsageSummary } from "../../lib/usage";
+import { shouldPollUsage, type UsageSummary } from "../../lib/usage";
+
+export interface ConfigWrite {
+  saved: ManagerConfig;
+  /** The previous values of exactly the fields that were changed, for undo. */
+  previous: Partial<ManagerConfig>;
+}
 
 export interface AppData {
   scan: ResourceState<ScanData>;
@@ -35,9 +49,11 @@ export interface AppData {
   views: SkillView[];
   viewsById: Map<string, SkillView>;
   needsOnboarding: boolean;
-  /** Re-reads everything; `force` asks the service to rescan instead of using its cache. */
+  /** Re-reads every cached resource; `force` asks the service to rescan first. */
   refresh: (force?: boolean) => Promise<void>;
-  saveConfig: (next: ManagerConfig) => Promise<ManagerConfig>;
+  /** Applies a patch to the latest config. Writes are queued, never interleaved. */
+  updateConfig: (patch: Partial<ManagerConfig>) => Promise<ConfigWrite>;
+  savingConfig: boolean;
 }
 
 const DataContext = createContext<AppData | null>(null);
@@ -50,32 +66,58 @@ export const DATA_KEYS = {
   usage: "usage:summary:30",
 };
 
+const FORCED = [
+  { key: DATA_KEYS.scan, label: "技能扫描", run: () => api.scan(true) },
+  { key: DATA_KEYS.integrations, label: "插件与 MCP", run: () => api.integrations(true) },
+  { key: DATA_KEYS.capabilities, label: "专家", run: () => api.capabilities(true) },
+];
+
 export function DataProvider({ children }: { children: ReactNode }) {
   const scan = useResource(DATA_KEYS.scan, () => api.scan());
   const config = useResource(DATA_KEYS.config, () => api.config());
   const integrations = useResource(DATA_KEYS.integrations, () => api.integrations());
   const capabilities = useResource(DATA_KEYS.capabilities, () => api.capabilities());
   const usage = useResource(DATA_KEYS.usage, () => api.usageSummary(30));
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const [pendingWrites, setPendingWrites] = useState(0);
 
-  // Keep usage-backed numbers (home cards, skill usage) growing while the first index runs.
+  // Keep usage-backed numbers growing while the first index is being built.
   usePolling(
-    Boolean(usage.data && isIndexing(usage.data.status, usage.data.index)),
+    Boolean(usage.data && shouldPollUsage(usage.data.status, usage.data.index)),
     () => void loadResource(DATA_KEYS.usage, undefined, true),
     5_000,
   );
 
   const refresh = useCallback(async (force = false) => {
-    if (force) {
-      // Ask the service to rescan; the cached resources then pick up fresh results.
-      await Promise.allSettled([api.scan(true), api.integrations(true), api.capabilities(true)]);
+    if (!force) {
+      await invalidateResources("");
+      return;
     }
-    await reloadResources(...Object.values(DATA_KEYS));
+    const results = await Promise.allSettled(FORCED.map((item) => item.run()));
+    const failures: string[] = [];
+    results.forEach((result, index) => {
+      if (result.status === "fulfilled") primeResource(FORCED[index].key, result.value);
+      else failures.push(`${FORCED[index].label}：${errorMessage(result.reason, "失败")}`);
+    });
+    const primed = new Set(FORCED.filter((_, index) => results[index].status === "fulfilled").map((item) => item.key));
+    await invalidateResources(...cachedResourceKeys().filter((key) => !primed.has(key)));
+    if (failures.length) throw new Error(`部分内容没有刷新。${failures.join("；")}`);
   }, []);
 
-  const saveConfig = useCallback(async (next: ManagerConfig) => {
-    const saved = await api.saveConfig(next);
-    await reloadResources(DATA_KEYS.config, DATA_KEYS.scan);
-    return saved;
+  const updateConfig = useCallback((patch: Partial<ManagerConfig>) => {
+    setPendingWrites((count) => count + 1);
+    const write = queue.current.catch(() => undefined).then(async (): Promise<ConfigWrite> => {
+      const current = peekResource<ManagerConfig>(DATA_KEYS.config) || (await api.config());
+      const previous = Object.fromEntries(
+        Object.keys(patch).map((key) => [key, current[key as keyof ManagerConfig]]),
+      ) as Partial<ManagerConfig>;
+      const saved = await api.saveConfig({ ...current, ...patch });
+      primeResource(DATA_KEYS.config, saved);
+      void invalidateResources(DATA_KEYS.scan, "usage:", "health-report", "updates");
+      return { saved, previous };
+    });
+    queue.current = write;
+    return write.finally(() => setPendingWrites((count) => count - 1));
   }, []);
 
   const value = useMemo<AppData>(() => {
@@ -108,9 +150,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
       viewsById: new Map(views.map((view) => [view.id, view])),
       needsOnboarding: config.status === "ready" && config.data?.primaryAgentIds == null,
       refresh,
-      saveConfig,
+      updateConfig,
+      savingConfig: pendingWrites > 0,
     };
-  }, [scan, config, integrations, capabilities, usage, refresh, saveConfig]);
+  }, [scan, config, integrations, capabilities, usage, refresh, updateConfig, pendingWrites]);
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>;
 }
@@ -120,3 +163,4 @@ export function useData(): AppData {
   if (!value) throw new Error("useData must be used inside DataProvider");
   return value;
 }
+

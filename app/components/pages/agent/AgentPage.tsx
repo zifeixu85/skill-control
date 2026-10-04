@@ -32,7 +32,7 @@ const AGENT_NOTES: Record<string, string> = {
 };
 
 export function AgentPage({ agentId }: { agentId: string }) {
-  const { agentsById, scan, primary, config, saveConfig, agentName, activityById } = useData();
+  const { agentsById, scan, primary, config, updateConfig, savingConfig, agentName, activityById } = useData();
   const { go } = useNav();
   const toast = useToast();
   const [tab, setTab] = useState<Tab>("overview");
@@ -43,7 +43,6 @@ export function AgentPage({ agentId }: { agentId: string }) {
 
   const togglePrimary = async () => {
     if (!config.data) return;
-    const previous = config.data;
     const next = isPrimary ? primary.filter((id) => id !== agentId) : [...primary, agentId];
     if (!next.length) {
       toast.show("至少保留一个常用 Agent");
@@ -55,9 +54,9 @@ export function AgentPage({ agentId }: { agentId: string }) {
     }
     setSaving(true);
     try {
-      await saveConfig({ ...previous, primaryAgentIds: next });
+      const { previous } = await updateConfig({ primaryAgentIds: next });
       toast.show(`常用 Agent：${joinNames(next.map(agentName))}`, {
-        action: { label: "撤销", run: async () => void (await saveConfig(previous)) },
+        action: { label: "撤销", run: async () => void (await updateConfig(previous)) },
       });
     } catch (error) {
       toast.show(errorMessage(error, "保存失败。"), { tone: "error" });
@@ -95,7 +94,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
         <button type="button" className="btn" onClick={() => go("skills", { filter: isPrimary ? `only:${agent.id}` : `agent:${agent.id}` })}>
           查看它的技能
         </button>
-        <button type="button" className="btn ghost" disabled={saving} onClick={togglePrimary}>
+        <button type="button" className="btn ghost" disabled={saving || savingConfig} onClick={togglePrimary}>
           {isPrimary ? "不再设为常用" : "设为常用"}
         </button>
       </TopBar>

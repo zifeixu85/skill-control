@@ -11,74 +11,114 @@ export interface ResourceState<T> {
   error: Error | null;
   /** A reload is running while older data is still shown. */
   refreshing: boolean;
+  /** When the data (or error) arrived; 0 while loading. */
+  updatedAt: number;
 }
 
 interface Entry {
   state: ResourceState<unknown>;
   promise: Promise<void> | null;
   fetcher: (() => Promise<unknown>) | null;
+  /** Bumped by every load; results of older loads are ignored. */
+  generation: number;
+  lastUsed: number;
 }
 
-const IDLE: ResourceState<never> = { status: "idle", data: undefined, error: null, refreshing: false };
-const LOADING: ResourceState<never> = { status: "loading", data: undefined, error: null, refreshing: false };
+const IDLE: ResourceState<never> = { status: "idle", data: undefined, error: null, refreshing: false, updatedAt: 0 };
+const LOADING: ResourceState<never> = { status: "loading", data: undefined, error: null, refreshing: false, updatedAt: 0 };
+/** Data older than this is revalidated in the background when a component mounts. */
+const STALE_AFTER_MS = 2 * 60_000;
+/** Unsubscribed entries beyond this are evicted, oldest first. */
+const CACHE_LIMIT = 250;
 
 const entries = new Map<string, Entry>();
 const listeners = new Map<string, Set<() => void>>();
+
+const isSubscribed = (key: string) => (listeners.get(key)?.size || 0) > 0;
 
 function notify(key: string) {
   listeners.get(key)?.forEach((listener) => listener());
 }
 
-function setState(key: string, state: ResourceState<unknown>) {
-  const entry = entries.get(key) || { state, promise: null, fetcher: null };
-  entries.set(key, { ...entry, state });
-  notify(key);
+function evict() {
+  if (entries.size <= CACHE_LIMIT) return;
+  const idle = [...entries.entries()]
+    .filter(([key, entry]) => !isSubscribed(key) && !entry.promise)
+    .sort((left, right) => left[1].lastUsed - right[1].lastUsed);
+  for (const [key] of idle.slice(0, entries.size - CACHE_LIMIT)) entries.delete(key);
 }
 
-/** Starts (or joins) a load. `force` refetches while keeping the previous data visible. */
+/**
+ * Starts a load, or joins the one in flight. `force` always starts a fresh request
+ * (an in-flight one is superseded) and keeps the previous data visible meanwhile.
+ */
 export function loadResource(key: string, fetcher?: () => Promise<unknown>, force = false): Promise<void> {
   const existing = entries.get(key);
   const run = fetcher || existing?.fetcher;
   if (!run) return Promise.resolve();
-  if (existing?.promise) return existing.promise;
+  if (existing?.promise && !force) return existing.promise;
   if (existing && existing.state.status === "ready" && !force) return Promise.resolve();
   const previous = existing?.state;
+  const generation = (existing?.generation || 0) + 1;
+  const settle = (state: ResourceState<unknown>) => {
+    const current = entries.get(key);
+    if (!current || current.generation !== generation) return;
+    entries.set(key, { ...current, state, promise: null });
+    notify(key);
+  };
   const promise = run().then(
-    (data) => setState(key, { status: "ready", data, error: null, refreshing: false }),
+    (data) => settle({ status: "ready", data, error: null, refreshing: false, updatedAt: Date.now() }),
     (error: unknown) =>
-      setState(key, {
+      settle({
         status: previous?.data !== undefined ? "ready" : "error",
         data: previous?.data,
         error: error instanceof Error ? error : new Error("读取失败。"),
         refreshing: false,
+        updatedAt: Date.now(),
       }),
   );
   entries.set(key, {
     fetcher: run,
-    promise: promise.finally(() => {
-      const current = entries.get(key);
-      if (current) entries.set(key, { ...current, promise: null });
-    }),
+    promise,
+    generation,
+    lastUsed: Date.now(),
     state: previous?.data !== undefined ? { ...previous, refreshing: true } : LOADING,
   });
   notify(key);
-  return entries.get(key)?.promise || promise;
+  evict();
+  return promise;
 }
 
-/** Reloads every cached resource whose key starts with one of the prefixes. */
-export function reloadResources(...prefixes: string[]): Promise<void[]> {
-  const keys = [...entries.keys()].filter((key) => prefixes.some((prefix) => key.startsWith(prefix)));
-  return Promise.all(keys.map((key) => loadResource(key, undefined, true)));
+/** Stores data fetched elsewhere (e.g. a forced rescan) without another request. */
+export function primeResource<T>(key: string, data: T): void {
+  const existing = entries.get(key);
+  entries.set(key, {
+    fetcher: existing?.fetcher || null,
+    promise: null,
+    generation: (existing?.generation || 0) + 1,
+    lastUsed: Date.now(),
+    state: { status: "ready", data, error: null, refreshing: false, updatedAt: Date.now() },
+  });
+  notify(key);
 }
 
-export function dropResources(...prefixes: string[]): void {
-  for (const key of [...entries.keys()]) {
-    if (prefixes.some((prefix) => key.startsWith(prefix))) {
-      entries.delete(key);
-      notify(key);
-    }
+/**
+ * Marks every cached key under the prefixes as outdated: keys a component is showing
+ * refetch now (keeping their data until the answer arrives); the rest are dropped and
+ * load fresh the next time they are used.
+ */
+export function invalidateResources(...prefixes: string[]): Promise<void> {
+  const matches = [...entries.keys()].filter((key) => prefixes.some((prefix) => key.startsWith(prefix)));
+  const loads: Promise<void>[] = [];
+  for (const key of matches) {
+    if (isSubscribed(key)) loads.push(loadResource(key, undefined, true));
+    else entries.delete(key);
   }
+  return Promise.all(loads).then(() => undefined);
 }
+
+/** Every cached key, for a full refresh. */
+export const ALL_RESOURCES = "";
 
 function subscribeTo(key: string | null) {
   return (listener: () => void) => {
@@ -86,13 +126,17 @@ function subscribeTo(key: string | null) {
     const set = listeners.get(key) || new Set();
     set.add(listener);
     listeners.set(key, set);
-    return () => set.delete(listener);
+    return () => {
+      set.delete(listener);
+      const entry = entries.get(key);
+      if (entry) entries.set(key, { ...entry, lastUsed: Date.now() });
+    };
   };
 }
 
 /**
  * Cached GET keyed by `key`. Components sharing a key share one request and one result,
- * so remounting a page never refetches or flashes a loading state.
+ * so remounting a page never flashes a loading state; stale data revalidates quietly.
  */
 export function useResource<T>(key: string | null, fetcher: () => Promise<T>) {
   const subscribe = useCallback((listener: () => void) => subscribeTo(key)(listener), [key]);
@@ -102,11 +146,18 @@ export function useResource<T>(key: string | null, fetcher: () => Promise<T>) {
     () => (key ? LOADING : IDLE),
   ) as ResourceState<T>;
   const start = useEffectEvent((resourceKey: string) => {
-    void loadResource(resourceKey, fetcher);
+    const entry = entries.get(resourceKey);
+    const stale = entry?.state.status === "ready" && Date.now() - entry.state.updatedAt > STALE_AFTER_MS;
+    void loadResource(resourceKey, fetcher, stale);
   });
   useEffect(() => {
     if (key) start(key);
   }, [key]);
+  // A key dropped from the cache while shown (state fell back to loading) loads again.
+  const missing = key !== null && state === LOADING;
+  useEffect(() => {
+    if (key && missing && !entries.get(key)?.promise) start(key);
+  }, [key, missing]);
   const reload = useCallback(() => (key ? loadResource(key, undefined, true) : Promise.resolve()), [key]);
   return useMemo(() => ({ ...state, reload }), [state, reload]);
 }
@@ -114,4 +165,14 @@ export function useResource<T>(key: string | null, fetcher: () => Promise<T>) {
 /** True when the service is older and does not have this route at all. */
 export function isUnsupported(error: Error | null): boolean {
   return error instanceof ApiError && error.unsupported;
+}
+
+/** Current cached data for a key (no subscription, no fetch). */
+export function peekResource<T>(key: string): T | undefined {
+  return entries.get(key)?.state.data as T | undefined;
+}
+
+/** Keys currently cached, for refreshes that handle some keys themselves. */
+export function cachedResourceKeys(): string[] {
+  return [...entries.keys()];
 }

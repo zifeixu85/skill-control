@@ -14,6 +14,13 @@ export interface SplitDocument {
 
 const FRONTMATTER = /^﻿?---[ \t]*\r?\n([\s\S]*?)\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|$)/;
 const PARSE_LIMIT = 64_000;
+/** Per-value display cap; YAML aliases can expand a tiny file into megabytes. */
+export const VALUE_LIMIT = 20_000;
+export const TRUNCATED_NOTE = "（内容过长，已截断）";
+
+function capped(text: string): string {
+  return text.length > VALUE_LIMIT ? `${text.slice(0, VALUE_LIMIT)}\n${TRUNCATED_NOTE}` : text;
+}
 
 export function splitFrontmatter(text: string): SplitDocument {
   const source = String(text ?? "");
@@ -47,9 +54,12 @@ export function frontmatterRows(frontmatter: string | null): FrontmatterRow[] | 
     return {
       key,
       nested,
-      value: nested
-        ? dump(value, { indent: 2, lineWidth: 100, noRefs: true, skipInvalid: true }).trimEnd()
-        : scalarText(value),
+      // noRefs: false keeps anchors/aliases as references instead of expanding them.
+      value: capped(
+        nested
+          ? dump(value, { indent: 2, lineWidth: 100, noRefs: false, skipInvalid: true }).trimEnd()
+          : scalarText(value),
+      ),
     };
   });
 }

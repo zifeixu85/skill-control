@@ -365,3 +365,11 @@
   border-radius: 6px;
   padding: 4px 8px;
 }
+.inline-note.warn {
+  background: var(--warn-wash);
+  margin: 0 0 10px;
+}
+.inline-note code {
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}

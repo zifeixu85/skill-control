@@ -241,6 +241,9 @@
 }
 
 @media (max-width: 880px) {
+  .inspector-resizer {
+    display: none;
+  }
   .inspector > .insp {
     min-width: 0;
   }

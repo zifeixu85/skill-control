@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useNow } from "../../hooks/useNow";
-import { isUnsupported, useResource } from "../../hooks/useResource";
+import { isUnsupported, primeResource, useResource } from "../../hooks/useResource";
 import { useScrollMemory } from "../../hooks/useScrollMemory";
 import { api, errorMessage } from "../../lib/api";
 import { formatRelative } from "../../lib/format";
@@ -11,6 +11,7 @@ import { InfoIcon, RefreshIcon, WarnIcon } from "../icons";
 import { CopyPathButton } from "../files/ConfigDetailView";
 import { useData } from "../providers/DataProvider";
 import { useNav } from "../providers/NavProvider";
+import { useToast } from "../providers/ToastProvider";
 import { AgentAvatar } from "../ui/Avatar";
 import { EmptyState, Loading, SectionHeading, TopBar } from "../ui/basics";
 
@@ -86,11 +87,14 @@ function FindingList({ findings }: { findings: HealthFinding[] }) {
 export function HealthPage() {
   const report = useResource("health-report", () => api.healthReport());
   const [checking, setChecking] = useState(false);
+  const toast = useToast();
   const recheck = async () => {
     setChecking(true);
     try {
-      await api.healthReport(true);
-      await report.reload();
+      primeResource("health-report", await api.healthReport(true));
+      toast.show("检查完成");
+    } catch (error) {
+      toast.show(errorMessage(error, "检查失败。"), { tone: "error" });
     } finally {
       setChecking(false);
     }

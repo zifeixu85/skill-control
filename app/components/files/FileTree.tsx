@@ -89,6 +89,12 @@ export function FileTree({
       else next.add(path);
       return next;
     });
+  // When the selection changes from outside (a Markdown link), open its folders once.
+  const [shownFor, setShownFor] = useState(selected);
+  if (shownFor !== selected) {
+    setShownFor(selected);
+    setOpen((current) => new Set([...current, ...ancestorPaths(selected)]));
+  }
   const select = (path: string) => {
     setOpen((current) => new Set([...current, ...ancestorPaths(path)]));
     onSelect(path);

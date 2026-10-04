@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useEscape } from "../../../hooks/useEscape";
-import { useScrollMemory } from "../../../hooks/useScrollMemory";
+import { usePersistent } from "../../../hooks/usePersistent";
+import { resetScrollMemory, useScrollMemory } from "../../../hooks/useScrollMemory";
 import {
   filterChips,
   matchesFilter,
@@ -11,16 +12,25 @@ import {
   type FilterChip,
   type SkillView,
 } from "../../../lib/skill-model";
+import { persistentStore } from "../../../lib/storage";
 import { PlusIcon, SearchIcon } from "../../icons";
 import { useData } from "../../providers/DataProvider";
-import { useNav } from "../../providers/NavProvider";
+import { takeRevealTarget, useNav } from "../../providers/NavProvider";
 import { useToast } from "../../providers/ToastProvider";
 import { AgentAvatar } from "../../ui/Avatar";
 import { Loading, TopBar } from "../../ui/basics";
+import { InspectorResizer, INSPECTOR_DEFAULT, clampInspector } from "./InspectorResizer";
 import { SkillInspector, type InspectorTab } from "./SkillInspector";
 import { SkillTable } from "./SkillTable";
 
 const PAGE_SIZE = 80;
+const SCROLL_KEY = "skills";
+/** How many rows were shown last time, so coming back keeps the same list length. */
+let rememberedLimit = PAGE_SIZE;
+
+const widthStore = persistentStore<string>("inspector-width", String(INSPECTOR_DEFAULT), (value) =>
+  /^\d{3}$/.test(value),
+);
 
 function Filters({ chips, value, onChange }: { chips: FilterChip[]; value: string; onChange: (id: string) => void }) {
   return (
@@ -47,10 +57,11 @@ export function SkillsPage() {
   const { views, primary, agentName, scan, viewsById } = useData();
   const nav = useNav();
   const toast = useToast();
-  const scrollRef = useScrollMemory<HTMLDivElement>("skills");
-  const [limit, setLimit] = useState(PAGE_SIZE);
+  const scrollRef = useScrollMemory<HTMLDivElement>(SCROLL_KEY);
   const [tab, setTab] = useState<InspectorTab>("overview");
   const [pending, setPending] = useState<{ skillId: string; agentId: string } | null>(null);
+  const [widthText, setWidthText] = usePersistent(widthStore);
+  const width = clampInspector(Number(widthText));
 
   const chips = useMemo(() => {
     const names = Object.fromEntries(primary.map((id) => [id, agentName(id)]));
@@ -71,12 +82,29 @@ export function SkillsPage() {
     () => sortViews(views.filter((view) => matchesFilter(view, filter, primary) && matchesQuery(view, nav.query))),
     [views, filter, primary, nav.query],
   );
-  const shown = list.slice(0, limit);
   const selected = nav.selectedSkillId ? viewsById.get(nav.selectedSkillId) || null : null;
+  const [limit, setLimitState] = useState(() => {
+    const index = selected ? list.findIndex((view) => view.id === selected.id) : -1;
+    return Math.max(rememberedLimit, Math.ceil((index + 1) / PAGE_SIZE) * PAGE_SIZE);
+  });
+  const setLimit = (next: number) => {
+    rememberedLimit = next;
+    setLimitState(next);
+  };
+  const shown = list.slice(0, limit);
   const pendingAgent = pending && selected && pending.skillId === selected.id ? pending.agentId : null;
 
   useEscape(Boolean(selected), () => nav.selectSkill(null));
   useEscape(Boolean(pendingAgent), () => setPending(null));
+
+  // Arriving from another page with a skill to show: bring its row into view once.
+  useEffect(() => {
+    const target = takeRevealTarget();
+    if (!target) return;
+    window.requestAnimationFrame(() =>
+      document.querySelector(`[data-skill="${CSS.escape(target)}"]`)?.scrollIntoView({ block: "center" }),
+    );
+  }, []);
 
   const open = (id: string) => {
     if (nav.selectedSkillId === id) {
@@ -100,9 +128,9 @@ export function SkillsPage() {
     if (slot.kind === "installed") toast.show(`${agentName(agentId)} 里已经有这个技能了`);
     else toast.show(slot.reason || `${agentName(agentId)} 里的这个技能是只读的`);
   };
-  const changeFilter = (id: string) => {
-    nav.setSkillFilter(id);
+  const listChanged = () => {
     setLimit(PAGE_SIZE);
+    resetScrollMemory(SCROLL_KEY);
   };
 
   return (
@@ -121,7 +149,7 @@ export function SkillsPage() {
             value={nav.query}
             onChange={(event) => {
               nav.setQuery(event.target.value);
-              setLimit(PAGE_SIZE);
+              listChanged();
             }}
           />
           <kbd aria-hidden="true">⌘K</kbd>
@@ -131,9 +159,16 @@ export function SkillsPage() {
           导入
         </button>
       </TopBar>
-      <div className={`split ${selected ? "open" : ""} ${selected && tab !== "overview" ? "wide" : ""}`}>
+      <div className={`split ${selected ? "open" : ""}`} style={{ "--inspector-width": `${width}px` } as CSSProperties}>
         <div className="split-list">
-          <Filters chips={chips} value={filter} onChange={changeFilter} />
+          <Filters
+            chips={chips}
+            value={filter}
+            onChange={(id) => {
+              nav.setSkillFilter(id);
+              listChanged();
+            }}
+          />
           <div className="scroll" ref={scrollRef}>
             {scan.data ? (
               <SkillTable
@@ -142,7 +177,7 @@ export function SkillsPage() {
                 selectedId={selected?.id || null}
                 onOpen={open}
                 onSlot={onSlot}
-                onMore={() => setLimit((current) => current + PAGE_SIZE)}
+                onMore={() => setLimit(limit + PAGE_SIZE)}
               />
             ) : (
               <Loading label="正在读取技能…" rows={8} />
@@ -151,17 +186,20 @@ export function SkillsPage() {
         </div>
         <aside className="inspector" aria-labelledby={selected ? "inspector-title" : undefined} key={selected?.id || "none"}>
           {selected ? (
-            <SkillInspector
-              view={selected}
-              tab={tab}
-              onTab={setTab}
-              pendingAgent={pendingAgent}
-              onPending={(agentId) => setPending(agentId ? { skillId: selected.id, agentId } : null)}
-              onClose={() => nav.selectSkill(null)}
-              onMessage={(message) => toast.show(message)}
-            />
+            <>
+              <SkillInspector
+                view={selected}
+                tab={tab}
+                onTab={setTab}
+                pendingAgent={pendingAgent}
+                onPending={(agentId) => setPending(agentId ? { skillId: selected.id, agentId } : null)}
+                onClose={() => nav.selectSkill(null)}
+                onMessage={(message) => toast.show(message)}
+              />
+            </>
           ) : null}
         </aside>
+        {selected ? <InspectorResizer width={width} onChange={(next) => setWidthText(String(next))} /> : null}
       </div>
     </section>
   );

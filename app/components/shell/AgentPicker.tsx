@@ -17,11 +17,13 @@ export function AgentPicker({
   selected,
   onChange,
   onLimit,
+  disabled,
 }: {
   name: string;
   selected: string[];
   onChange: (next: string[]) => void;
   onLimit: (message: string) => void;
+  disabled?: boolean;
 }) {
   const { agents, activityById, scan } = useData();
   const suggested = new Set(scan.data?.suggestedPrimaryAgentIds || []);
@@ -42,7 +44,7 @@ export function AgentPicker({
     onChange(selected.filter((item) => item !== id));
   };
   return (
-    <fieldset className="pick">
+    <fieldset className="pick" disabled={disabled} aria-busy={disabled || undefined}>
       <legend className="sr-only">常用 Agent</legend>
       {list.map((agent) => {
         const on = selected.includes(agent.id);

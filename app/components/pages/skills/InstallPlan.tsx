@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { reloadResources } from "../../../hooks/useResource";
+import { invalidateResources } from "../../../hooks/useResource";
 import { api, errorMessage } from "../../../lib/api";
 import { formatMonthDay, joinNames } from "../../../lib/format";
 import { isReadOnlyInstance, pickSourceInstance, type SkillView } from "../../../lib/skill-model";
@@ -11,7 +11,7 @@ import { useToast } from "../../providers/ToastProvider";
 
 type PlanState =
   | { status: "loading" }
-  | { status: "ready"; plan: SyncPlan }
+  | { status: "ready"; plan: SyncPlan; sourceId: string; mode: SyncMode }
   | { status: "error"; message: string };
 
 const ACTION_LABELS: Record<SyncAction["action"], string> = {
@@ -69,7 +69,7 @@ export function InstallPlan({ view, agentId, onDone }: { view: SkillView; agentI
     if (!sourceId) return undefined;
     let cancelled = false;
     api.planSync({ sourceInstanceId: sourceId, targetAgentIds: [agentId], mode }).then(
-      (plan) => !cancelled && setState({ status: "ready", plan }),
+      (plan) => !cancelled && setState({ status: "ready", plan, sourceId, mode }),
       (error: unknown) => !cancelled && setState({ status: "error", message: errorMessage(error, "无法生成安装计划。") }),
     );
     return () => {
@@ -78,13 +78,15 @@ export function InstallPlan({ view, agentId, onDone }: { view: SkillView; agentI
   }, [sourceId, agentId, mode]);
 
   const install = async () => {
+    if (state.status !== "ready" || state.sourceId !== sourceId || state.mode !== mode) return;
     setRunning(true);
     try {
-      const result = await api.executeSync({ sourceInstanceId: sourceId, targetAgentIds: [agentId], mode });
+      // Execute exactly what the shown plan was generated for.
+      const result = await api.executeSync({ sourceInstanceId: state.sourceId, targetAgentIds: [agentId], mode: state.mode });
       const done = result.actions.filter((action) => action.result === "completed");
       toast.show(done.length ? `已装到 ${agentName(agentId)}：${view.title}` : `${agentName(agentId)} 里已经是这一份，没有改动`);
       onDone();
-      await reloadResources("scan", "files:", "file:", "detail:skill");
+      await invalidateResources("scan", "files:skill:", "file:skill:", "detail:skill", "usage:skill:", "health-report", "updates");
     } catch (error) {
       setState({ status: "error", message: errorMessage(error, "安装失败，没有写入任何文件。") });
     } finally {
@@ -93,7 +95,8 @@ export function InstallPlan({ view, agentId, onDone }: { view: SkillView; agentI
   };
 
   const hashes = new Set(candidates.map((instance) => instance.hash));
-  const plan = state.status === "ready" ? state.plan : null;
+  const current = state.status === "ready" && state.sourceId === sourceId && state.mode === mode;
+  const plan = current ? state.plan : null;
   const writes = plan ? plan.actions.filter((action) => action.action !== "noop").length : 0;
 
   if (!initial) {

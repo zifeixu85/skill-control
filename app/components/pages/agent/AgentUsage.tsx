@@ -6,7 +6,7 @@ import { usePolling } from "../../../hooks/usePolling";
 import { isUnsupported, useResource } from "../../../hooks/useResource";
 import { api, errorMessage } from "../../../lib/api";
 import { formatCompact, formatUsd } from "../../../lib/format";
-import { confidenceLabel, fillSeries, isIndexing, localDate } from "../../../lib/usage";
+import { confidenceLabel, fillSeries, isIndexing, localDate, shouldPollUsage } from "../../../lib/usage";
 import { AreaChart } from "../../charts/AreaChart";
 import { useData } from "../../providers/DataProvider";
 import { useNav } from "../../providers/NavProvider";
@@ -23,7 +23,7 @@ export function AgentUsage({ agentId, agentName }: { agentId: string; agentName:
   const now = useNow();
   const [metric, setMetric] = useState<"sessions" | "tokens">("sessions");
   const data = usage.data;
-  usePolling(Boolean(data && isIndexing(data.status, data.index)), () => void usage.reload(), 3_000);
+  usePolling(Boolean(data && shouldPollUsage(data.status, data.index)), () => void usage.reload(), 3_000);
 
   if (isUnsupported(usage.error)) {
     return <EmptyState title="本地服务还没有提供使用数据">更新 Skill Control 后可以查看 {agentName} 的会话、Tokens 和常用技能。</EmptyState>;

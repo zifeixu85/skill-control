@@ -86,7 +86,7 @@ export function SkillTable({
 }) {
   const { primary, agentName } = useData();
   const style = {
-    "--cols": primary.map(() => "118px").join(" ") || "0px",
+    "--cols": primary.map(() => "var(--slot-w)").join(" ") || "0px",
     "--n": primary.length,
   } as CSSProperties;
   return (
