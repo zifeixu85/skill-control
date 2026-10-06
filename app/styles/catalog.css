@@ -2,13 +2,13 @@
 
 .pgrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
   gap: 12px;
   align-items: stretch;
 }
 .mine {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
   gap: 12px;
   align-items: stretch;
 }
@@ -297,28 +297,97 @@
   font-size: 12px;
 }
 
-.agent-hero {
-  display: flex;
-  gap: 14px;
-  align-items: center;
+/* Agent 概览: data cards above the configuration. */
+.summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(168px, 100%), 1fr));
+  gap: 12px;
+}
+.summary-cards.pending {
+  display: block;
+}
+.summary-card {
   background: var(--panel);
-  border-radius: 16px;
-  box-shadow: var(--shadow-md), 0 0 0 1px var(--line-2);
-  padding: 16px 18px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
+  border-radius: var(--r-card);
+  box-shadow: 0 0 0 1px var(--line-2);
+  padding: 12px 14px;
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 10px;
+  min-width: 0;
 }
-.agent-hero h2 {
-  font-family: var(--font-display);
-  font-size: 20px;
-  font-weight: 750;
+.summary-card header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
 }
-.agent-hero .sub {
-  font-size: 12.5px;
+.summary-card h3 {
+  font-size: 13px;
+  font-weight: 650;
   color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.agent-hero .grow {
-  flex: 1;
+.summary-card header .link-btn {
+  font-size: 12px;
+  flex: none;
+}
+/* Same rhythm as the lists beside it: label left, figure right. */
+.summary-stats {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  align-content: start;
+}
+.summary-stats > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 13px;
+}
+.summary-stats dt {
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.summary-stats dd {
+  margin: 0;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.summary-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+.summary-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  font-size: 13px;
+  align-items: baseline;
+}
+.summary-list .nm {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.summary-list .v {
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+.set-grid > *,
+.agent-panel > * {
+  min-width: 0;
 }
 .agent-panel {
   padding-top: 18px;

@@ -201,18 +201,23 @@
   box-shadow: 0 0 0 3px var(--danger-wash);
 }
 
+/* Each level pins its column to the available width (minmax(0, 1fr)), so a long value deep
+   in a page can never widen the page past the window and clip its header. */
 .main {
   position: relative;
   min-width: 0;
   min-height: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
   overflow: hidden;
 }
 
 .page {
   min-height: 0;
+  min-width: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   animation: fade 0.22s var(--ease) both;
 }
@@ -251,13 +256,26 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   min-width: 0;
+}
+.top h1 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+.top h1 .tag {
+  font-family: var(--font-ui);
+  letter-spacing: 0;
 }
 
 .scroll {
   overflow: auto;
   min-height: 0;
+  min-width: 0;
   padding: 0 28px 32px;
   overscroll-behavior: contain;
 }

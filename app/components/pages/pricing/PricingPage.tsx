@@ -5,6 +5,7 @@ import { isUnsupported, useResource } from "../../../hooks/useResource";
 import { useScrollMemory } from "../../../hooks/useScrollMemory";
 import { api, errorMessage } from "../../../lib/api";
 import { groupByVendor, nameOf, priceRowId, usedPriceIds, type PricingTable } from "../../../lib/pricing";
+import { revealInPage } from "../../../lib/reveal";
 import { takePriceTarget, useNav } from "../../providers/NavProvider";
 import { EmptyState, Loading, SectionHeading, TopBar } from "../../ui/basics";
 import { EstimateTables } from "./EstimateTables";
@@ -13,22 +14,7 @@ import { VendorTable } from "./PriceTable";
 /** Days of usage that count as "本机在用". */
 const USED_DAYS = 90;
 
-/** Scrolls a row into view and flashes it once. */
-function reveal(target: string) {
-  const element = document.getElementById(target === "rules" ? "price-rules" : priceRowId(target));
-  if (!element) return;
-  // Scroll only the page's own list, never the window or the shell around it.
-  const scroll = element.closest<HTMLElement>(".scroll");
-  if (scroll) {
-    const offset = element.getBoundingClientRect().top - scroll.getBoundingClientRect().top;
-    scroll.scrollTop += offset - Math.max(16, (scroll.clientHeight - element.getBoundingClientRect().height) / 2);
-  }
-  element.classList.remove("flash");
-  // Restart the animation even when the same row is shown twice.
-  void element.getBoundingClientRect();
-  element.classList.add("flash");
-  window.setTimeout(() => element.classList.remove("flash"), 2600);
-}
+const reveal = (target: string) => revealInPage(document.getElementById(target === "rules" ? "price-rules" : priceRowId(target)));
 
 function Rules() {
   return (

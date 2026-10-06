@@ -10,6 +10,8 @@ import { useNav } from "../../providers/NavProvider";
 import { useToast } from "../../providers/ToastProvider";
 import { ExpertCard } from "../ExpertsPage";
 import { PluginCard } from "../PluginsPage";
+import { AgentSummaryCards } from "./AgentSummaryCards";
+import type { UsageSection } from "./AgentUsageSections";
 
 const PROFILE_TITLES: Record<string, string> = {
   hermes: "Profile",
@@ -77,7 +79,7 @@ function SkillFolders({ agent }: { agent: ScanAgent }) {
   );
 }
 
-export function AgentOverview({ agent }: { agent: ScanAgent }) {
+export function AgentOverview({ agent, onOpenUsage }: { agent: ScanAgent; onOpenUsage: (section: UsageSection) => void }) {
   const { capabilities, integrations } = useData();
   const { go } = useNav();
   const profiles = (capabilities.data?.products || []).find((product) => product.id === agent.id)?.items || [];
@@ -86,6 +88,7 @@ export function AgentOverview({ agent }: { agent: ScanAgent }) {
   const shownProfiles = agent.id === "workbuddy" ? profiles.slice(0, 6) : profiles;
   return (
     <div className="set-grid wide">
+      <AgentSummaryCards agentId={agent.id} onOpen={onOpenUsage} />
       <section className="set-block" aria-labelledby="agent-config">
         <h2 id="agent-config">配置详情</h2>
         <p>从 {agent.name} 的配置文件里读出的关键设置，只读；密钥和令牌不会显示。</p>

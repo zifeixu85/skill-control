@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { COST_HINT, estimatedPart, formatCost } from "../../../lib/cost";
 import { formatCompact } from "../../../lib/format";
-import { CONFIDENCE_HINTS, confidenceLabel, fillSeries, type UsageAgent, type UsagePoint, type UsageSource } from "../../../lib/usage";
+import { CONFIDENCE_HINTS, confidenceLabel, fillSeries, SESSIONS_HINT, type UsageAgent, type UsagePoint, type UsageSource } from "../../../lib/usage";
 import { InfoIcon } from "../../icons";
 import { AreaChart } from "../../charts/AreaChart";
 import { useData } from "../../providers/DataProvider";
@@ -12,8 +12,8 @@ import { Segmented } from "../../ui/basics";
 
 type Metric = "sessions" | "tokens" | "cost";
 
-const METRIC_UNITS: Record<Metric, string> = { sessions: "个会话", tokens: "Tokens", cost: "美元（预估）" };
-const METRIC_LABELS: Record<Metric, string> = { sessions: "会话数", tokens: "Tokens", cost: "预估费用" };
+const METRIC_UNITS: Record<Metric, string> = { sessions: "个活跃会话", tokens: "Tokens", cost: "美元（预估）" };
+const METRIC_LABELS: Record<Metric, string> = { sessions: "每天活跃的会话数", tokens: "每天的 Tokens", cost: "每天的预估费用" };
 const metricValue = (point: UsagePoint, metric: Metric) =>
   metric === "sessions" ? point.sessions : metric === "tokens" ? point.tokens : point.costUsd;
 
@@ -83,7 +83,7 @@ export function UsageAgentCard({ usage, days, endDate }: { usage: UsageAgent; da
         ) : null}
       </header>
       <div className="ustats">
-        <div>
+        <div title={SESSIONS_HINT}>
           <b>{usage.sessions.toLocaleString("zh-CN")}</b>
           <span>个会话</span>
         </div>
@@ -106,7 +106,7 @@ export function UsageAgentCard({ usage, days, endDate }: { usage: UsageAgent; da
       </div>
       {series.length ? (
         <AreaChart
-          label={`${name} 最近 ${days} 天每天的${METRIC_LABELS[shown]}`}
+          label={`${name} 最近 ${days} 天${METRIC_LABELS[shown]}`}
           unit={METRIC_UNITS[shown]}
           format={shown === "cost" ? formatCost : undefined}
           points={series.map((point) => ({ label: dayLabel(point.date), value: metricValue(point, shown) }))}

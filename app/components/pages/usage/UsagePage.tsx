@@ -15,6 +15,7 @@ import { EmptyState, Loading, SectionHeading, Segmented, TopBar } from "../../ui
 import { ItemText } from "../../ui/Item";
 import { COST_HINT } from "../../../lib/cost";
 import { ModelTable } from "./ModelTable";
+import { ProjectsSection } from "./ProjectsSection";
 import { IndexProgress } from "./IndexProgress";
 import { UsageAgentCard } from "./UsageAgentCard";
 
@@ -109,7 +110,7 @@ function ActivityFallback() {
           <thead>
             <tr>
               <th scope="col">Agent</th>
-              <th scope="col">近 30 天会话</th>
+              <th scope="col" title="期间有活动的会话文件">近 30 天活跃会话</th>
               <th scope="col">在用天数</th>
               <th scope="col">Tokens</th>
               <th scope="col">最近一次</th>
@@ -165,6 +166,8 @@ function SummaryView({ summary, days }: { summary: UsageSummary; days: number })
       )}
       <SectionHeading title="按模型" note={`最近 ${days} 天 · ${COST_HINT}`} />
       <ModelTable days={days} />
+      <SectionHeading title="按项目" note={`最近 ${days} 天 · 项目成本，按预估费用排序`} />
+      <ProjectsSection days={days} />
       <SectionHeading title="用得最多的技能" note={`最近 ${days} 天 · 会话里实际调用或读取的次数`} />
       {summary.topSkills.length ? (
         <TopSkillsTable skills={summary.topSkills} agentIds={skillAgents} />

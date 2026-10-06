@@ -1,4 +1,5 @@
 import { normalizeCost, normalizeModelRows, type CostSplit, type ModelRow } from "./cost";
+import { normalizeOtherProjects, normalizeProjectList, type OtherProjects, type ProjectRow } from "./projects";
 import {
   asArray,
   asNumber,
@@ -25,6 +26,7 @@ export interface UsageTokens {
 
 export interface UsagePoint {
   date: string;
+  /** Sessions active that day (a long session counts on every day it was used). */
   sessions: number;
   tokens: number;
   /** Estimated cost that day at official prices (0 when the service doesn't report it). */
@@ -39,7 +41,10 @@ export interface UsageSource {
 
 export interface UsageAgent {
   agentId: string;
+  /** Sessions with any activity in the window, including ones started earlier. */
   sessions: number;
+  /** Sessions that started in the window. */
+  sessionsStarted: number;
   activeDays: number;
   tokens: UsageTokens | null;
   /** Estimated at official API prices (see lib/cost). */
@@ -90,6 +95,9 @@ export interface UsageSummary {
   agents: UsageAgent[];
   topSkills: TopSkill[];
 }
+
+/** Hover note on session counts: "sessions" means active in the window since the backend change. */
+export const SESSIONS_HINT = "期间有活动的会话，含更早开始、仍在用的";
 
 export const CONFIDENCE_LABELS: Record<string, string> = {
   exact: "精确",
@@ -153,6 +161,7 @@ export function normalizeUsageAgent(value: unknown, fallbackId = ""): UsageAgent
   return {
     agentId: asString(pick(record, "agentId", "id"), fallbackId),
     sessions: asNumber(base.sessions),
+    sessionsStarted: asNumber(base.sessionsStarted, asNumber(base.sessions)),
     activeDays: asNumber(base.activeDays),
     tokens: normalizeTokens(base.tokens),
     costUsd: cost.costUsd,
@@ -320,7 +329,9 @@ export interface AgentUsage extends UsageAgent {
   status: UsageStatus | null;
   index: UsageIndex | null;
   topSkills: TopSkill[];
-  topProjects: { name: string; sessions: number; tokens: number }[];
+  /** By cost; the rest are summed in `otherProjects` so the list reconciles with the totals. */
+  topProjects: ProjectRow[];
+  otherProjects: OtherProjects | null;
 }
 
 export function normalizeAgentUsage(raw: unknown, agentId: string): AgentUsage {
@@ -331,12 +342,8 @@ export function normalizeAgentUsage(raw: unknown, agentId: string): AgentUsage {
     status: normalizeUsageStatus(record.status),
     index: normalizeIndex(record.index),
     topSkills: normalizeTopSkills(record.topSkills, agentId),
-    topProjects: asArray(record.topProjects)
-      .map((item) => {
-        const project = asRecord(item);
-        return { name: asString(project.name), sessions: asNumber(project.sessions), tokens: tokenTotal(project.tokens) };
-      })
-      .filter((project) => project.name),
+    topProjects: normalizeProjectList(record.topProjects),
+    otherProjects: normalizeOtherProjects(record.otherProjects),
   };
 }
 

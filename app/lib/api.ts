@@ -4,6 +4,7 @@ import { normalizeCliApply, normalizeCliPlan, normalizeCliTools } from "./cli-to
 import { normalizeModelsReport } from "./cost";
 import { normalizeHealthReport } from "./health";
 import { normalizePricing } from "./pricing";
+import { normalizeProjectsReport } from "./projects";
 import { normalizeHistory, normalizeRestorePlan, normalizeTrash, normalizeUninstallPlan } from "./history";
 import { normalizeLibrary, normalizeLibraryApply, normalizeLibraryPlan, type LibraryAction } from "./library";
 import {
@@ -285,6 +286,7 @@ export const api = {
   usageStatus: async () => normalizeUsageStatus(await getJson<unknown>("/api/usage/status")),
   usageModels: async (days = 30) => normalizeModelsReport(await getJson<unknown>("/api/usage/models", { days }), days),
   usagePricing: async () => normalizePricing(await getJson<unknown>("/api/usage/pricing")),
+  usageProjects: async (days = 30) => normalizeProjectsReport(await getJson<unknown>("/api/usage/projects", { days }), days),
   updates: async () => normalizeUpdates(await getJson<unknown>("/api/updates")),
   checkUpdates: async (unitKeys?: string[]) =>
     normalizeCheckJob(await sendJson<unknown>("POST", "/api/updates/check", unitKeys?.length ? { unitKeys } : {})),

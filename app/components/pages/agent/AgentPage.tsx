@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useScrollMemory } from "../../../hooks/useScrollMemory";
 import { MAX_PRIMARY_AGENTS } from "../../../lib/agents";
 import { errorMessage } from "../../../lib/api";
@@ -15,6 +15,7 @@ import { AgentFiles } from "./AgentFiles";
 import { AgentOverview } from "./AgentOverview";
 import { AgentTools } from "./AgentTools";
 import { AgentUsage } from "./AgentUsage";
+import type { UsageSection } from "./AgentUsageSections";
 
 type Tab = "overview" | "files" | "tools" | "usage";
 
@@ -36,6 +37,13 @@ export function AgentPage({ agentId }: { agentId: string }) {
   const { go } = useNav();
   const toast = useToast();
   const [tab, setTab] = useState<Tab>("overview");
+  // A 概览 card asks for a section of 使用数据; the tab scrolls to it once drawn.
+  const [focus, setFocus] = useState<UsageSection | null>(null);
+  const openUsage = (section: UsageSection) => {
+    setFocus(section);
+    setTab("usage");
+  };
+  const clearFocus = useCallback(() => setFocus(null), []);
   const [saving, setSaving] = useState(false);
   const scrollRef = useScrollMemory<HTMLDivElement>(`agent:${agentId}`);
   const agent = agentsById.get(agentId);
@@ -88,9 +96,29 @@ export function AgentPage({ agentId }: { agentId: string }) {
     );
   }
 
+  const summary = [
+    agent.productVersion ? `版本 ${agent.productVersion}` : "",
+    `${agent.skillCount} 个技能`,
+    activityLine(activityById.get(agent.id)),
+    agent.managedBy?.length ? `由 ${joinNames(agent.managedBy)} 写入` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
-    <section className="page" aria-labelledby="page-title">
-      <TopBar title={<span id="page-title">{agent.name}</span>} sub={isPrimary ? "常用 Agent" : "已安装，非常用"}>
+    <section className="page agent-page" aria-labelledby="page-title">
+      {/* One header: avatar, name with its status, the summary line and the actions. */}
+      <TopBar
+        leading={<AgentAvatar id={agent.id} size="lg" />}
+        title={
+          <>
+            <span id="page-title">{agent.name}</span>
+            {isPrimary ? <span className="tag">常用</span> : <span className="tag mute">非常用</span>}
+            {agent.refuseInstall ? <span className="tag info">只读</span> : null}
+          </>
+        }
+        sub={summary}
+      >
         <button type="button" className="btn" onClick={() => go("skills", { filter: isPrimary ? `only:${agent.id}` : `agent:${agent.id}` })}>
           查看它的技能
         </button>
@@ -99,34 +127,15 @@ export function AgentPage({ agentId }: { agentId: string }) {
         </button>
       </TopBar>
       <div className="scroll" ref={scrollRef}>
-        <div className="agent-hero">
-          <AgentAvatar id={agent.id} size="xl" />
-          <div>
-            <h2>{agent.name}</h2>
-            <div className="sub">
-              {[
-                agent.productVersion ? `版本 ${agent.productVersion}` : "",
-                `${agent.skillCount} 个技能`,
-                activityLine(activityById.get(agent.id)),
-                agent.managedBy?.length ? `由 ${joinNames(agent.managedBy)} 写入` : "",
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-            </div>
-          </div>
-          <div className="grow" />
-          {isPrimary ? <span className="tag">常用</span> : <span className="tag mute">非常用</span>}
-          {agent.refuseInstall ? <span className="tag info">只读</span> : null}
-        </div>
         {AGENT_NOTES[agent.id] || agent.refuseInstall ? (
           <p className="safe-note info">{agent.refuseInstall || AGENT_NOTES[agent.id]}</p>
         ) : null}
         <Tabs tabs={TABS} value={tab} onChange={setTab} label={`${agent.name} 详情`} idBase={`agent-${agent.id}`} />
         <div role="tabpanel" aria-labelledby={`agent-${agent.id}-tab-${tab}`} className="agent-panel">
-          {tab === "overview" ? <AgentOverview agent={agent} /> : null}
+          {tab === "overview" ? <AgentOverview agent={agent} onOpenUsage={openUsage} /> : null}
           {tab === "files" ? <AgentFiles agentId={agent.id} agentName={agent.name} /> : null}
           {tab === "tools" ? <AgentTools agentId={agent.id} agentName={agent.name} /> : null}
-          {tab === "usage" ? <AgentUsage agentId={agent.id} agentName={agent.name} /> : null}
+          {tab === "usage" ? <AgentUsage agentId={agent.id} agentName={agent.name} focus={focus} onFocused={clearFocus} /> : null}
         </div>
       </div>
     </section>

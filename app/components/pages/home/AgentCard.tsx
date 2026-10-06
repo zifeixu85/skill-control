@@ -2,10 +2,13 @@
 
 import type { CSSProperties } from "react";
 import { agentMeta, tintFor } from "../../../lib/agents";
+import { COST_HINT, estimatedPart, formatCost } from "../../../lib/cost";
 import { formatCompact, shortTitle } from "../../../lib/format";
 import type { PageId } from "../../../lib/navigation";
 import { componentsOf, mergePlugins } from "../../../lib/plugins";
 import type { ActivityAgent } from "../../../lib/types";
+import { isIndexing, SESSIONS_HINT } from "../../../lib/usage";
+import { InfoIcon } from "../../icons";
 import { useData } from "../../providers/DataProvider";
 import { useNav } from "../../providers/NavProvider";
 import { AgentAvatar } from "../../ui/Avatar";
@@ -25,6 +28,44 @@ export function activityLine(activity: ActivityAgent | undefined): string {
     return [activity.activeDays30d ? `近 30 天 ${activity.activeDays30d} 天在用` : "近 30 天", `${formatCompact(activity.tokens30d)} tokens`].join(" · ");
   }
   return `近 30 天 ${activity.files30d} 个会话 · ${activity.activeDays30d} 天在用`;
+}
+
+/** Tokens and 预估费用 for the last 30 days, or a quiet placeholder while usage is being counted. */
+function UsageStrip({ agentId }: { agentId: string }) {
+  const { usage } = useData();
+  const data = usage.data;
+  const agent = data?.agents.find((item) => item.agentId === agentId);
+  if (!data || (!agent && isIndexing(data.status, data.index))) {
+    return (
+      <div className="acard-usage pending" aria-busy="true">
+        <span>统计中</span>
+      </div>
+    );
+  }
+  if (!agent || (!agent.tokens?.total && agent.costUsd === null)) {
+    return (
+      <div className="acard-usage pending">
+        <span>近 30 天没有用量记录</span>
+      </div>
+    );
+  }
+  const estimated = estimatedPart(agent.costBasis);
+  return (
+    <div className="acard-usage">
+      <div>
+        <span>Tokens</span>
+        <b>{agent.tokens ? formatCompact(agent.tokens.total) : "—"}</b>
+      </div>
+      <div title={COST_HINT}>
+        <span>
+          预估费用
+          <InfoIcon className="info-dot" aria-label={COST_HINT} />
+        </span>
+        <b>{formatCost(agent.costUsd)}</b>
+        {estimated ? <small>{estimated}</small> : null}
+      </div>
+    </div>
+  );
 }
 
 export function AgentCard({ agentId }: { agentId: string }) {
@@ -73,17 +114,17 @@ export function AgentCard({ agentId }: { agentId: string }) {
     <article className="acard" style={{ "--tint": tintFor(meta.color) } as CSSProperties}>
       <div className="acard-head">
         <AgentAvatar id={agentId} size="lg" />
-        <div>
+        <div className="acard-title">
           <h2>
             <button type="button" className="acard-name" onClick={() => go("agent", { agentId })} title={`查看 ${meta.name} 的详情`}>
               {meta.name}
             </button>
           </h2>
-          <div className="meta">{activityLine(activityById.get(agentId))}</div>
+          <div className="meta" title={SESSIONS_HINT}>
+            {activityLine(activityById.get(agentId))}
+          </div>
         </div>
-        <span className="tag" style={{ marginLeft: "auto" }}>
-          常用
-        </span>
+        <span className="tag">常用</span>
       </div>
       <div className="stats">
         {stats.map((stat) => (
@@ -99,6 +140,7 @@ export function AgentCard({ agentId }: { agentId: string }) {
           </button>
         ))}
       </div>
+      <UsageStrip agentId={agentId} />
       <div className="used">
         <h3>最近 30 天用得最多的技能</h3>
         {used.length ? (

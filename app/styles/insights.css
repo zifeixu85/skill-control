@@ -2,7 +2,7 @@
 
 .ugrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr));
   gap: 14px;
 }
 .ucard {
@@ -109,10 +109,23 @@
 }
 .usage-columns {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
   gap: 22px;
   margin-top: 18px;
 }
+.usage-block {
+  min-width: 0;
+  scroll-margin-top: 12px;
+}
+.usage-block.flash {
+  animation: price-flash 2.4s var(--ease);
+  border-radius: var(--r-card);
+}
+.agent-usage > .usage-block + .usage-block,
+.agent-usage > .usage-columns + .usage-block {
+  margin-top: 22px;
+}
+.agent-usage .usage-block > h3,
 .usage-columns h3 {
   font-size: 13px;
   font-weight: 650;
