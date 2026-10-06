@@ -21,6 +21,8 @@ export interface GoOptions {
   agentId?: string;
   filter?: string;
   skillId?: string | null;
+  /** 模型价格表: a row to scroll to and highlight, e.g. "models:gpt-5.5" or "rules". */
+  priceRow?: string;
 }
 
 export interface Nav {
@@ -64,6 +66,14 @@ export function takeRevealTarget(): string | null {
   return target;
 }
 
+/** A price-table row to bring into view once 模型价格表 mounts (go("pricing", { priceRow })). */
+let priceTarget: string | null = null;
+export function takePriceTarget(): string | null {
+  const target = priceTarget;
+  priceTarget = null;
+  return target;
+}
+
 export function NavProvider({ children }: { children: ReactNode }) {
   const [routeText, setRouteText] = usePersistent(routeStore);
   const [skillFilter, setSkillFilter] = usePersistent(filterStore);
@@ -79,6 +89,7 @@ export function NavProvider({ children }: { children: ReactNode }) {
       setRouteText(serializeRoute({ page, agentId: page === "agent" ? options.agentId || null : null }));
       setDrawer(null);
       if (options.filter !== undefined) setSkillFilter(options.filter);
+      priceTarget = page === "pricing" ? options.priceRow || null : null;
       if (options.skillId !== undefined) setSelectedSkillId(options.skillId);
       if (options.skillId) {
         // Opening a specific skill: clear filters that could hide it and scroll to it.

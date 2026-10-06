@@ -1,0 +1,316 @@
+/* 预估费用: cost stats, 按模型 table, 模型价格表 page. */
+
+/* Notes above tables */
+.index-note.warn {
+  color: var(--warn);
+  background: var(--warn-wash);
+  border-radius: 10px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+.index-note .link-btn {
+  margin-left: 6px;
+}
+
+/* Cost stat on agent cards and in the skill panel */
+.info-dot {
+  width: 13px;
+  height: 13px;
+  margin-left: 3px;
+  vertical-align: -2px;
+  color: var(--ink-3);
+  cursor: help;
+}
+.ustat-cost small {
+  display: block;
+  font-size: 11.5px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.skill-cost {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  margin-top: 8px;
+}
+.skill-cost b {
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.skill-cost small {
+  color: var(--ink-3);
+  margin-left: 6px;
+}
+
+/* Number columns: right-aligned, tabular, never wrap. */
+.model-table th.num,
+.model-table td.num,
+.price-table th.num,
+.price-table td.num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+/* Price headers may wrap ("1 小时 / 缓存写") so narrow windows never overlap them. */
+.price-table thead th.num {
+  white-space: normal;
+  word-break: keep-all;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+.model-table thead th:not(.num),
+.price-table thead th:not(.num) {
+  text-align: left;
+}
+.price-table td.source a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.price-table td.source a:hover {
+  text-decoration: underline;
+}
+.model-table td.cost {
+  font-weight: 650;
+  color: var(--ink);
+}
+.model-table th,
+.model-table td,
+.price-table th,
+.price-table td {
+  padding: 8px 10px;
+}
+.model-table th.cell-main {
+  min-width: 170px;
+  max-width: 260px;
+  text-align: left;
+}
+.price-table th.cell-main {
+  text-align: left;
+}
+.model-table .cell-agents {
+  text-align: left;
+  white-space: nowrap;
+}
+.avatar-row {
+  display: inline-flex;
+  gap: 3px;
+}
+.model-table tfoot th {
+  text-align: left;
+  font-weight: 650;
+  font-size: 13px;
+  border-bottom: 0;
+}
+.model-table tfoot td {
+  border-bottom: 0;
+}
+.model-table tfoot small {
+  font-weight: 400;
+}
+.model-table tr.warn-row > * {
+  background: color-mix(in oklab, var(--danger-wash) 55%, transparent);
+}
+.chip-btn {
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.chip-btn:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* 模型价格表 */
+.top .back {
+  margin-left: -8px;
+  align-self: flex-start;
+  margin-top: 2px;
+}
+.formula {
+  background: var(--panel);
+  border-radius: var(--r-card);
+  box-shadow: 0 0 0 1px var(--line-2);
+  padding: 12px 16px;
+  display: grid;
+  gap: 4px;
+  font-size: 13.5px;
+}
+.formula b {
+  font-weight: 650;
+}
+.formula small {
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.price-vendor {
+  margin-bottom: 18px;
+}
+.price-vendor h3,
+.price-sub {
+  font-size: 13.5px;
+  font-weight: 650;
+  margin: 0 0 8px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.price-sub {
+  margin-top: 6px;
+}
+.price-vendor h3 a {
+  color: var(--ink);
+  text-decoration: underline;
+  text-decoration-color: var(--line);
+  text-underline-offset: 3px;
+}
+.price-vendor h3 a::after {
+  content: " ↗";
+  color: var(--ink-3);
+  font-weight: 400;
+}
+.price-vendor h3 em {
+  font-style: normal;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.price-table table {
+  min-width: 640px;
+  table-layout: fixed;
+}
+.price-table thead th {
+  white-space: normal;
+  line-height: 1.3;
+  vertical-align: bottom;
+}
+.price-table td.num {
+  padding-left: 6px;
+  padding-right: 6px;
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.price-table td.cell-tags {
+  padding-left: 6px;
+  padding-right: 6px;
+}
+.price-table th.cell-main,
+.price-table td {
+  overflow: hidden;
+}
+.price-table td.long {
+  white-space: normal;
+}
+.price-table td.long b,
+.price-table td.long span:not(.none) {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.price-table td.long b {
+  font-weight: 600;
+  color: var(--ink);
+}
+.price-table td:not(.num) {
+  text-align: left;
+}
+.price-table td.inherited {
+  color: var(--ink-3);
+  cursor: help;
+}
+.price-table td.long {
+  text-align: left;
+  font-size: 12px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+  min-width: 128px;
+}
+.price-table td.source {
+  white-space: nowrap;
+}
+.price-table td.source a,
+.price-table .price-as .link-btn {
+  font-size: 12.5px;
+}
+.price-table td.price-as,
+.price-table td.reason {
+  text-align: left;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.price-table td.price-as small {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+}
+.price-table td.price-as .mono {
+  font-family: var(--font-mono);
+}
+.price-table td.reason {
+  min-width: 240px;
+}
+.price-table code.match {
+  font-size: 11.5px;
+}
+.price-table .mono {
+  font-family: var(--font-mono);
+}
+.price-table tbody.price-row:last-child tr:last-child > * {
+  border-bottom: 0;
+}
+.price-row:has(+ .price-row) tr.price-note > td,
+.price-row tr:has(+ tr.price-note) > * {
+  border-bottom-color: transparent;
+}
+.price-note td {
+  text-align: left;
+  padding-top: 0;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.price-note p + p {
+  margin-top: 2px;
+}
+.price-row.flash > tr > * {
+  animation: price-flash 2.4s var(--ease);
+}
+@keyframes price-flash {
+  0%,
+  35% {
+    background: var(--accent-wash);
+  }
+  100% {
+    background: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .price-row.flash > tr > * {
+    animation: none;
+    background: var(--accent-wash);
+  }
+}
+.price-rules.flash {
+  animation: price-flash 2.4s var(--ease);
+  border-radius: var(--r-card);
+}
+.price-rules ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-2);
+  max-width: 860px;
+}

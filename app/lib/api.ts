@@ -1,7 +1,9 @@
 import { normalizeAgentFile, normalizeAgentFiles, normalizeAgentTools } from "./agent-extras";
 import { resolveApiBase } from "./api-base";
 import { normalizeCliApply, normalizeCliPlan, normalizeCliTools } from "./cli-tools";
+import { normalizeModelsReport } from "./cost";
 import { normalizeHealthReport } from "./health";
+import { normalizePricing } from "./pricing";
 import { normalizeHistory, normalizeRestorePlan, normalizeTrash, normalizeUninstallPlan } from "./history";
 import { normalizeLibrary, normalizeLibraryApply, normalizeLibraryPlan, type LibraryAction } from "./library";
 import {
@@ -281,6 +283,8 @@ export const api = {
   usageAgent: async (id: string, days = 90) =>
     normalizeAgentUsage(await getJson<unknown>("/api/usage/agent", { id, days }), id),
   usageStatus: async () => normalizeUsageStatus(await getJson<unknown>("/api/usage/status")),
+  usageModels: async (days = 30) => normalizeModelsReport(await getJson<unknown>("/api/usage/models", { days }), days),
+  usagePricing: async () => normalizePricing(await getJson<unknown>("/api/usage/pricing")),
   updates: async () => normalizeUpdates(await getJson<unknown>("/api/updates")),
   checkUpdates: async (unitKeys?: string[]) =>
     normalizeCheckJob(await sendJson<unknown>("POST", "/api/updates/check", unitKeys?.length ? { unitKeys } : {})),

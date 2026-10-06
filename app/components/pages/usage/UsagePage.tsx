@@ -13,6 +13,8 @@ import { useNav } from "../../providers/NavProvider";
 import { AgentAvatar } from "../../ui/Avatar";
 import { EmptyState, Loading, SectionHeading, Segmented, TopBar } from "../../ui/basics";
 import { ItemText } from "../../ui/Item";
+import { COST_HINT } from "../../../lib/cost";
+import { ModelTable } from "./ModelTable";
 import { IndexProgress } from "./IndexProgress";
 import { UsageAgentCard } from "./UsageAgentCard";
 
@@ -161,6 +163,8 @@ function SummaryView({ summary, days }: { summary: UsageSummary; days: number })
           {isIndexing(summary.status, summary.index) ? "统计完成后会显示在这里。" : null}
         </EmptyState>
       )}
+      <SectionHeading title="按模型" note={`最近 ${days} 天 · ${COST_HINT}`} />
+      <ModelTable days={days} />
       <SectionHeading title="用得最多的技能" note={`最近 ${days} 天 · 会话里实际调用或读取的次数`} />
       {summary.topSkills.length ? (
         <TopSkillsTable skills={summary.topSkills} agentIds={skillAgents} />
@@ -175,6 +179,7 @@ function SummaryView({ summary, days }: { summary: UsageSummary; days: number })
 }
 
 export function UsagePage() {
+  const { go } = useNav();
   const [days, setDays] = useState<Days>("30");
   const scrollRef = useScrollMemory<HTMLDivElement>("usage");
   const now = useNow();
@@ -194,6 +199,9 @@ export function UsagePage() {
             : "各 Agent 的会话、Tokens 和技能使用情况，只在本机统计"
         }
       >
+        <button type="button" className="btn ghost" onClick={() => go("pricing")}>
+          模型价格表
+        </button>
         <Segmented
           label="时间范围"
           value={days}

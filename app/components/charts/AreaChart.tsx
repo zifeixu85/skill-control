@@ -21,19 +21,24 @@ export function AreaChart({
   unit,
   label,
   compact,
+  format,
 }: {
   points: SeriesPoint[];
   unit: string;
   label: string;
   compact?: boolean;
+  /** Value text for axis, tooltip and table (default: counts). Money charts may go below 1. */
+  format?: (value: number) => string;
 }) {
+  const text = format || ((value: number) => value.toLocaleString("zh-CN"));
+  const tickText = format || formatCompact;
   const id = useId();
   const [active, setActive] = useState<number | null>(null);
   // Draw at the real pixel width so text and strokes keep their size at any card width.
   const [plotRef, measured] = useElementWidth<HTMLDivElement>(BOX.width);
   const box = { ...BOX, width: Math.max(240, measured), height: compact ? 120 : measured > 720 ? 200 : BOX.height };
   const values = points.map((point) => point.value);
-  const max = niceMax(Math.max(0, ...values));
+  const max = niceMax(Math.max(0, ...values), format ? 0.01 : 1);
   const plotted = plotPoints(values, box, max);
   const baseline = box.height - box.bottom;
   const innerWidth = box.width - box.left - box.right;
@@ -72,7 +77,7 @@ export function AreaChart({
               <g key={tick} className="chart-grid">
                 <line x1={box.left} x2={box.width - box.right} y1={y} y2={y} />
                 <text x={box.left - 6} y={y + 3.5} textAnchor="end">
-                  {formatCompact(tick)}
+                  {tickText(tick)}
                 </text>
               </g>
             );
@@ -113,7 +118,7 @@ export function AreaChart({
             }}
             role="status"
           >
-            <b>{points[active].value.toLocaleString("zh-CN")}</b> {unit}
+            <b>{text(points[active].value)}</b> {format ? "" : unit}
             <span>{points[active].label}</span>
           </div>
         ) : null}
@@ -131,7 +136,7 @@ export function AreaChart({
             {points.map((point) => (
               <tr key={point.label}>
                 <td>{point.label}</td>
-                <td>{point.value.toLocaleString("zh-CN")}</td>
+                <td>{text(point.value)}</td>
               </tr>
             ))}
           </tbody>

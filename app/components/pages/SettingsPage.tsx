@@ -220,6 +220,13 @@ export function SettingsPage() {
             <section className="set-block" aria-labelledby="set-privacy">
               <h2 id="set-privacy">数据与隐私</h2>
               <p>所有扫描都在本机完成。使用次数只统计会话记录里的调用，不读取对话内容，也不会上传。密钥和令牌在读取配置时就被隐藏。</p>
+              <p>
+                “数据”页的预估费用按各厂商官方 API 价格计算，订阅内的用量不等于实际支出。价格和计算规则见{" "}
+                <button type="button" className="link-btn" onClick={() => go("pricing")}>
+                  模型价格表
+                </button>
+                。
+              </p>
             </section>
           </div>
         )}

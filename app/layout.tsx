@@ -10,6 +10,7 @@ import "./styles/skills.css";
 import "./styles/inspector.css";
 import "./styles/catalog.css";
 import "./styles/insights.css";
+import "./styles/pricing.css";
 import "./styles/updates.css";
 import "./styles/library.css";
 import "./styles/content.css";

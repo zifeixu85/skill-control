@@ -15,6 +15,7 @@ import { SettingsPage, themeStore } from "./pages/SettingsPage";
 import { SkillsPage } from "./pages/skills/SkillsPage";
 import { UpdatesPage } from "./pages/updates/UpdatesPage";
 import { UsagePage } from "./pages/usage/UsagePage";
+import { PricingPage } from "./pages/pricing/PricingPage";
 import { DataProvider, useData } from "./providers/DataProvider";
 import { NavProvider, useNav } from "./providers/NavProvider";
 import { ToastProvider } from "./providers/ToastProvider";
@@ -55,6 +56,8 @@ function CurrentPage() {
       return <UpdatesPage />;
     case "usage":
       return <UsagePage />;
+    case "pricing":
+      return <PricingPage />;
     case "health":
       return <HealthPage />;
     case "settings":

@@ -1,14 +1,37 @@
 "use client";
 
 import { useState } from "react";
-import { formatCompact, formatUsd } from "../../../lib/format";
-import { CONFIDENCE_HINTS, confidenceLabel, fillSeries, type UsageAgent, type UsageSource } from "../../../lib/usage";
+import { COST_HINT, estimatedPart, formatCost } from "../../../lib/cost";
+import { formatCompact } from "../../../lib/format";
+import { CONFIDENCE_HINTS, confidenceLabel, fillSeries, type UsageAgent, type UsagePoint, type UsageSource } from "../../../lib/usage";
+import { InfoIcon } from "../../icons";
 import { AreaChart } from "../../charts/AreaChart";
 import { useData } from "../../providers/DataProvider";
 import { AgentAvatar } from "../../ui/Avatar";
 import { Segmented } from "../../ui/basics";
 
-type Metric = "sessions" | "tokens";
+type Metric = "sessions" | "tokens" | "cost";
+
+const METRIC_UNITS: Record<Metric, string> = { sessions: "个会话", tokens: "Tokens", cost: "美元（预估）" };
+const METRIC_LABELS: Record<Metric, string> = { sessions: "会话数", tokens: "Tokens", cost: "预估费用" };
+const metricValue = (point: UsagePoint, metric: Metric) =>
+  metric === "sessions" ? point.sessions : metric === "tokens" ? point.tokens : point.costUsd;
+
+/** 预估费用 with what it's based on: the estimated part and, for Hermes / OpenClaw, the product's own figure. */
+function CostStat({ usage }: { usage: UsageAgent }) {
+  const estimated = estimatedPart(usage.costBasis);
+  return (
+    <div className="ustat-cost" title={COST_HINT}>
+      <b>{formatCost(usage.costUsd)}</b>
+      <span>
+        {usage.costUsd === null ? "费用未记录" : "预估费用"}
+        <InfoIcon className="info-dot" aria-label={COST_HINT} />
+      </span>
+      {estimated ? <small>{estimated}</small> : null}
+      {usage.reportedCostUsd !== null ? <small>产品自报 {formatCost(usage.reportedCostUsd)}</small> : null}
+    </div>
+  );
+}
 
 export const dayLabel = (date: string) => `${Number(date.slice(5, 7))}月${Number(date.slice(8, 10))}日`;
 
@@ -32,9 +55,10 @@ export function SourceBadges({ sources }: { sources: UsageSource[] }) {
 export function UsageAgentCard({ usage, days, endDate }: { usage: UsageAgent; days: number; endDate: string }) {
   const { agentName } = useData();
   const hasTokens = Boolean(usage.tokens?.total) || usage.series.some((point) => point.tokens > 0);
+  const hasCost = usage.series.some((point) => point.costUsd > 0);
   const [metric, setMetric] = useState<Metric>("sessions");
   const series = fillSeries(usage.series, days, endDate);
-  const shown: Metric = hasTokens ? metric : "sessions";
+  const shown: Metric = (metric === "tokens" && hasTokens) || (metric === "cost" && hasCost) ? metric : "sessions";
   const name = agentName(usage.agentId);
   const tokens = usage.tokens;
   return (
@@ -45,14 +69,15 @@ export function UsageAgentCard({ usage, days, endDate }: { usage: UsageAgent; da
           <h3>{name}</h3>
           <SourceBadges sources={usage.sources} />
         </div>
-        {hasTokens ? (
+        {hasTokens || hasCost ? (
           <Segmented
             label={`${name} 图表指标`}
             value={shown}
             onChange={setMetric}
             items={[
-              { id: "sessions", label: "会话" },
-              { id: "tokens", label: "Tokens" },
+              { id: "sessions" as const, label: "会话" },
+              ...(hasTokens ? [{ id: "tokens" as const, label: "Tokens" }] : []),
+              ...(hasCost ? [{ id: "cost" as const, label: "费用" }] : []),
             ]}
           />
         ) : null}
@@ -76,20 +101,15 @@ export function UsageAgentCard({ usage, days, endDate }: { usage: UsageAgent; da
             <span>额度</span>
           </div>
         ) : (
-          <div>
-            <b>{formatUsd(usage.costUsd)}</b>
-            <span>{usage.costUsd === null ? "费用未记录" : "费用"}</span>
-          </div>
+          <CostStat usage={usage} />
         )}
       </div>
       {series.length ? (
         <AreaChart
-          label={`${name} 最近 ${days} 天每天的${shown === "sessions" ? "会话数" : "Tokens"}`}
-          unit={shown === "sessions" ? "个会话" : "Tokens"}
-          points={series.map((point) => ({
-            label: dayLabel(point.date),
-            value: shown === "sessions" ? point.sessions : point.tokens,
-          }))}
+          label={`${name} 最近 ${days} 天每天的${METRIC_LABELS[shown]}`}
+          unit={METRIC_UNITS[shown]}
+          format={shown === "cost" ? formatCost : undefined}
+          points={series.map((point) => ({ label: dayLabel(point.date), value: metricValue(point, shown) }))}
         />
       ) : (
         <p className="muted small">没有按天的数据。</p>

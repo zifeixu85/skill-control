@@ -110,12 +110,14 @@ export function Sidebar() {
         (activityById.get(right.id)?.weight30d || 0) - (activityById.get(left.id)?.weight30d || 0) ||
         right.skillCount - left.skillCount,
     );
+  // 模型价格表 lives under 数据.
+  const current = (id: string) => route.page === id || (id === "usage" && route.page === "pricing");
   const navButton = ({ id, label, Icon, count, badge }: NavItem) => (
     <button
       key={id}
       type="button"
-      className={route.page === id ? "on" : ""}
-      aria-current={route.page === id ? "page" : undefined}
+      className={current(id) ? "on" : ""}
+      aria-current={current(id) ? "page" : undefined}
       aria-label={count ? `${label}，${count} 个${badge ? "待处理" : ""}` : label}
       title={label}
       onClick={() => go(id)}

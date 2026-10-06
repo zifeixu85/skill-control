@@ -7,6 +7,7 @@ export const MAIN_PAGES = [
   "connectors",
   "updates",
   "usage",
+  "pricing",
   "health",
   "settings",
 ] as const;
@@ -28,6 +29,7 @@ export const PAGE_TITLES: Record<PageId, string> = {
   connectors: "连接器与 MCP",
   updates: "更新",
   usage: "数据",
+  pricing: "模型价格表",
   health: "体检",
   settings: "设置",
   agent: "Agent",

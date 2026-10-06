@@ -15,9 +15,9 @@ export interface ChartPoint {
   value: number;
 }
 
-/** A rounded upper bound with 1/2/2.5/5 × 10ⁿ steps; never below 1. */
-export function niceMax(value: number): number {
-  if (!(value > 0)) return 1;
+/** A rounded upper bound with 1/2/2.5/5 × 10ⁿ steps; never below `floor` (1 for counts). */
+export function niceMax(value: number, floor = 1): number {
+  if (!(value > floor)) return floor;
   const exponent = Math.floor(Math.log10(value));
   const base = 10 ** exponent;
   for (const step of [1, 2, 2.5, 5, 10]) {

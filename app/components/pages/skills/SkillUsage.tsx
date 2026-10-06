@@ -5,7 +5,9 @@ import { isUnsupported, useResource } from "../../../hooks/useResource";
 import { api } from "../../../lib/api";
 import { formatCompact, formatMonthDay } from "../../../lib/format";
 import type { SkillView } from "../../../lib/skill-model";
+import { COST_HINT, estimatedPart, formatCost, sumCosts } from "../../../lib/cost";
 import { CONFIDENCE_HINTS, confidenceLabel, fillSeries, localDate } from "../../../lib/usage";
+import { InfoIcon } from "../../icons";
 import { AreaChart } from "../../charts/AreaChart";
 import { useData } from "../../providers/DataProvider";
 import { AgentAvatar } from "../../ui/Avatar";
@@ -38,16 +40,20 @@ export function SkillUsage({ view }: { view: SkillView }) {
   const usage = useResource(`usage:skill:${view.techName}:${DAYS}`, () => api.usageSkill(view.techName, DAYS));
   const now = useNow();
   if (isUnsupported(usage.error) || usage.status === "error" || !usage.data) return <SummaryCounts view={view} />;
-  const agents = usage.data.agents.filter((agent) => agent.total > 0 || agent.reportedTotal);
+  // Tokens attributed to the skill count too, even without a recorded call (they carry its cost).
+  const agents = usage.data.agents.filter((agent) => agent.total > 0 || agent.reportedTotal || agent.tokens > 0);
   if (!agents.length) return <p className="muted small">最近 {DAYS} 天没有使用记录。</p>;
   const end = localDate(now || null);
+  // Cost only where tokens were attributed to the skill (Claude logs); null elsewhere.
+  const priced = agents.filter((agent) => agent.costUsd !== null);
+  const { costUsd: cost, costBasis: split } = sumCosts(priced);
   const daily = new Map<string, number>();
   for (const agent of agents) {
     for (const point of agent.series) daily.set(point.date, (daily.get(point.date) || 0) + point.count);
   }
   const series = end
     ? fillSeries(
-        [...daily.entries()].map(([date, count]) => ({ date, sessions: count, tokens: 0 })),
+        [...daily.entries()].map(([date, count]) => ({ date, sessions: count, tokens: 0, costUsd: 0 })),
         DAYS,
         end,
       )
@@ -70,6 +76,13 @@ export function SkillUsage({ view }: { view: SkillView }) {
           </div>
         ))}
       </div>
+      {priced.length ? (
+        <p className="skill-cost" title={COST_HINT}>
+          预估费用 <b>{formatCost(cost)}</b>
+          <InfoIcon className="info-dot" aria-label={COST_HINT} />
+          {estimatedPart(split) ? <small>{estimatedPart(split)}</small> : null}
+        </p>
+      ) : null}
       {series.some((point) => point.sessions > 0) ? (
         <AreaChart
           compact

@@ -1,3 +1,4 @@
+import { normalizeCost, normalizeModelRows, type CostSplit, type ModelRow } from "./cost";
 import {
   asArray,
   asNumber,
@@ -26,6 +27,8 @@ export interface UsagePoint {
   date: string;
   sessions: number;
   tokens: number;
+  /** Estimated cost that day at official prices (0 when the service doesn't report it). */
+  costUsd: number;
 }
 
 export interface UsageSource {
@@ -39,7 +42,13 @@ export interface UsageAgent {
   sessions: number;
   activeDays: number;
   tokens: UsageTokens | null;
+  /** Estimated at official API prices (see lib/cost). */
   costUsd: number | null;
+  costBasis: CostSplit | null;
+  unpricedTokens: number;
+  /** Hermes / OpenClaw / QClaw: the figure the product records itself. */
+  reportedCostUsd: number | null;
+  byModel: ModelRow[];
   credits: number | null;
   series: UsagePoint[];
   sources: UsageSource[];
@@ -120,6 +129,7 @@ function normalizeSeries(value: unknown): UsagePoint[] {
         date: asString(point.date),
         sessions: asNumber(pick(point, "sessions", "count")),
         tokens: tokenTotal(point.tokens),
+        costUsd: asNumber(point.costUsd),
       };
     })
     .filter((point) => /^\d{4}-\d{2}-\d{2}/.test(point.date))
@@ -139,12 +149,17 @@ export function normalizeUsageAgent(value: unknown, fallbackId = ""): UsageAgent
   const record = asRecord(value);
   const totals = asRecord(record.totals);
   const base = Object.keys(totals).length ? totals : record;
+  const cost = normalizeCost(base);
   return {
     agentId: asString(pick(record, "agentId", "id"), fallbackId),
     sessions: asNumber(base.sessions),
     activeDays: asNumber(base.activeDays),
     tokens: normalizeTokens(base.tokens),
-    costUsd: asOptionalNumber(base.costUsd),
+    costUsd: cost.costUsd,
+    costBasis: cost.costBasis,
+    unpricedTokens: cost.unpricedTokens,
+    reportedCostUsd: asOptionalNumber(base.reportedCostUsd),
+    byModel: normalizeModelRows(record.byModel),
     credits: asOptionalNumber(pick(base, "credits")),
     series: normalizeSeries(record.series),
     sources: normalizeSources(record.sources),
@@ -260,6 +275,9 @@ export interface SkillUsageAgent {
   lastUsedAt: string | null;
   confidence: string | null;
   reportedTotal: number | null;
+  /** Estimated cost of the attributed tokens; null when nothing was attributed. */
+  costUsd: number | null;
+  costBasis: CostSplit | null;
   series: { date: string; count: number }[];
 }
 
@@ -287,6 +305,8 @@ export function normalizeSkillUsage(raw: unknown, name: string): SkillUsage {
         lastUsedAt: asOptionalString(entry.lastUsedAt),
         confidence: asOptionalString(entry.confidence),
         reportedTotal: asOptionalNumber(entry.reportedTotal),
+        costUsd: asOptionalNumber(entry.costUsd),
+        costBasis: normalizeCost(entry).costBasis,
         series: asArray(entry.series)
           .map((point) => ({ date: asString(asRecord(point).date), count: asNumber(asRecord(point).count) }))
           .filter((point) => point.date),
@@ -329,7 +349,7 @@ export function fillSeries(series: UsagePoint[], days: number, endDate: string):
   const filled: UsagePoint[] = [];
   for (let offset = days - 1; offset >= 0; offset -= 1) {
     const day = new Date(end - offset * 86_400_000).toISOString().slice(0, 10);
-    filled.push(byDate.get(day) || { date: day, sessions: 0, tokens: 0 });
+    filled.push(byDate.get(day) || { date: day, sessions: 0, tokens: 0, costUsd: 0 });
   }
   return filled;
 }
