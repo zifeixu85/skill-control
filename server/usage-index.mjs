@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { bucketFor, emptyRow } from "./pricing.mjs";
 import { dayKey, discoverTranscripts, LINE_PROCESSORS, readSnapshots } from "./usage-sources.mjs";
 
 /**
@@ -10,9 +11,14 @@ import { dayKey, discoverTranscripts, LINE_PROCESSORS, readSnapshots } from "./u
  * counts and aggregates only: per transcript file its byte offset and per-day token,
  * session and skill counts; per database session its day, tokens and cost. Message text is
  * never stored. Each run has a time budget and resumes where the last one stopped.
+ *
+ * Version 2 adds tokens per model: `m` (model → day → bucket → row) and `km` (skill → model
+ * → day → bucket → row) per file, and `m` / `b` / `rc` per database record, where a row is
+ * [input, output, cacheRead, cacheWrite5m, cacheWrite1h, requests] and the bucket is the
+ * prompt-size tier plus :off / :fast (pricing.mjs). Costs are priced at query time.
  */
 
-export const USAGE_INDEX_VERSION = 1;
+export const USAGE_INDEX_VERSION = 2;
 export const USAGE_INDEX_FILE = "usage-index.json";
 const CHUNK_BYTES = 8 * 1024 * 1024;
 const MAX_LINE_BYTES = 64 * 1024 * 1024;
@@ -75,7 +81,21 @@ async function headDigest(handle) {
 }
 
 function freshEntry(file) {
-  return { a: file.agentId, size: 0, mtimeMs: 0, offset: 0, tail: 0, head: null, gone: false, st: {}, d: {}, k: {}, kt: {}, ki: {}, p: null };
+  return { a: file.agentId, size: 0, mtimeMs: 0, offset: 0, tail: 0, head: null, gone: false, st: {}, d: {}, k: {}, kt: {}, ki: {}, m: {}, km: {}, p: null };
+}
+
+/** Adds a token row under model → day → bucket (a negative row moves usage away; empty rows are dropped). */
+function addModelRow(target, model, day, bucket, row) {
+  const byDay = (target[model] ||= {});
+  const byBucket = (byDay[day] ||= {});
+  const sum = byBucket[bucket] || emptyRow();
+  row.forEach((value, index) => {
+    sum[index] = Math.max(0, sum[index] + (value || 0));
+  });
+  byBucket[bucket] = sum;
+  if (sum.every((value) => value === 0)) delete byBucket[bucket];
+  if (!Object.keys(byBucket).length) delete byDay[day];
+  if (!Object.keys(byDay).length) delete target[model];
 }
 
 /** A short digest of a message id: enough to recognise repeats, nothing else. */
@@ -109,6 +129,10 @@ function lineContext(entry, file, seenIds) {
     },
     skillTokens(name, day, total) {
       addNested(entry.kt, name, day, total);
+    },
+    modelUsage(day, model, bucket, row, skill = null) {
+      addModelRow((entry.m ||= {}), model, day, bucket, row);
+      if (skill) addModelRow(((entry.km ||= {})[skill] ||= {}), model, day, bucket, row);
     },
   };
 }
@@ -193,7 +217,17 @@ function applySnapshots(index, snapshots) {
     const target = index.records[agentId] || {};
     for (const record of records) {
       if (!record.day) continue;
-      target[record.key] = { d: record.day, t: TOKEN_FIELDS.map((field) => record.tokens[field] || 0), c: record.costUsd || 0, p: record.project || null };
+      // Snapshots have no per-request prompt size: their bucket only carries the off-peak flag.
+      const model = record.model || null;
+      target[record.key] = {
+        d: record.day,
+        t: TOKEN_FIELDS.map((field) => record.tokens[field] || 0),
+        m: model,
+        b: model ? bucketFor({ model, timestamp: record.at, agentId }) : "s",
+        n: record.requests || 0,
+        rc: record.costUsd || 0,
+        p: record.project || null,
+      };
     }
     index.records[agentId] = target;
   }
@@ -216,10 +250,22 @@ function applySnapshots(index, snapshots) {
   }
 }
 
+function pruneModels(byModel, cutoff) {
+  for (const [model, byDay] of Object.entries(byModel || {})) {
+    for (const day of Object.keys(byDay)) if (day < cutoff) delete byDay[day];
+    if (!Object.keys(byDay).length) delete byModel[model];
+  }
+}
+
 function pruneOld(index) {
   const cutoff = cutoffDay();
   for (const entry of Object.values(index.files)) {
     for (const day of Object.keys(entry.d)) if (day < cutoff) delete entry.d[day];
+    pruneModels(entry.m, cutoff);
+    for (const [skill, byModel] of Object.entries(entry.km || {})) {
+      pruneModels(byModel, cutoff);
+      if (!Object.keys(byModel).length) delete entry.km[skill];
+    }
     for (const map of [entry.k, entry.kt, entry.ki]) {
       for (const [name, byDay] of Object.entries(map)) {
         for (const day of Object.keys(byDay)) if (day < cutoff) delete byDay[day];

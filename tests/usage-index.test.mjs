@@ -37,11 +37,29 @@ test("indexes tokens, sessions and skills from every source without keeping any 
   assert.equal(agents.workbuddy.sessions, 1);
   assert.deepEqual(agents.workbuddy.tokens, { input: 150, output: 25, cacheRead: 200, cacheWrite: 0, total: 375 });
   assert.equal(agents.workbuddy.credits, 3.75);
-  assert.equal(agents.workbuddy.costUsd, null);
-  // Hermes state.db and OpenClaw sessions.json: sessions inside the window only.
+  // Estimated cost at official prices, per model (USD per 1M tokens in the price table):
+  // Opus 5.5 10×4 + 5×20 + 100×0.2 + 5×5 (5 min) + 15×8 (1 h) = 305, Sonnet 5.5 22, Haiku 4.5 22.
+  assert.equal(agents.claude.costUsd, 0.000349);
+  assert.deepEqual(agents.claude.costBasis, { official: 0.000349, estimate: 0, family: 0, reported: 0 });
+  assert.equal(agents.claude.unpricedTokens, 8, "the credential-shaped model id is stored as unknown");
+  assert.deepEqual(agents.claude.byModel.map((row) => [row.model, row.basis]), [
+    ["claude-opus-5-5", "official"],
+    ["claude-haiku-4-5-20251001", "official"],
+    ["claude-sonnet-5-5", "official"],
+    ["unknown", "unpriced"],
+  ]);
+  // Codex: GPT-5.5 for the first file's turns (2900 + 2500), the fork's auto-review at GPT-5.6 Luna.
+  assert.deepEqual([agents.codex.costUsd, agents.codex.costBasis.official, agents.codex.costBasis.estimate], [0.00542, 0.0054, 0.00002]);
+  // WorkBuddy: GLM-5.2 = 100×1.4 + 200×0.26 + 20×4.4 = 280; "auto" at that average = 50×1.4 + 5×4.4 = 92.
+  assert.deepEqual([agents.workbuddy.costUsd, agents.workbuddy.costBasis.estimate], [0.000372, 0.000092]);
+  assert.equal(agents.workbuddy.byModel.find((row) => row.model === "auto").priceAs, "@agent-average");
+  // Hermes state.db and OpenClaw sessions.json: sessions inside the window only; without a
+  // model the products' own cost figures are used.
   assert.equal(agents.hermes.sessions, 2);
   assert.equal(agents.hermes.tokens.total, 4_600);
   assert.equal(agents.hermes.costUsd, 0.42);
+  assert.deepEqual([agents.hermes.costBasis.reported, agents.hermes.reportedCostUsd], [0.42, 0.42]);
+  assert.deepEqual([agents.openclaw.costUsd, agents.openclaw.costBasis.reported], [0.2, 0.2]);
   assert.equal(agents.openclaw.sessions, 1);
   assert.equal(agents.openclaw.tokens.total, 1_500);
   assert.equal(agents.claude.series.length, 30);
@@ -51,6 +69,8 @@ test("indexes tokens, sessions and skills from every source without keeping any 
   const skill = (name) => summary.topSkills.find((item) => item.name === name);
   assert.deepEqual(skill("pdf").agents.map((item) => [item.agentId, item.count, item.confidence]), [["claude", 1, "exact"]]);
   assert.equal(skill("pdf").tokens, 135);
+  assert.equal(skill("pdf").costUsd, 0.000305, "attributed tokens are priced by model");
+  assert.equal(skill("xlsx").costUsd, null, "no token attribution, no cost");
   assert.deepEqual(skill("lark-doc").agents.map((item) => [item.agentId, item.confidence]), [["codex", "inferred"]]);
   assert.equal(skill("output-only"), undefined, "tool outputs are never inspected");
   assert.deepEqual(skill("xlsx").agents.map((item) => [item.agentId, item.count]), [["workbuddy", 1]]);
@@ -64,7 +84,10 @@ test("indexes tokens, sessions and skills from every source without keeping any 
   assert.equal(usageForAgent(index, "workbuddy", { days: 30 }).topProjects[0].name, "gamma-project");
 
   const stored = await readFile(indexPath, "utf8");
-  assert.doesNotMatch(stored, /MSGTEXT|ZZ9/u, "no message text, arguments or titles in the index");
+  assert.doesNotMatch(stored, /MSGTEXT|ZZ9/u, "no message text, arguments, titles or credential-shaped ids in the index");
+  const claudeFile = Object.values(index.files).find((entry) => entry.m?.["claude-opus-5-5"]);
+  assert.deepEqual(Object.values(claudeFile.m["claude-opus-5-5"])[0], { s: [10, 5, 100, 5, 15, 1] });
+  assert.deepEqual(Object.keys(Object.values(claudeFile.km.pdf["claude-opus-5-5"])[0]), ["s"]);
   assert.equal(stored.includes(home), false, "no paths in the index");
 });
 

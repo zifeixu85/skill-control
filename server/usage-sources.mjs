@@ -4,12 +4,14 @@ import path from "node:path";
 import { hermesHomeFor } from "./hermes.mjs";
 import { object, readBoundedJson } from "./fs-safe.mjs";
 import { openClawAgents, resolveOpenClawInstall } from "./openclaw.mjs";
+import { bucketFor, isIgnoredModel, modelKey } from "./pricing.mjs";
 
 /**
  * Usage sources for the incremental index. Transcript sources are append-only JSONL files
  * read from a byte offset; each line is filtered by cheap substring checks before parsing
  * and only counts, token numbers, skill names, dates and a project folder name are kept.
- * Message text, tool arguments and outputs never leave the line processor.
+ * Message text, tool arguments and outputs never leave the line processor. Token usage is
+ * also kept per model and price bucket (see pricing.mjs) so costs can be priced later.
  */
 
 const FILE_LIMIT = 20_000;
@@ -18,10 +20,16 @@ const SKILL_PATH = /skills[\\/]{1,2}([\w.@-]{1,128})[\\/]{1,2}SKILL\.md/gu;
 
 export const hashKey = (value) => createHash("sha1").update(value).digest("hex").slice(0, 20);
 
+/** A timestamp (ISO text, seconds or ms) in ms, or null. */
+export function timeMs(value) {
+  const ms = typeof value === "number" ? (value < 1e12 ? value * 1000 : value) : Date.parse(value);
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+}
+
 /** Local calendar day (YYYY-MM-DD) for a timestamp in ms, or null. */
 export function dayKey(value) {
-  const ms = typeof value === "number" ? (value < 1e12 ? value * 1000 : value) : Date.parse(value);
-  if (!Number.isFinite(ms) || ms <= 0) return null;
+  const ms = timeMs(value);
+  if (!ms) return null;
   const date = new Date(ms);
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
@@ -71,7 +79,33 @@ async function withStats(files) {
 
 // ---------------------------------------------------------------------------
 // Line processors. `context` exposes: session(day, cwd), tokens(day, usage),
-// skill(name, day), skillTokens(name, day, total), state (persisted per file).
+// modelUsage(day, model, bucket, row, skill?), skill(name, day), skillTokens(name, day, total)
+// and state (persisted per file). A row is [input, output, cacheRead, cacheWrite (5 min),
+// cacheWrite1h, requests] with input excluding every cached token.
+
+/** Records one request's tokens under its model and price bucket. */
+function recordModel(context, { agentId, day, model, promptTokens, timestamp, fast = false, row, skill = null }) {
+  if (isIgnoredModel(model) || row.slice(0, 5).every((value) => !value)) return;
+  context.modelUsage(day, model, bucketFor({ model, promptTokens, timestamp, fast, agentId }), row, skill);
+}
+
+const CODEX_PENDING_LIMIT = 2_000;
+
+/**
+ * Resumed and compacted Codex sessions can report usage before their first turn_context.
+ * Those requests are recorded as "unknown" at once (so totals always add up) and moved to
+ * the session's model when its first turn_context arrives.
+ */
+function codexModelKnown(context, model) {
+  const pending = Array.isArray(context.state.codexPending) ? context.state.codexPending : [];
+  context.state.codexModel = model;
+  delete context.state.codexPending;
+  if (model === "unknown") return;
+  for (const request of pending) {
+    context.modelUsage(request.day, "unknown", request.bucket, request.row.map((value) => -value));
+    recordModel(context, { agentId: "codex", day: request.day, model, promptTokens: request.prompt, timestamp: request.at, row: request.row });
+  }
+}
 
 function claudeLine(line, context) {
   if (!line.includes('"type":"assistant"')) return;
@@ -83,16 +117,32 @@ function claudeLine(line, context) {
   const messageId = typeof message.id === "string" ? message.id : entry.requestId;
   const usage = object(message.usage);
   if (Object.keys(usage).length && messageId && !context.seen(messageId)) {
+    // input_tokens is the uncached part; cache writes split into 5-minute and 1-hour TTLs.
+    const split = object(usage.cache_creation);
+    const write5m = count(split.ephemeral_5m_input_tokens);
+    const write1h = count(split.ephemeral_1h_input_tokens);
+    const cacheWrite = Math.max(count(usage.cache_creation_input_tokens), write5m + write1h);
     const tokens = {
       input: count(usage.input_tokens),
       output: count(usage.output_tokens),
       cacheRead: count(usage.cache_read_input_tokens),
-      cacheWrite: count(usage.cache_creation_input_tokens),
+      cacheWrite,
     };
     tokens.total = tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite;
     context.tokens(day, tokens);
     const attributed = skillName(entry.attributionSkill);
     if (attributed) context.skillTokens(attributed, day, tokens.total);
+    const longWrites = Math.min(cacheWrite, write1h);
+    recordModel(context, {
+      agentId: "claude",
+      day,
+      model: modelKey(message.model),
+      promptTokens: tokens.input + tokens.cacheRead + cacheWrite,
+      timestamp: entry.timestamp,
+      fast: usage.speed === "fast",
+      row: [tokens.input, tokens.output, tokens.cacheRead, cacheWrite - longWrites, longWrites, 1],
+      skill: attributed,
+    });
   }
   for (const block of Array.isArray(message.content) ? message.content : []) {
     if (block?.type === "tool_use" && block.name === "Skill") {
@@ -108,10 +158,16 @@ const CODEX_FIELDS = ["input_tokens", "cached_input_tokens", "cache_write_input_
 function codexLine(line, context) {
   const meta = line.includes('"type":"session_meta"');
   const tokenCount = line.includes('"type":"token_count"');
+  const turn = line.includes('"type":"turn_context"');
   const call = line.includes("SKILL.md") && (line.includes('"type":"function_call"') || line.includes('"type":"custom_tool_call"'));
-  if (!meta && !tokenCount && !call) return;
+  if (!meta && !tokenCount && !turn && !call) return;
   const entry = JSON.parse(line);
   const payload = object(entry.payload);
+  if (entry.type === "turn_context") {
+    // The model of a turn applies to the token_count events that follow it.
+    if (payload.model !== undefined && context.state.codexModel !== modelKey(payload.model)) codexModelKnown(context, modelKey(payload.model));
+    return;
+  }
   const day = dayKey(entry.timestamp || payload.timestamp);
   if (!day) return;
   if (entry.type === "session_meta") {
@@ -132,13 +188,26 @@ function codexLine(line, context) {
     );
     context.state.codexTotals = Object.fromEntries(CODEX_FIELDS.map((field) => [field, count(total[field])]));
     if (!delta.total_tokens) return;
-    context.tokens(day, {
-      input: Math.max(0, delta.input_tokens - delta.cached_input_tokens),
-      output: delta.output_tokens,
-      cacheRead: delta.cached_input_tokens,
-      cacheWrite: delta.cache_write_input_tokens,
-      total: delta.total_tokens,
-    });
+    // input_tokens includes cached reads and cache writes; output includes reasoning.
+    const cacheRead = Math.min(delta.input_tokens, delta.cached_input_tokens);
+    const cacheWrite = Math.min(delta.input_tokens - cacheRead, delta.cache_write_input_tokens);
+    const input = delta.input_tokens - cacheRead - cacheWrite;
+    context.tokens(day, { input, output: delta.output_tokens, cacheRead, cacheWrite, total: delta.total_tokens });
+    const request = {
+      agentId: "codex",
+      day,
+      model: context.state.codexModel || "unknown",
+      promptTokens: count(last.input_tokens) || delta.input_tokens,
+      timestamp: entry.timestamp || payload.timestamp,
+      row: [input, delta.output_tokens, cacheRead, cacheWrite, 0, 1],
+    };
+    recordModel(context, request);
+    if (!context.state.codexModel && request.row.slice(0, 5).some(Boolean)) {
+      const pending = (context.state.codexPending ||= []);
+      if (pending.length < CODEX_PENDING_LIMIT) {
+        pending.push({ day, bucket: bucketFor({ model: "unknown", promptTokens: request.promptTokens }), prompt: request.promptTokens, at: request.timestamp, row: request.row });
+      }
+    }
     return;
   }
   if (payload.type === "function_call" || payload.type === "custom_tool_call") {
@@ -164,6 +233,14 @@ function workBuddyLine(line, context) {
     const cacheRead = Math.min(input, count(usage.cache_read_input_tokens));
     const output = count(usage.output_tokens);
     context.tokens(day, { input: input - cacheRead, output, cacheRead, cacheWrite: 0, total: count(usage.total_tokens) || input + output });
+    recordModel(context, {
+      agentId: "workbuddy",
+      day,
+      model: modelKey(object(entry.providerData).model),
+      promptTokens: input,
+      timestamp: entry.timestamp,
+      row: [input - cacheRead, output, cacheRead, 0, 0, 1],
+    });
   }
   if (entry.type === "function_call" && entry.name === "Skill" && typeof entry.arguments === "string") {
     let args = {};
@@ -263,7 +340,11 @@ function columnsOf(database, table) {
   }
 }
 
-/** Hermes state.db sessions: tokens, cost, day and working folder (never titles or messages). */
+/**
+ * Hermes state.db sessions: model, tokens, the product's own cost, day and working folder
+ * (never titles or messages). input_tokens excludes cache reads and writes, and
+ * reasoning_tokens is a subset of output_tokens (Hermes shows it as "Reasoning (subset)").
+ */
 async function hermesSessions(homeDirectory, warnings) {
   const database = await openDatabase(path.join(hermesHomeFor(homeDirectory), "state.db"));
   if (!database) return null;
@@ -274,7 +355,8 @@ async function hermesSessions(homeDirectory, warnings) {
     const rows = database
       .prepare(
         `SELECT id, started_at, ${pick("input_tokens")} AS i, ${pick("output_tokens")} AS o, ${pick("cache_read_tokens")} AS cr,
-         ${pick("cache_write_tokens")} AS cw, ${pick("actual_cost_usd")} AS ac, ${pick("estimated_cost_usd")} AS ec, ${pick("cwd")} AS cwd
+         ${pick("cache_write_tokens")} AS cw, ${pick("actual_cost_usd")} AS ac, ${pick("estimated_cost_usd")} AS ec, ${pick("cwd")} AS cwd,
+         ${pick("model")} AS model, ${pick("api_call_count")} AS calls
          FROM sessions ORDER BY started_at DESC LIMIT 50000`,
       )
       .all();
@@ -283,6 +365,9 @@ async function hermesSessions(homeDirectory, warnings) {
       return {
         key: hashKey(`hermes:${row.id}`),
         day: dayKey(Number(row.started_at)),
+        at: timeMs(Number(row.started_at)),
+        model: row.model === null || row.model === undefined ? null : modelKey(row.model),
+        requests: count(row.calls),
         tokens: { ...tokens, total: tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite },
         costUsd: Number.isFinite(Number(row.ac)) && Number(row.ac) > 0 ? Number(row.ac) : Number(row.ec) || 0,
         project: projectName(row.cwd),
@@ -343,9 +428,13 @@ async function openClawSessions(kind, homeDirectory) {
       const output = count(entry.outputTokens);
       const cacheRead = count(entry.cacheRead ?? entry.cacheReadTokens);
       const cacheWrite = count(entry.cacheWrite ?? entry.cacheWriteTokens);
+      const model = typeof entry.model === "string" ? (typeof entry.modelProvider === "string" ? `${entry.modelProvider}/${entry.model}` : entry.model) : null;
       records.push({
         key: hashKey(`${kind}:${agent.id}:${key}`),
         day: dayKey(Number(entry.updatedAt)),
+        at: timeMs(Number(entry.updatedAt)),
+        model: model === null ? null : modelKey(model),
+        requests: 0,
         tokens: { input, output, cacheRead, cacheWrite, total: count(entry.totalTokens) || input + output + cacheRead + cacheWrite },
         costUsd: Number(entry.estimatedCostUsd) || 0,
         project: null,

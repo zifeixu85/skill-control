@@ -11,6 +11,24 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ### Added
 
+- Estimated cost at each vendor's official API prices. `server/pricing/model-prices.json`
+  (79 models, estimates, families, DeepSeek off-peak schedule, checked 2026-10-07) and the
+  pure rules in `server/pricing.mjs`: id normalization (case, `provider/` prefix, date
+  suffix, aliases), resolution official → estimate → family → unpriced, dated price
+  changes, long-context tiers (the whole request above 200K / 272K / 512K), DeepSeek
+  off-peak by request time, Claude 5-minute / 1-hour cache writes and fast mode, Codex
+  cached / cache-write subtraction, and WorkBuddy `auto` at the agent's token-weighted
+  average price.
+- Usage index version 2 (rebuilt once): tokens per model, day and price bucket for every
+  transcript (`m`), per attributed skill and model (`km`), and model / bucket / reported
+  cost per database session. Costs are computed at query time, so price updates need no
+  re-index.
+- `costUsd` is now the API-equivalent estimate for every agent, skill and day, with
+  `costBasis` (official / estimate / family / reported), `unpricedTokens`, `byModel` and
+  `reportedCostUsd` (Hermes, OpenClaw, QClaw's own figures). New
+  `GET /api/usage/models` (every model across agents) and `GET /api/usage/pricing`
+  (the price table).
+
 - Machine-readable error codes: every error response is `{ error, code? }`, and
   every plan / apply refusal carries a specific `code` (`stale-plan`,
   `plan-expired`, `plan-not-found`, `updates-offline`, `refused`, `conflict`,
@@ -136,6 +154,8 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ### Changed
 
+- Codex usage: uncached input now also excludes `cache_write_input_tokens` (they were
+  counted twice in the per-day input before); the model comes from `turn_context`.
 - The uninstall plan `warning` names the other Agents by display name
   (`alsoAffects` stays a list of ids). Restore plan `warnings` no longer repeat
   each unit's conflict text; they hold at most one summary when changed units

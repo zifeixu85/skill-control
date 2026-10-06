@@ -1,10 +1,12 @@
+import { costIndex, modelsAcrossAgents, roundUsd, sumCosts } from "./usage-cost.mjs";
 import { dayKey } from "./usage-sources.mjs";
 
 /**
  * Read-side of the usage index: per-agent summaries, one skill across agents and one
  * agent's series, top skills and top projects. Every figure carries its source and
  * confidence: "exact" (counted from transcripts), "inferred" (SKILL.md reads seen in tool
- * arguments) or "reported" (the product's own counters).
+ * arguments) or "reported" (the product's own counters). Costs are API-equivalent estimates
+ * at the vendors' official prices (usage-cost.mjs), with the share of each basis.
  */
 
 export const MAX_USAGE_DAYS = 400;
@@ -13,33 +15,33 @@ export const USAGE_SOURCES = {
   claude: {
     tokens: { label: "会话记录 ~/.claude/projects", confidence: "exact" },
     skills: { label: "Skill 工具调用", confidence: "exact" },
-    costUsd: false,
+    reportedCost: false,
   },
   codex: {
     tokens: { label: "会话记录 ~/.codex/sessions（token_count）", confidence: "exact" },
     skills: { label: "命令参数中读取的 SKILL.md", confidence: "inferred" },
-    costUsd: false,
+    reportedCost: false,
   },
   workbuddy: {
     tokens: { label: "会话记录 ~/.workbuddy/projects", confidence: "exact" },
     skills: { label: "Skill 工具调用与 usage-log.json", confidence: "exact" },
     credits: { label: "workbuddy.db 额度记录", confidence: "reported" },
-    costUsd: false,
+    reportedCost: false,
   },
   hermes: {
     tokens: { label: "state.db 会话表", confidence: "reported" },
     skills: { label: "skills/.usage.json", confidence: "reported" },
-    costUsd: true,
+    reportedCost: true,
   },
   openclaw: {
     tokens: { label: "sessions.json", confidence: "reported" },
     skills: { label: "会话中读取的 SKILL.md", confidence: "inferred" },
-    costUsd: true,
+    reportedCost: true,
   },
   qclaw: {
     tokens: { label: "sessions.json", confidence: "reported" },
     skills: { label: "会话中读取的 SKILL.md", confidence: "inferred" },
-    costUsd: true,
+    reportedCost: true,
   },
 };
 
@@ -63,7 +65,7 @@ function dailyByAgent(index, inWindow) {
   const bucket = (agentId, day) => {
     const days = agents.get(agentId) || new Map();
     agents.set(agentId, days);
-    const row = days.get(day) || { sessions: 0, tokens: emptyTokens(), costUsd: 0, credits: 0 };
+    const row = days.get(day) || { sessions: 0, tokens: emptyTokens(), reportedCostUsd: 0, credits: 0 };
     days.set(day, row);
     return row;
   };
@@ -85,7 +87,7 @@ function dailyByAgent(index, inWindow) {
       FIELDS.forEach((field, offset) => {
         row.tokens[field] += record.t[offset] || 0;
       });
-      row.costUsd += record.c || 0;
+      row.reportedCostUsd += record.rc || 0;
     }
   }
   for (const credit of Object.values(index.credits || {})) {
@@ -161,23 +163,30 @@ function indexStatus(index) {
   };
 }
 
+const NO_COST = { costUsd: 0, costBasis: { official: 0, estimate: 0, family: 0, reported: 0 }, unpricedTokens: 0, byModel: [], byDay: new Map(), reportedCostUsd: null, skills: new Map() };
+
+/** The cost fields of an agent, a skill or a total. */
+const costFields = (priced = NO_COST) => ({ costUsd: priced.costUsd, costBasis: priced.costBasis, unpricedTokens: priced.unpricedTokens });
+
+const windowFilter = (dates) => (day) => typeof day === "string" && day >= dates[0] && day <= dates.at(-1);
+
 /** GET /api/usage/summary */
 export function usageSummary(index, { days = 30, now = Date.now() } = {}) {
   const dates = windowDays(days, now);
-  const inWindow = (day) => typeof day === "string" && day >= dates[0] && day <= dates.at(-1);
+  const inWindow = windowFilter(dates);
   const daily = dailyByAgent(index, inWindow);
   const skills = skillsByAgent(index, inWindow);
-  const agentIds = [...new Set([...daily.keys(), ...skills.keys()])].sort();
+  const costs = costIndex(index, inWindow);
+  const agentIds = [...new Set([...daily.keys(), ...skills.keys(), ...costs.keys()])].sort();
   const agents = agentIds.map((agentId) => {
     const byDay = daily.get(agentId) || new Map();
+    const priced = costs.get(agentId) || NO_COST;
     const tokens = emptyTokens();
     let sessions = 0;
-    let costUsd = 0;
     let credits = 0;
     let activeDays = 0;
     for (const row of byDay.values()) {
       sessions += row.sessions;
-      costUsd += row.costUsd;
       credits += row.credits;
       if (row.sessions || row.tokens.total) activeDays += 1;
       for (const field of FIELDS) tokens[field] += row.tokens[field];
@@ -187,20 +196,29 @@ export function usageSummary(index, { days = 30, now = Date.now() } = {}) {
       sessions,
       activeDays,
       tokens,
-      costUsd: USAGE_SOURCES[agentId]?.costUsd ? Math.round(costUsd * 100) / 100 : null,
+      ...costFields(priced),
+      ...(USAGE_SOURCES[agentId]?.reportedCost ? { reportedCostUsd: priced.reportedCostUsd ?? 0 } : {}),
+      byModel: priced.byModel,
       ...(agentId === "workbuddy" ? { credits: Math.round(credits * 100) / 100 } : {}),
-      series: dates.map((date) => ({ date, sessions: byDay.get(date)?.sessions || 0, tokens: byDay.get(date)?.tokens.total || 0 })),
+      series: dates.map((date) => ({
+        date,
+        sessions: byDay.get(date)?.sessions || 0,
+        tokens: byDay.get(date)?.tokens.total || 0,
+        costUsd: roundUsd(priced.byDay.get(date)),
+      })),
       sources: sourcesFor(agentId),
     };
   });
   const totals = new Map();
   for (const [agentId, agentSkills] of skills) {
     for (const [name, row] of agentSkills) {
-      const total = totals.get(name) || { name, count: 0, tokens: 0, agents: [] };
+      const total = totals.get(name) || { name, count: 0, tokens: 0, costUsd: null, agents: [] };
       const count = sumDays(row.days);
+      const skillCost = costs.get(agentId)?.skills.get(name);
       total.count += count;
       total.tokens += row.tokens;
-      total.agents.push({ agentId, count, confidence: row.confidence, lastUsedAt: row.lastDay });
+      if (skillCost) total.costUsd = roundUsd((total.costUsd || 0) + skillCost.costUsd);
+      total.agents.push({ agentId, count, confidence: row.confidence, lastUsedAt: row.lastDay, ...(skillCost ? { costUsd: skillCost.costUsd } : {}) });
       totals.set(name, total);
     }
   }
@@ -208,25 +226,44 @@ export function usageSummary(index, { days = 30, now = Date.now() } = {}) {
     .filter((skill) => skill.count > 0 || skill.tokens > 0)
     .sort((left, right) => right.count - left.count || right.tokens - left.tokens || left.name.localeCompare(right.name))
     .slice(0, 50);
-  return { generatedAt: new Date(now).toISOString(), windowDays: days, index: indexStatus(index), agents, topSkills };
+  return { generatedAt: new Date(now).toISOString(), windowDays: days, index: indexStatus(index), cost: sumCosts([...costs.values()]), agents, topSkills };
+}
+
+/** GET /api/usage/models */
+export function usageModels(index, { days = 30, now = Date.now() } = {}) {
+  const dates = windowDays(days, now);
+  const costs = costIndex(index, windowFilter(dates));
+  const models = modelsAcrossAgents(costs);
+  return {
+    generatedAt: new Date(now).toISOString(),
+    windowDays: days,
+    index: indexStatus(index),
+    totals: sumCosts([...costs.values()]),
+    models,
+    unpriced: models.filter((model) => model.basis === "unpriced").map((model) => model.model),
+  };
 }
 
 /** GET /api/usage/skill */
 export function usageForSkill(index, name, { days = 90, now = Date.now() } = {}) {
   const dates = windowDays(days, now);
-  const inWindow = (day) => typeof day === "string" && day >= dates[0] && day <= dates.at(-1);
+  const inWindow = windowFilter(dates);
   const skills = skillsByAgent(index, inWindow);
+  const costs = costIndex(index, inWindow);
   const wanted = String(name || "").trim().toLowerCase();
   const agents = [];
   for (const [agentId, agentSkills] of skills) {
     for (const [skillName, row] of agentSkills) {
       if (skillName.toLowerCase() !== wanted && skillName.toLowerCase().split(":").at(-1) !== wanted) continue;
       const reported = agentId === "hermes" ? index.reported?.hermes?.[skillName] : agentId === "workbuddy" ? index.reported?.workbuddy?.[skillName] : null;
+      const skillCost = costs.get(agentId)?.skills.get(skillName);
       agents.push({
         agentId,
         name: skillName,
         total: sumDays(row.days),
         tokens: row.tokens || 0,
+        // Only token-attributed skills (Claude attributionSkill) have a cost.
+        ...(skillCost ? { ...costFields(skillCost), byModel: skillCost.byModel } : { costUsd: null }),
         lastUsedAt: reported?.lastUsedAt || row.lastDay,
         confidence: row.confidence,
         ...(agentId === "hermes" && reported ? { reportedTotal: reported.count } : {}),
@@ -244,6 +281,7 @@ export function usageForSkill(index, name, { days = 90, now = Date.now() } = {})
         tokens: 0,
         lastUsedAt: reported.lastUsedAt,
         confidence: "reported",
+        costUsd: null,
         reportedTotal: reported.count,
         series: dates.map((date) => ({ date, count: 0 })),
       });
@@ -255,17 +293,22 @@ export function usageForSkill(index, name, { days = 90, now = Date.now() } = {})
 /** GET /api/usage/agent */
 export function usageForAgent(index, agentId, { days = 90, now = Date.now() } = {}) {
   const dates = windowDays(days, now);
-  const inWindow = (day) => typeof day === "string" && day >= dates[0] && day <= dates.at(-1);
+  const inWindow = windowFilter(dates);
   const byDay = dailyByAgent(index, inWindow).get(agentId) || new Map();
   const skills = skillsByAgent(index, inWindow).get(agentId) || new Map();
-  const totals = { sessions: 0, activeDays: 0, tokens: emptyTokens(), costUsd: USAGE_SOURCES[agentId]?.costUsd ? 0 : null };
+  const priced = costIndex(index, inWindow).get(agentId) || NO_COST;
+  const totals = {
+    sessions: 0,
+    activeDays: 0,
+    tokens: emptyTokens(),
+    ...costFields(priced),
+    ...(USAGE_SOURCES[agentId]?.reportedCost ? { reportedCostUsd: priced.reportedCostUsd ?? 0 } : {}),
+  };
   for (const row of byDay.values()) {
     totals.sessions += row.sessions;
     if (row.sessions || row.tokens.total) totals.activeDays += 1;
     for (const field of FIELDS) totals.tokens[field] += row.tokens[field];
-    if (totals.costUsd !== null) totals.costUsd += row.costUsd;
   }
-  if (totals.costUsd !== null) totals.costUsd = Math.round(totals.costUsd * 100) / 100;
   const projects = new Map();
   const addProject = (name, sessions, tokens) => {
     if (!name) return;
@@ -293,12 +336,20 @@ export function usageForAgent(index, agentId, { days = 90, now = Date.now() } = 
     windowDays: days,
     index: indexStatus(index),
     totals,
+    byModel: priced.byModel,
     series: dates.map((date) => {
       const row = byDay.get(date);
-      return { date, sessions: row?.sessions || 0, tokens: row ? { ...row.tokens } : emptyTokens() };
+      return { date, sessions: row?.sessions || 0, tokens: row ? { ...row.tokens } : emptyTokens(), costUsd: roundUsd(priced.byDay.get(date)) };
     }),
     topSkills: [...skills]
-      .map(([name, row]) => ({ name, count: sumDays(row.days), tokens: row.tokens, lastUsedAt: row.lastDay, confidence: row.confidence }))
+      .map(([name, row]) => ({
+        name,
+        count: sumDays(row.days),
+        tokens: row.tokens,
+        costUsd: priced.skills.get(name)?.costUsd ?? null,
+        lastUsedAt: row.lastDay,
+        confidence: row.confidence,
+      }))
       .filter((skill) => skill.count > 0 || skill.tokens > 0)
       .sort((left, right) => right.count - left.count || right.tokens - left.tokens)
       .slice(0, 30),

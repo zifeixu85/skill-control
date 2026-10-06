@@ -659,19 +659,29 @@ Hermes：静态解析的全部工具集（`enabled` 表示配置启用或被其�
 工作目录名（只取最后一段）；每个数据库会话的日期、token 与费用；消息 ID 只以 12 位摘要保存，用于识别
 续接/分叉会话复制的旧消息。消息正文、工具参数与输出、标题从不写入。文件键为路径摘要，不含路径。
 
+索引版本 2（`USAGE_INDEX_VERSION`，旧索引自动全量重建）另按模型保存 token，用于按官方价格估算费用：
+每个文件的 `m`：`模型 → 日期 → 分档 → [未缓存输入, 输出, 缓存读, 缓存写（5 分钟）, 缓存写（1 小时）, 请求数]`；
+`km`：`技能 → 模型 → 日期 → 分档 → [...]`（Claude `attributionSkill`）；数据库会话记录另有 `m`（模型）、
+`b`（分档）、`n`（请求数）、`rc`（产品自报费用）。模型 id 只保存匹配 `/^[\w.:@/<>-]{1,80}$/` 且不像凭据的
+字符串，否则记为 `unknown`；`<synthetic>` 不记。分档 = 提示大小档 `s`（≤200K）/ `l200`（≤272K）/
+`l272`（≤512K）/ `l512`（>512K），提示 = 未缓存输入 + 缓存读 + 缓存写（每次请求）；价格条目带 `offPeak`
+的模型在峰时以外再加 `:off`；Claude `usage.speed === "fast"` 加 `:fast`。数据库会话没有单次提示大小，
+只记 `s` 和 `:off`。价格在查询时计算，换价不需要重建索引。
+
 | 来源 | token | 技能 | 可信度 |
 | --- | --- | --- | --- |
-| Claude Code `~/.claude/projects/**/*.jsonl`（含子代理） | assistant 消息 `usage`（按消息 ID 全局去重） | `Skill` 工具调用（按调用 ID 去重）；`attributionSkill` 的 token | exact |
-| Codex `~/.codex/sessions/**`、`archived_sessions/*` | `token_count` 累计值的差；分叉/续接会话的首条与回退后只计 `last_token_usage` | 函数调用参数中出现的 `skills/<名称>/SKILL.md`（从不看输出） | token exact，技能 inferred |
-| WorkBuddy `~/.workbuddy/projects/**/*.jsonl` | `message.usage`（输入扣除缓存命中） | `Skill` 调用；`usage-log.json` 的使用日期补足未覆盖的日子 | exact / reported |
+| Claude Code `~/.claude/projects/**/*.jsonl`（含子代理） | assistant 消息 `usage`（按消息 ID 全局去重）；模型 `message.model`；`cache_creation.ephemeral_5m/1h_input_tokens` 拆分缓存写 | `Skill` 工具调用（按调用 ID 去重）；`attributionSkill` 的 token | exact |
+| Codex `~/.codex/sessions/**`、`archived_sessions/*` | `token_count` 累计值的差；分叉/续接会话的首条与回退后只计 `last_token_usage`；`input_tokens` 含缓存读与缓存写，未缓存 = 输入 − 缓存读 − 缓存写；模型取最近一条 `turn_context.payload.model` | 函数调用参数中出现的 `skills/<名称>/SKILL.md`（从不看输出） | token exact，技能 inferred |
+| WorkBuddy `~/.workbuddy/projects/**/*.jsonl` | `message.usage`（输入扣除缓存命中）；模型 `providerData.model` | `Skill` 调用；`usage-log.json` 的使用日期补足未覆盖的日子 | exact / reported |
 | WorkBuddy `workbuddy.db` | — | — | `session_usage.credit_json` 合计为 `credits`（reported） |
-| Hermes `state.db` | `sessions` 表 token 与费用（只读、`query_only`） | `skills/.usage.json` 计数，每次运行的增量计入当天 | reported |
-| OpenClaw/QClaw `sessions.json` | 会话 token 与费用 | 会话 JSONL 中工具调用读取的 SKILL.md | token reported，技能 inferred |
+| Hermes `state.db` | `sessions` 表 token、`model`、`api_call_count` 与自报费用（只读、`query_only`）；`input_tokens` 已扣除缓存，`reasoning_tokens` 是 `output_tokens` 的子集（Hermes 源码 `cli.py` 标为 “Reasoning (subset)”） | `skills/.usage.json` 计数，每次运行的增量计入当天 | reported |
+| OpenClaw/QClaw `sessions.json` | 会话 token 与费用；有 `model`（及 `modelProvider`）时记模型 | 会话 JSONL 中工具调用读取的 SKILL.md | token reported，技能 inferred |
 
 每轮索引有 3 秒预算，按修改时间从新到旧处理，每轮至少推进一个文件；服务在后台线程中连续分片执行直到
 完成，此后请求发现索引超过 60 秒未更新时再增量刷新。会话文件被产品删除后其汇总仍保留（保留 400 天）；
 文件被截短或头部变化时重新统计该文件。本机实测：约 2,000 个文件、22.7 GB 首次索引约 38 秒，增量约 0.1 秒，
-索引约 1.4 MB。
+索引约 1.4 MB；版本 2（按模型）2,119 个文件首次索引约 47–61 秒，索引约 1.8 MB，按官方价计算 30 天费用约 20–30 ms。
+Codex 续接 / 压缩后的会话可能在第一条 `turn_context` 之前就有用量：先记为 `unknown`，拿到模型后移到该模型下。
 
 `GET /api/usage/status`
 
@@ -680,30 +690,85 @@ Hermes：静态解析的全部工具集（`enabled` 表示配置启用或被其�
   lastRunAt: string | null, lastRunMs: number | null, updatedAt: string | null, error: string | null }
 ```
 
+#### 预估费用（按各厂商官方 API 价格）
+
+价目表 `server/pricing/model-prices.json`（随应用打包，人工核对，每条带官方来源；单位 USD / 1M tokens）；
+规则在 `server/pricing.mjs`（纯函数 `normalize`、`resolve`、`priceFor(entry, day, bucket)`、`costOf`、
+`isOffPeak(schedule, timestamp)`、`bucketFor`），查询时的汇总在 `server/usage-cost.mjs`。加载时校验表结构
+（价格为非负数、别名不重复、长上下文阈值必须是索引分档 200K / 272K / 512K 之一、估算与系列指向存在的模型、
+时段存在），不合格直接报错。
+
+- 解析顺序：精确 id → 别名 → `estimates` → `families`（按数组顺序，先具体后宽泛）→ 未定价。id 先小写、去掉
+  `provider/` 前缀，找不到时再去掉结尾日期（`-20251001`、`@20251101`、`-2026-04-23`）匹配一次。带 `agent` 的
+  估算只对该 Agent 生效（WorkBuddy `auto`）。
+- 单价：先按使用日应用 `changes`（如 Gemini Flash 2027-01-01 起），再按分档应用 `long`（提示超过 `above`
+  时整次请求所有 token 都按长上下文价），再应用 `offPeak`（DeepSeek，按请求时间，`schedules` 为 UTC 峰时，
+  结束小时不含），然后补缺：缓存读、缓存写缺失按输入价，1 小时缓存写缺失按缓存写价；最后 `:fast` 乘 `fast`
+  （只有带 `fast` 的模型）。
+- 费用 = 未缓存输入 × 输入价 + 输出 × 输出价 + 缓存读 × 缓存读价 + 缓存写 × 缓存写价 + 1 小时缓存写 × 1 小时
+  缓存写价。输出含思考 token。Batch、区域加价（Claude `inference_geo`，本机均为 not_available）、缓存存储费、
+  服务档位都不计。订阅内的用量同样按 API 等价估算，不等于实际支出。
+- `@agent-average`（WorkBuddy `auto`）：每种 token 按同一窗口内该 Agent 其他已定价模型的 token 加权平均单价计
+  （缓存读 / 写没有样本时按平均输入价）；没有可平均的模型时按 id 的系列兜底，再不行用产品自报费用，否则未定价。
+- 数据库会话（Hermes、OpenClaw、QClaw）：有可定价模型时按官方价估算，产品自报的费用另列为 `reportedCostUsd`；
+  没有模型或模型未定价时用产品自报费用（`basis: "reported"`）。
+- 依据 `basis`：`official` | `estimate` | `family` | `reported` | `unpriced`（未定价的 token 计入 `unpricedTokens`，
+  不计费用）。金额保留到 0.000001 美元。
+
 `GET /api/usage/summary?days=30`（`days` 取 1–400，默认 30）
 
 ```ts
+type Cost = { costUsd: number, costBasis: { official: number, estimate: number, family: number, reported: number }, unpricedTokens: number };
+type ModelRow = {
+  model: string,                       // 日志里的 id（未知或不可显示时为 "unknown"）
+  name: string,                        // official 为价目表名称，其余为 id 本身
+  vendor: string | null,               // 定价所用条目的厂商
+  basis: "official" | "estimate" | "family" | "reported" | "unpriced",
+  priceAs?: string,                    // estimate / family 实际所用的价目 id，或 "@agent-average"
+  priceRef?: { section: "models" | "estimates" | "families", id: string },  // 价格表中对应的行
+  unitPrice?: { input, output, cacheRead, cacheWrite, cacheWrite1h },        // 仅 @agent-average：算出的单价
+  tokens: { input, output, cacheRead, cacheWrite /* 5 分钟或通用 */, cacheWrite1h, total },
+  requests: number,
+  costUsd: number,
+  longShare: number,                   // 按长上下文价计的 token 占比（0–1）
+};
 {
   generatedAt, windowDays,
   index: { complete: boolean, updatedAt: string | null, indexedFiles: number, totalFiles: number },
   status: /* 同 /api/usage/status */,
-  agents: Array<{
+  cost: Cost,                                                   // 全部 Agent 合计
+  agents: Array<Cost & {
     agentId, sessions, activeDays,
     tokens: { input, output, cacheRead, cacheWrite, total },   // input 不含缓存命中
-    costUsd: number | null,                                     // 只有 Hermes / OpenClaw / QClaw 有费用
+    reportedCostUsd?: number,                                   // 仅 Hermes / OpenClaw / QClaw：产品自报
+    byModel: ModelRow[],                                        // 按费用从高到低
     credits?: number,                                           // 仅 WorkBuddy
-    series: Array<{ date: "YYYY-MM-DD", sessions, tokens }>,    // 每天一项（本地日期），tokens 为合计
+    series: Array<{ date: "YYYY-MM-DD", sessions, tokens, costUsd }>,  // 每天一项（本地日期），tokens 为合计
     sources: Array<{ id: "tokens" | "skills" | "credits", label, confidence: "exact" | "inferred" | "reported" }>,
   }>,
-  topSkills: Array<{ name, count, tokens, agents: Array<{ agentId, count, confidence, lastUsedAt: "YYYY-MM-DD" }> }>, // ≤ 50
+  topSkills: Array<{ name, count, tokens, costUsd: number | null /* 有 token 归因时 */,
+                     agents: Array<{ agentId, count, confidence, lastUsedAt: "YYYY-MM-DD", costUsd?: number }> }>, // ≤ 50
 }
 ```
+
+`GET /api/usage/models?days=30`
+
+```ts
+{ generatedAt, windowDays, index, status, totals: Cost,
+  models: Array<ModelRow & { agents: Array<{ agentId, tokens /* 合计 */, costUsd }> }>,  // 同一 id 与依据合并
+  unpriced: string[] }                                                                   // 未定价的模型 id
+```
+
+`GET /api/usage/pricing` → 价目表：`{ schema, checkedAt, currency: "USD", unit, vendors, schedules, fx,
+buckets: [{ id: "s" | "l200" | "l272" | "l512", floor }], models, estimates, families }`（`models` 各条含 `source`、
+`note`、`status`、`aliases`、`long`、`offPeak`、`changes`、`fast`；`families[].match` 为正则文本）。
 
 `GET /api/usage/skill?name=<技能名>&days=90`（名称也匹配 `插件:技能` 的后半段）
 
 ```ts
 { name, windowDays, index, status,
   agents: Array<{ agentId, name, total, tokens, lastUsedAt, confidence, reportedTotal?: number /* Hermes 累计 */,
+                  costUsd: number | null, costBasis?, unpricedTokens?, byModel?: ModelRow[], // 有 token 归因时
                   series: Array<{ date, count }> }> }
 ```
 
@@ -711,10 +776,11 @@ Hermes：静态解析的全部工具集（`enabled` 表示配置启用或被其�
 
 ```ts
 { agentId, windowDays, index, status,
-  totals: { sessions, activeDays, tokens: { input, output, cacheRead, cacheWrite, total }, costUsd: number | null },
-  series: Array<{ date, sessions, tokens: { input, output, cacheRead, cacheWrite, total } }>,
-  topSkills: Array<{ name, count, tokens, lastUsedAt, confidence }>,       // ≤ 30
-  topProjects: Array<{ name /* 工作目录最后一段 */, sessions, tokens }>,   // ≤ 20
+  totals: Cost & { sessions, activeDays, tokens: { input, output, cacheRead, cacheWrite, total }, reportedCostUsd? },
+  byModel: ModelRow[],
+  series: Array<{ date, sessions, tokens: { input, output, cacheRead, cacheWrite, total }, costUsd }>,
+  topSkills: Array<{ name, count, tokens, costUsd: number | null, lastUsedAt, confidence }>,  // ≤ 30
+  topProjects: Array<{ name /* 工作目录最后一段 */, sessions, tokens }>,                     // ≤ 20
   sources }
 ```
 
@@ -1100,7 +1166,7 @@ OpenClaw、QClaw；修改后按用户的选择保存。状态判断仍只看常�
 | `GET /api/config-detail` | 见“配置详情（只读、脱敏）” |
 | `GET /api/agent-files`、`/api/agent-file` | 见“洞察接口 · Agent 文件” |
 | `GET /api/agent-tools` | 见“洞察接口 · Agent 工具” |
-| `GET /api/usage/summary`、`/api/usage/skill`、`/api/usage/agent`、`/api/usage/status` | 见“洞察接口 · 用量分析” |
+| `GET /api/usage/summary`、`/api/usage/skill`、`/api/usage/agent`、`/api/usage/models`、`/api/usage/pricing`、`/api/usage/status` | 见“洞察接口 · 用量分析” |
 | `GET /api/health-report` | 见“洞察接口 · 体检报告” |
 | `GET /api/agent-icon` | 见“洞察接口 · 应用图标” |
 | `GET /api/updates`、`/api/updates/check-status`、`/api/updates/changes`；`POST /api/updates/check`、`/api/updates/plan`、`/api/updates/apply` | 见“更新检测与执行” |

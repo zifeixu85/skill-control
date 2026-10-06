@@ -228,6 +228,12 @@ test("no planted secret or message text leaks from agent files, tools, usage, he
   assert.equal(status.state, "complete");
   const summary = JSON.parse((await get("usage:summary", "/api/usage/summary?days=30")).body);
   assert.equal(summary.agents.find((agent) => agent.agentId === "claude").tokens.total, 156);
+  assert.deepEqual(Object.keys(summary.cost).sort(), ["costBasis", "costUsd", "unpricedTokens"]);
+  const models = JSON.parse((await get("usage:models", "/api/usage/models?days=30")).body);
+  assert.ok(models.models.some((row) => row.model === "claude-opus-5-5" && row.basis === "official" && row.agents[0].agentId === "claude"));
+  assert.deepEqual(Object.keys(models.totals).sort(), ["costBasis", "costUsd", "unpricedTokens"]);
+  const pricing = JSON.parse((await get("usage:pricing", "/api/usage/pricing")).body);
+  assert.deepEqual([pricing.currency, pricing.buckets.length, pricing.models.length > 50], ["USD", 4, true]);
   for (const agentId of ["claude", "codex", "workbuddy", "hermes", "openclaw"]) {
     await get(`usage:agent:${agentId}`, `/api/usage/agent?id=${agentId}&days=90`);
   }
@@ -251,7 +257,7 @@ test("no planted secret or message text leaks from agent files, tools, usage, he
   const stored = await readFile(path.join(home, ".agent-skill-manager", "usage-index.json"), "utf8");
   assert.doesNotMatch(stored, /MSGTEXT|ZZ9/u);
 
-  for (const pathname of ["/api/agent-files?agent=codex", `/api/agent-file?id=${files[0].id}`, "/api/agent-tools?agent=codex", "/api/usage/summary", "/api/health-report", "/api/agent-icon?id=codex"]) {
+  for (const pathname of ["/api/agent-files?agent=codex", `/api/agent-file?id=${files[0].id}`, "/api/agent-tools?agent=codex", "/api/usage/summary", "/api/usage/models", "/api/usage/pricing", "/api/health-report", "/api/agent-icon?id=codex"]) {
     const crossSite = await request(pathname, { headers: { "Sec-Fetch-Site": "cross-site" } });
     assert.equal(crossSite.status, 403, pathname);
   }

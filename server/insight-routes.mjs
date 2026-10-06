@@ -7,7 +7,8 @@ import { buildHealthReport } from "./health-report.mjs";
 import { readMcpSources } from "./mcp-inventory.mjs";
 import { createUpdateService } from "./update-service.mjs";
 import { createUsageService } from "./usage-service.mjs";
-import { clampDays, usageForAgent, usageForSkill, usageSummary } from "./usage-query.mjs";
+import { publicPriceTable } from "./pricing.mjs";
+import { clampDays, usageForAgent, usageForSkill, usageModels, usageSummary } from "./usage-query.mjs";
 
 /**
  * Read-only "insight" endpoints: agent files, agent tools, usage analytics, health report
@@ -21,6 +22,8 @@ export const INSIGHT_ROUTES = [
   "/api/usage/summary",
   "/api/usage/skill",
   "/api/usage/agent",
+  "/api/usage/models",
+  "/api/usage/pricing",
   "/api/usage/status",
   "/api/health-report",
   "/api/agent-icon",
@@ -146,6 +149,13 @@ export function createInsightRoutes(context) {
       const agentId = agentParam(url.searchParams.get("id"));
       usage.ensureFresh();
       return { ...usageForAgent(await usage.getIndex(), agentId, { days: clampDays(url.searchParams.get("days"), 90) }), status: usage.status() };
+    },
+    async "/api/usage/models"(url) {
+      usage.ensureFresh();
+      return { ...usageModels(await usage.getIndex(), { days: clampDays(url.searchParams.get("days"), 30) }), status: usage.status() };
+    },
+    async "/api/usage/pricing"() {
+      return publicPriceTable();
     },
     async "/api/usage/status"() {
       usage.ensureFresh();

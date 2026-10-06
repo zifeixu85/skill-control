@@ -103,29 +103,37 @@ TOOLSETS = {
 /** Claude, Codex and WorkBuddy transcripts plus WorkBuddy's usage log and database. */
 export async function createTranscriptsHome(home, { withDatabase = true } = {}) {
   const claude = path.join(home, ".claude", "projects", "-work-alpha-project");
-  const assistant = (id, usage, content, extra = {}) => ({
+  const assistant = (id, usage, content, extra = {}, model = "claude-opus-5-5") => ({
     type: "assistant",
     timestamp: ago(3_600_000),
     cwd: "/work/alpha-project",
     sessionId: "s1",
-    message: { id, role: "assistant", usage, content },
+    message: { id, role: "assistant", model, usage, content },
     ...extra,
   });
-  const usage1 = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 20 };
+  const usage1 = {
+    input_tokens: 10,
+    output_tokens: 5,
+    cache_read_input_tokens: 100,
+    cache_creation_input_tokens: 20,
+    cache_creation: { ephemeral_5m_input_tokens: 5, ephemeral_1h_input_tokens: 15 },
+    speed: "standard",
+  };
   const s1 = [
     { type: "user", timestamp: ago(3_700_000), cwd: "/work/alpha-project", message: { role: "user", content: "MSGTEXT-claude-user please ZZ9claudeprompt01" } },
     assistant("msg_1", usage1, [{ type: "text", text: "MSGTEXT-claude-answer" }], { attributionSkill: "pdf" }),
     assistant("msg_1", usage1, [{ type: "tool_use", id: "toolu_1", name: "Skill", input: { skill: "pdf", args: "MSGTEXT-skill-args" } }], { attributionSkill: "pdf" }),
-    assistant("msg_2", { input_tokens: 1, output_tokens: 2 }, [{ type: "text", text: "MSGTEXT-claude-two" }]),
+    assistant("msg_2", { input_tokens: 1, output_tokens: 2 }, [{ type: "text", text: "MSGTEXT-claude-two" }], {}, "claude-sonnet-5-5"),
   ];
   await writeFixtureFile(claude, "s1.jsonl", s1.map(line).join(""));
   // A resumed session copies earlier messages into a new file; they must be counted once.
   await writeFixtureFile(claude, "s2.jsonl", [
     s1[1],
     s1[2],
-    assistant("msg_3", { input_tokens: 4, output_tokens: 4 }, [{ type: "text", text: "MSGTEXT-claude-three" }]),
+    // A credential-shaped model id is never stored.
+    assistant("msg_3", { input_tokens: 4, output_tokens: 4 }, [{ type: "text", text: "MSGTEXT-claude-three" }], {}, "sk-ant-api03-ZZ9modelkey40abcdefgh"),
   ].map(line).join(""));
-  await writeFixtureFile(claude, "s1/subagents/agent-a.jsonl", line(assistant("msg_4", { input_tokens: 7, output_tokens: 3 }, [])));
+  await writeFixtureFile(claude, "s1/subagents/agent-a.jsonl", line(assistant("msg_4", { input_tokens: 7, output_tokens: 3 }, [], {}, "claude-haiku-4-5-20251001")));
 
   const codex = path.join(home, ".codex");
   const event = (payload, offset = 3_600_000) => ({ timestamp: ago(offset), type: "event_msg", payload });
@@ -140,6 +148,7 @@ export async function createTranscriptsHome(home, { withDatabase = true } = {}) 
   await writeFixtureFile(codex, "sessions/2026/10/03/rollout-2026-10-03T10-00-00-aaaa.jsonl", [
     { timestamp: ago(3_700_000), type: "session_meta", payload: { id: "a", cwd: "/work/beta-project", base_instructions: "MSGTEXT-codex-instructions" } },
     { timestamp: ago(3_650_000), type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "MSGTEXT-codex-user ZZ9codexuser05" }] } },
+    { timestamp: ago(3_645_000), type: "turn_context", payload: { model: "gpt-5.5", cwd: "/work/beta-project", user_instructions: "MSGTEXT-codex-turn" } },
     {
       timestamp: ago(3_640_000),
       type: "response_item",
@@ -157,6 +166,7 @@ export async function createTranscriptsHome(home, { withDatabase = true } = {}) 
   // A fork starts from its parent's running total: only its own turn counts.
   await writeFixtureFile(codex, "archived_sessions/rollout-2026-10-03T11-00-00-bbbb.jsonl", [
     { timestamp: ago(3_000_000), type: "session_meta", payload: { id: "b", cwd: "/work/beta-project" } },
+    { timestamp: ago(2_950_000), type: "turn_context", payload: { model: "codex-auto-review", cwd: "/work/beta-project" } },
     event({ type: "token_count", info: { total_token_usage: totals(50_000, 40_000, 100), last_token_usage: totals(100, 0, 0) } }, 2_900_000),
   ].map(line).join(""));
 
@@ -169,7 +179,7 @@ export async function createTranscriptsHome(home, { withDatabase = true } = {}) 
       timestamp: ago(3_590_000),
       cwd: "/work/gamma-project",
       arguments: JSON.stringify({ skill: "xlsx", args: "MSGTEXT-wb-args" }),
-      providerData: { messageId: "m1" },
+      providerData: { messageId: "m1", model: "glm-5.2" },
       message: { usage: { input_tokens: 300, output_tokens: 20, total_tokens: 320, cache_read_input_tokens: 200 } },
     },
     {
@@ -177,7 +187,7 @@ export async function createTranscriptsHome(home, { withDatabase = true } = {}) 
       name: "Bash",
       timestamp: ago(3_580_000),
       arguments: JSON.stringify({ command: "echo MSGTEXT-wb-bash" }),
-      providerData: { messageId: "m2" },
+      providerData: { messageId: "m2", model: "auto" },
       message: { usage: { input_tokens: 50, output_tokens: 5, total_tokens: 55, cache_read_input_tokens: 0 } },
     },
   ].map(line).join(""));
