@@ -167,6 +167,14 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ### Changed
 
+- Session counts mean sessions active in the window: a session counts when it, or one
+  of its subagent transcripts, started, used tokens or called a skill on a day inside
+  the window (long-running sessions started earlier now count). Series count a session
+  on each day it is active; projects count a session in each folder it worked in. The
+  start-day count stays as `sessionsStarted`; `activeDays` is unchanged. The index
+  marks session files (`sf`) and the session a subagent belongs to (`s`) on the next
+  run, without a rebuild; Hermes sessions also count on their `ended_at` day, and the
+  home card counts Hermes sessions by their last activity.
 - Codex usage: uncached input now also excludes `cache_write_input_tokens` (they were
   counted twice in the per-day input before); the model comes from `turn_context`.
 - The uninstall plan `warning` names the other Agents by display name

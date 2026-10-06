@@ -1,6 +1,7 @@
 import { pricingFreshness } from "./pricing.mjs";
 import { costIndex, modelsAcrossAgents, roundUsd, sumCosts } from "./usage-cost.mjs";
 import { agentProjects, costProjects, projectsAcrossAgents } from "./usage-projects.mjs";
+import { fileActiveDays, recordActiveDays, sessionCounter, sessionKeyOf } from "./usage-sessions.mjs";
 import { dayKey } from "./usage-sources.mjs";
 
 /**
@@ -62,30 +63,42 @@ const emptyTokens = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, t
 const FIELDS = ["input", "output", "cacheRead", "cacheWrite", "total"];
 
 /** Per agent, per day: { sessions, tokens, costUsd } from transcript files and DB records. */
+/**
+ * Per agent, per day: { sessions (active that day), started, tokens, credits } from transcript
+ * files and DB records, plus `windowSessions`: sessions active on any day of the window.
+ */
 function dailyByAgent(index, inWindow) {
   const agents = new Map();
+  const sessions = sessionCounter();
   const bucket = (agentId, day) => {
     const days = agents.get(agentId) || new Map();
     agents.set(agentId, days);
-    const row = days.get(day) || { sessions: 0, tokens: emptyTokens(), reportedCostUsd: 0, credits: 0 };
+    const row = days.get(day) || { sessions: 0, started: 0, tokens: emptyTokens(), reportedCostUsd: 0, credits: 0 };
     days.set(day, row);
     return row;
   };
-  for (const entry of Object.values(index.files || {})) {
+  const active = (agentId, sessionKey, days) => {
+    if (!sessionKey) return;
+    for (const day of days) bucket(agentId, day);
+    sessions.add(agentId, sessionKey, days);
+  };
+  for (const [key, entry] of Object.entries(index.files || {})) {
     for (const [day, values] of Object.entries(entry.d || {})) {
       if (!inWindow(day)) continue;
       const row = bucket(entry.a, day);
-      row.sessions += values[0];
+      row.started += values[0];
       FIELDS.forEach((field, offset) => {
         row.tokens[field] += values[offset + 1];
       });
     }
+    active(entry.a, sessionKeyOf(key, entry), fileActiveDays(entry, inWindow));
   }
   for (const [agentId, records] of Object.entries(index.records || {})) {
-    for (const record of Object.values(records)) {
+    for (const [key, record] of Object.entries(records)) {
+      active(agentId, `record|${key}`, recordActiveDays(record, inWindow));
       if (!inWindow(record.d)) continue;
       const row = bucket(agentId, record.d);
-      row.sessions += 1;
+      row.started += 1;
       FIELDS.forEach((field, offset) => {
         row.tokens[field] += record.t[offset] || 0;
       });
@@ -95,7 +108,9 @@ function dailyByAgent(index, inWindow) {
   for (const credit of Object.values(index.credits || {})) {
     if (inWindow(credit.d)) bucket("workbuddy", credit.d).credits += credit.v || 0;
   }
-  return agents;
+  for (const [agentId, days] of agents) for (const [day, row] of days) row.sessions = sessions.onDay(agentId, day);
+  const windowSessions = new Map([...agents.keys()].map((agentId) => [agentId, sessions.count(agentId)]));
+  return { daily: agents, windowSessions };
 }
 
 /** Skill counts per agent within the window: { agentId: { skill: { day: count } } } + confidence. */
@@ -176,7 +191,7 @@ const windowFilter = (dates) => (day) => typeof day === "string" && day >= dates
 export function usageSummary(index, { days = 30, now = Date.now() } = {}) {
   const dates = windowDays(days, now);
   const inWindow = windowFilter(dates);
-  const daily = dailyByAgent(index, inWindow);
+  const { daily, windowSessions } = dailyByAgent(index, inWindow);
   const skills = skillsByAgent(index, inWindow);
   const costs = costIndex(index, inWindow);
   const agentIds = [...new Set([...daily.keys(), ...skills.keys(), ...costs.keys()])].sort();
@@ -184,18 +199,19 @@ export function usageSummary(index, { days = 30, now = Date.now() } = {}) {
     const byDay = daily.get(agentId) || new Map();
     const priced = costs.get(agentId) || NO_COST;
     const tokens = emptyTokens();
-    let sessions = 0;
+    let sessionsStarted = 0;
     let credits = 0;
     let activeDays = 0;
     for (const row of byDay.values()) {
-      sessions += row.sessions;
+      sessionsStarted += row.started;
       credits += row.credits;
-      if (row.sessions || row.tokens.total) activeDays += 1;
+      if (row.started || row.tokens.total) activeDays += 1;
       for (const field of FIELDS) tokens[field] += row.tokens[field];
     }
     return {
       agentId,
-      sessions,
+      sessions: windowSessions.get(agentId) || 0,
+      sessionsStarted,
       activeDays,
       tokens,
       ...costFields(priced),
@@ -205,6 +221,7 @@ export function usageSummary(index, { days = 30, now = Date.now() } = {}) {
       series: dates.map((date) => ({
         date,
         sessions: byDay.get(date)?.sessions || 0,
+        sessionsStarted: byDay.get(date)?.started || 0,
         tokens: byDay.get(date)?.tokens.total || 0,
         costUsd: roundUsd(priced.byDay.get(date)),
       })),
@@ -313,20 +330,22 @@ export function usageForSkill(index, name, { days = 90, now = Date.now() } = {})
 export function usageForAgent(index, agentId, { days = 90, now = Date.now() } = {}) {
   const dates = windowDays(days, now);
   const inWindow = windowFilter(dates);
-  const byDay = dailyByAgent(index, inWindow).get(agentId) || new Map();
+  const { daily, windowSessions } = dailyByAgent(index, inWindow);
+  const byDay = daily.get(agentId) || new Map();
   const skills = skillsByAgent(index, inWindow).get(agentId) || new Map();
   const costs = costIndex(index, inWindow);
   const priced = costs.get(agentId) || NO_COST;
   const totals = {
-    sessions: 0,
+    sessions: windowSessions.get(agentId) || 0,
+    sessionsStarted: 0,
     activeDays: 0,
     tokens: emptyTokens(),
     ...costFields(priced),
     ...(USAGE_SOURCES[agentId]?.reportedCost ? { reportedCostUsd: priced.reportedCostUsd ?? 0 } : {}),
   };
   for (const row of byDay.values()) {
-    totals.sessions += row.sessions;
-    if (row.sessions || row.tokens.total) totals.activeDays += 1;
+    totals.sessionsStarted += row.started;
+    if (row.started || row.tokens.total) totals.activeDays += 1;
     for (const field of FIELDS) totals.tokens[field] += row.tokens[field];
   }
   const { topProjects, otherProjects } = agentProjects(costProjects(index, inWindow, costs, { agentId }).get(agentId));
@@ -338,7 +357,13 @@ export function usageForAgent(index, agentId, { days = 90, now = Date.now() } = 
     byModel: priced.byModel,
     series: dates.map((date) => {
       const row = byDay.get(date);
-      return { date, sessions: row?.sessions || 0, tokens: row ? { ...row.tokens } : emptyTokens(), costUsd: roundUsd(priced.byDay.get(date)) };
+      return {
+        date,
+        sessions: row?.sessions || 0,
+        sessionsStarted: row?.started || 0,
+        tokens: row ? { ...row.tokens } : emptyTokens(),
+        costUsd: roundUsd(priced.byDay.get(date)),
+      };
     }),
     topSkills: [...skills]
       .map(([name, row]) => ({

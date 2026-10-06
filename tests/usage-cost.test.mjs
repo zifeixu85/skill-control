@@ -173,7 +173,7 @@ test("costs: official prices per rule, agent averages, families, reported figure
   assert.equal(summary.topSkills.find((item) => item.name === "pdf").costUsd, 0.134);
 
   const agent = usageForAgent(index, "workbuddy", { days: 30 });
-  assert.deepEqual(Object.keys(agent.totals).sort(), ["activeDays", "costBasis", "costUsd", "sessions", "tokens", "unpricedTokens"]);
+  assert.deepEqual(Object.keys(agent.totals).sort(), ["activeDays", "costBasis", "costUsd", "sessions", "sessionsStarted", "tokens", "unpricedTokens"]);
   assert.ok(agent.byModel.length === 3 && agent.series.every((day) => typeof day.costUsd === "number"));
   assert.equal(usageForAgent(index, "hermes", { days: 30 }).totals.reportedCostUsd, 0.75);
 });
@@ -211,7 +211,7 @@ test("project costs: priced like the agent totals, unnamed sessions included, to
   // WorkBuddy's DeepSeek and "auto" tokens make the unnamed project the most expensive one.
   assert.deepEqual(result.projects.map((project) => project.name), [null, "priced"]);
   const priced = result.projects[1];
-  assert.deepEqual(Object.keys(priced).sort(), ["agents", "costBasis", "costUsd", "name", "sessions", "tokens", "topModels", "unpricedTokens"]);
+  assert.deepEqual(Object.keys(priced).sort(), ["agents", "costBasis", "costUsd", "name", "sessions", "sessionsStarted", "tokens", "topModels", "unpricedTokens"]);
   assert.deepEqual(priced.agents.map((agent) => agent.agentId), ["codex", "claude"]);
   near(priced.costUsd, agentCost("codex") + agentCost("claude"), "priced");
   assert.deepEqual(priced.topModels.map((model) => model.model), ["gpt-6.1-sol", "claude-opus-5-5", "claude-sonnet-5-5"]);

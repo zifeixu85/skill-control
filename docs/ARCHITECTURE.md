@@ -683,6 +683,16 @@ Hermes：静态解析的全部工具集（`enabled` 表示配置启用或被其�
 索引约 1.4 MB；版本 2（按模型）2,119 个文件首次索引约 47–61 秒，索引约 1.8 MB，按官方价计算 30 天费用约 20–30 ms。
 Codex 续接 / 压缩后的会话可能在第一条 `turn_context` 之前就有用量：先记为 `unknown`，拿到模型后移到该模型下。
 
+**会话数 = 窗口内活跃的会话**（`server/usage-sessions.mjs`）：会话在某天开始、用了 token 或调用 / 读取了技能，就算
+那天活跃；窗口的 `sessions` 是至少活跃过一天的不同会话数，所以更早开始、仍在使用的长会话也算。子代理等嵌套
+记录（`<目录>/<会话>/subagents/*.jsonl`，索引项的 `s`）的活动算在父会话上；`sf` 标记文件是不是会话本身（旧
+索引项没有时，以记录过会话开始为准）。数据库会话在开始那天活跃，Hermes 有 `ended_at` 时结束那天也算（记录的
+`e`）；token 和费用仍记在开始那天。按天序列里一个会话在它活跃的每一天各计一次（各天相加会大于窗口合计）。
+原来按开始日的计数保留为 `sessionsStarted`；`activeDays` 不变（有会话开始或有 token 的天数）。项目里一个会话
+在它工作过的每个项目各计一次（父会话与子代理在不同文件夹时两边都算）。首页 Agent 卡片的“近 30 天 N 个会话”
+来自 `/api/agents/activity`：转录类 Agent 按会话文件在窗口内被修改过计数，Hermes 改为按
+`COALESCE(ended_at, started_at)` 落在窗口内计数，口径同为“窗口内活跃”。
+
 `GET /api/usage/status`
 
 ```ts
@@ -747,12 +757,12 @@ type ModelRow = {
   status: /* 同 /api/usage/status */,
   cost: Cost,                                                   // 全部 Agent 合计
   agents: Array<Cost & {
-    agentId, sessions, activeDays,
+    agentId, sessions /* 窗口内活跃 */, sessionsStarted /* 窗口内开始 */, activeDays,
     tokens: { input, output, cacheRead, cacheWrite, total },   // input 不含缓存命中
     reportedCostUsd?: number,                                   // 仅 Hermes / OpenClaw / QClaw：产品自报
     byModel: ModelRow[],                                        // 按费用从高到低
     credits?: number,                                           // 仅 WorkBuddy
-    series: Array<{ date: "YYYY-MM-DD", sessions, tokens, costUsd }>,  // 每天一项（本地日期），tokens 为合计
+    series: Array<{ date: "YYYY-MM-DD", sessions /* 当天活跃 */, sessionsStarted, tokens, costUsd }>,  // 每天一项（本地日期），tokens 为合计
     sources: Array<{ id: "tokens" | "skills" | "credits", label, confidence: "exact" | "inferred" | "reported" }>,
   }>,
   topSkills: Array<{ name, count, tokens, costUsd: number | null /* 有 token 归因时 */,
@@ -774,7 +784,7 @@ type ModelRow = {
 
 ```ts
 { generatedAt, windowDays, index, status, totals: Cost,
-  projects: Array<Cost & { name: string | null, sessions, tokens /* 合计 */,
+  projects: Array<Cost & { name: string | null, sessions, sessionsStarted, tokens /* 合计 */,
                            agents: Array<{ agentId, tokens, costUsd }>,           // 按费用从高到低
                            topModels: Array<{ model, name, costUsd }> }>,         // ≤ 3，跨 Agent 合并
   other: { count, costUsd, tokens } }                                            // 第 31 个起的项目合计；projects ≤ 30
@@ -798,11 +808,11 @@ families }`（`models` 各条含 `source`、`note`、`status`、`reviewBy`、`al
 
 ```ts
 { agentId, windowDays, index, status,
-  totals: Cost & { sessions, activeDays, tokens: { input, output, cacheRead, cacheWrite, total }, reportedCostUsd? },
+  totals: Cost & { sessions, sessionsStarted, activeDays, tokens: { input, output, cacheRead, cacheWrite, total }, reportedCostUsd? },
   byModel: ModelRow[],
-  series: Array<{ date, sessions, tokens: { input, output, cacheRead, cacheWrite, total }, costUsd }>,
+  series: Array<{ date, sessions, sessionsStarted, tokens: { input, output, cacheRead, cacheWrite, total }, costUsd }>,
   topSkills: Array<{ name, count, tokens, costUsd: number | null, lastUsedAt, confidence }>,  // ≤ 30
-  topProjects: Array<Cost & { name: string | null /* 工作目录最后一段；null = 未识别项目 */, sessions, tokens /* 合计 */,
+  topProjects: Array<Cost & { name: string | null /* 工作目录最后一段；null = 未识别项目 */, sessions, sessionsStarted, tokens /* 合计 */,
     tokenSplit: { input, output, cacheRead, cacheWrite, cacheWrite1h },   // 计价所用的拆分
     topModels: Array<{ model, name, costUsd }> }>,                         // ≤ 3；项目按费用、再按 token 排序，≤ 20
   otherProjects: { count, costUsd, tokens },                               // 其余项目合计，与 totals 对得上

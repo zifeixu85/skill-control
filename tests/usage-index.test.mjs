@@ -83,6 +83,7 @@ test("indexes tokens, sessions and skills from every source without keeping any 
     {
       name: "beta-project",
       sessions: 2,
+      sessionsStarted: 2,
       tokens: 1_680,
       tokenSplit: { input: 600, output: 80, cacheRead: 1_000, cacheWrite: 0, cacheWrite1h: 0 },
       costUsd: 0.00542,

@@ -81,7 +81,7 @@ async function headDigest(handle) {
 }
 
 function freshEntry(file) {
-  return { a: file.agentId, size: 0, mtimeMs: 0, offset: 0, tail: 0, head: null, gone: false, st: {}, d: {}, k: {}, kt: {}, ki: {}, m: {}, km: {}, p: null };
+  return { a: file.agentId, sf: Boolean(file.sessionFile), ...(file.parentKey ? { s: file.parentKey } : {}), size: 0, mtimeMs: 0, offset: 0, tail: 0, head: null, gone: false, st: {}, d: {}, k: {}, kt: {}, ki: {}, m: {}, km: {}, p: null };
 }
 
 /** Adds a token row under model → day → bucket (a negative row moves usage away; empty rows are dropped). */
@@ -225,6 +225,7 @@ function applySnapshots(index, snapshots) {
         m: model,
         b: model ? bucketFor({ model, timestamp: record.at, agentId }) : "s",
         n: record.requests || 0,
+        ...(record.endDay && record.endDay > record.day ? { e: record.endDay } : {}),
         rc: record.costUsd || 0,
         p: record.project || null,
       };
@@ -296,6 +297,13 @@ export async function runUsageIndex({
   const [files, snapshots] = await Promise.all([discoverTranscripts(homeDirectory), readSnapshots(homeDirectory)]);
   applySnapshots(index, snapshots);
   const present = new Set(files.map((file) => file.key));
+  // Whether a file is a session, or the session it belongs to (subagents), for "sessions active in the window".
+  for (const file of files) {
+    const entry = index.files[file.key];
+    if (!entry) continue;
+    entry.sf = Boolean(file.sessionFile);
+    if (file.parentKey) entry.s = file.parentKey;
+  }
   for (const [key, entry] of Object.entries(index.files)) {
     // Products delete old transcripts; their aggregates stay.
     if (!present.has(key)) entry.gone = true;

@@ -330,15 +330,17 @@ export async function readHermesActivity(homeDirectory = homedir(), { now = Date
     }
     const sum = (column) => (columns.has(column) ? `COALESCE(SUM(${column}), 0)` : "0");
     const since = (now - ACTIVITY_WINDOW_DAYS * 86_400_000) / 1000;
+    // A session counts when it was active in the window: started or (when recorded) ended in it.
+    const lastActive = columns.has("ended_at") ? "COALESCE(ended_at, started_at)" : "started_at";
     const row = database
       .prepare(
         `SELECT COUNT(*) AS sessions, ${sum("input_tokens")} AS input, ${sum("output_tokens")} AS output,
                 ${sum("cache_read_tokens")} AS cacheRead, ${sum("cache_write_tokens")} AS cacheWrite,
                 ${sum("estimated_cost_usd")} AS cost
-         FROM sessions WHERE started_at >= ?`,
+         FROM sessions WHERE ${lastActive} >= ?`,
       )
       .get(since);
-    const latest = database.prepare("SELECT MAX(started_at) AS latest FROM sessions").get();
+    const latest = database.prepare(`SELECT MAX(${lastActive}) AS latest FROM sessions`).get();
     Object.assign(result, {
       available: true,
       sessions30d: Number(row.sessions) || 0,

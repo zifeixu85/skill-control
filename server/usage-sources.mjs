@@ -272,12 +272,23 @@ function openClawLine(line, context) {
  * Every transcript file with its index key. Codex keys use the rollout file name so a
  * session moved into archived_sessions keeps its progress.
  */
+/**
+ * A transcript nested under a session (`<dir>/<session>/subagents/agent-x.jsonl`) belongs to
+ * the session file `<dir>/<session>.jsonl`: its key, so subagent activity makes the session
+ * active.
+ */
+function nestedFile(agentId, relative) {
+  const parts = relative.split(path.sep);
+  if (parts.length === 2) return { sessionFile: true };
+  return { sessionFile: false, ...(parts.length > 2 ? { parentKey: `${agentId}|${hashKey(path.join(parts[0], `${parts[1]}.jsonl`))}` } : {}) };
+}
+
 export async function discoverTranscripts(homeDirectory) {
   const files = [];
   const claudeRoot = path.join(homeDirectory, ".claude", "projects");
   for (const file of await jsonlFiles(claudeRoot, 4)) {
     const relative = path.relative(claudeRoot, file);
-    files.push({ path: file, agentId: "claude", key: `claude|${hashKey(relative)}`, sessionFile: relative.split(path.sep).length === 2 });
+    files.push({ path: file, agentId: "claude", key: `claude|${hashKey(relative)}`, ...nestedFile("claude", relative) });
   }
   for (const root of [path.join(homeDirectory, ".codex", "sessions"), path.join(homeDirectory, ".codex", "archived_sessions")]) {
     for (const file of await jsonlFiles(root, 4)) {
@@ -287,7 +298,7 @@ export async function discoverTranscripts(homeDirectory) {
   const workBuddyRoot = path.join(homeDirectory, ".workbuddy", "projects");
   for (const file of await jsonlFiles(workBuddyRoot, 4)) {
     const relative = path.relative(workBuddyRoot, file);
-    files.push({ path: file, agentId: "workbuddy", key: `workbuddy|${hashKey(relative)}`, sessionFile: relative.split(path.sep).length === 2 });
+    files.push({ path: file, agentId: "workbuddy", key: `workbuddy|${hashKey(relative)}`, ...nestedFile("workbuddy", relative) });
   }
   for (const kind of ["openclaw", "qclaw"]) {
     const install = await resolveOpenClawInstall(kind, homeDirectory).catch(() => null);
@@ -356,7 +367,7 @@ async function hermesSessions(homeDirectory, warnings) {
       .prepare(
         `SELECT id, started_at, ${pick("input_tokens")} AS i, ${pick("output_tokens")} AS o, ${pick("cache_read_tokens")} AS cr,
          ${pick("cache_write_tokens")} AS cw, ${pick("actual_cost_usd")} AS ac, ${pick("estimated_cost_usd")} AS ec, ${pick("cwd")} AS cwd,
-         ${pick("model")} AS model, ${pick("api_call_count")} AS calls
+         ${pick("model")} AS model, ${pick("api_call_count")} AS calls, ${pick("ended_at")} AS ended
          FROM sessions ORDER BY started_at DESC LIMIT 50000`,
       )
       .all();
@@ -365,6 +376,7 @@ async function hermesSessions(homeDirectory, warnings) {
       return {
         key: hashKey(`hermes:${row.id}`),
         day: dayKey(Number(row.started_at)),
+        endDay: row.ended === null || row.ended === undefined ? null : dayKey(Number(row.ended)),
         at: timeMs(Number(row.started_at)),
         model: row.model === null || row.model === undefined ? null : modelKey(row.model),
         requests: count(row.calls),
