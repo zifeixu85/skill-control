@@ -28,6 +28,12 @@ on Keep a Changelog and the project follows Semantic Versioning.
   `reportedCostUsd` (Hermes, OpenClaw, QClaw's own figures). New
   `GET /api/usage/models` (every model across agents) and `GET /api/usage/pricing`
   (the price table).
+- Price table review dates: optional `reviewBy` on model entries (set on the GPT-5.6
+  Sol and Gemini Flash promotions) and `reviewAfterDays: 90` for the whole table;
+  `/api/usage/models` returns `pricingStale` and `pricingTable` (age, stale), and
+  `/api/usage/pricing` returns `checkedAgeDays`, `tableStale` and `pricingStale`, so the
+  UI can warn that prices may have changed. Estimates take an optional `fallback`
+  model: WorkBuddy `auto` falls back to `glm-5.2` when there is nothing to average.
 
 - Machine-readable error codes: every error response is `{ error, code? }`, and
   every plan / apply refusal carries a specific `code` (`stale-plan`,

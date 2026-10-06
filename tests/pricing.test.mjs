@@ -9,6 +9,7 @@ import {
   normalize,
   priceFor,
   priceTable,
+  pricingFreshness,
   promptBucket,
   publicPriceTable,
   resolve,
@@ -144,4 +145,30 @@ test("a malformed table is refused", () => {
   assert.throws(() => compileTable({ ...base, estimates: [{ id: "z", priceAs: "missing" }] }), /不存在的模型/u);
   assert.throws(() => compileTable({ ...base, models: [{ id: "a", vendor: "x", input: 1, output: 2, offPeak: { schedule: "nope" } }] }), /不存在的时段/u);
   assert.throws(() => compileTable({ ...base, models: [{ id: "a", vendor: "x", input: "1", output: 2 }] }), /缺少输入或输出价格/u);
+  assert.throws(() => compileTable({ ...base, estimates: [{ id: "z", priceAs: "@agent-average", fallback: "missing" }] }), /fallback 指向不存在的模型/u);
+  assert.doesNotThrow(() => compileTable({ ...base, estimates: [{ id: "z", priceAs: "@agent-average", fallback: "A" }] }));
+  assert.throws(() => compileTable({ ...base, models: [{ id: "a", vendor: "x", input: 1, output: 2, reviewBy: "2026-11" }] }), /reviewBy/u);
+  assert.throws(() => compileTable({ ...base, reviewAfterDays: 0 }), /reviewAfterDays/u);
+});
+
+test("review dates: promotions past reviewBy and a table older than reviewAfterDays are flagged", () => {
+  const at = (year, month, day) => new Date(year, month - 1, day, 12).getTime();
+  assert.equal(table.raw.reviewAfterDays, 90);
+  assert.deepEqual(table.raw.estimates.find((estimate) => estimate.id === "auto").fallback, "glm-5.2");
+  assert.deepEqual(table.raw.models.filter((model) => model.reviewBy).map((model) => [model.id, model.reviewBy]), [
+    ["gpt-5.6-sol", "2026-11-21"],
+    ["gemini-3.8-flash", "2026-12-31"],
+    ["gemini-3.7-flash", "2026-12-31"],
+    ["gemini-3.6-flash", "2026-12-31"],
+  ]);
+  assert.equal(pricingFreshness(table, at(2026, 11, 21)).pricingStale, null, "due on the day itself, not yet past");
+  assert.deepEqual(pricingFreshness(table, at(2026, 11, 22)).pricingStale, { ids: ["gpt-5.6-sol"], since: "2026-11-21" });
+  assert.deepEqual(pricingFreshness(table, at(2027, 1, 1)).pricingStale.ids, ["gpt-5.6-sol", "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash"]);
+  assert.deepEqual(pricingFreshness(table, at(2026, 10, 7)).table, { checkedAt: "2026-10-07", ageDays: 0, reviewAfterDays: 90, stale: false });
+  assert.deepEqual([pricingFreshness(table, at(2027, 1, 5)).table.ageDays, pricingFreshness(table, at(2027, 1, 5)).table.stale], [90, false]);
+  assert.deepEqual([pricingFreshness(table, at(2027, 1, 6)).table.ageDays, pricingFreshness(table, at(2027, 1, 6)).table.stale], [91, true]);
+  const pricing = publicPriceTable(table, at(2026, 11, 22));
+  assert.deepEqual([pricing.reviewAfterDays, pricing.checkedAgeDays, pricing.tableStale, pricing.pricingStale.ids], [90, 46, false, ["gpt-5.6-sol"]]);
+  assert.equal(pricing.models.find((model) => model.id === "gpt-5.6-sol").reviewBy, "2026-11-21");
+  assert.equal(pricing.estimates.find((estimate) => estimate.id === "auto").fallback, "glm-5.2");
 });

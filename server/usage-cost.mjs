@@ -5,6 +5,8 @@ import { costParts, priceFor, priceTable, resolve, resolveFamily } from "./prici
  * API-equivalent estimate at the vendors' official prices; subscription use is not an
  * actual expense. Products that report their own cost (Hermes, OpenClaw, QClaw) keep it as
  * `reportedCostUsd`, and it only becomes the estimate when a session has no priced model.
+ * "@agent-average" estimates fall back to: the estimate's `fallback` model, the id's family,
+ * the reported figure, unpriced.
  */
 
 const TYPES = ["input", "output", "cacheRead", "cacheWrite", "cacheWrite1h"];
@@ -134,9 +136,13 @@ export function priceRows(agentId, { rows = new Map(), records = [] }, { table =
       acc.add(model, { ...resolution, unitPrice: unit }, "estimate", item.day, item.row, costParts(item.row, unit).reduce((sum, value) => sum + value, 0));
       continue;
     }
-    // Nothing else to average: the id's family, then the product's own figure, then unpriced.
+    // Nothing else to average: the estimate's fallback model, the id's family, then the
+    // product's own figure, then unpriced.
     const family = resolveFamily(model, table);
-    if (family.entry) priceRow(acc, model, family, item, false);
+    if (resolution.fallback) {
+      const fallback = { basis: "estimate", entry: resolution.fallback, priceAs: resolution.fallback.id, priceRef: resolution.priceRef };
+      priceRow(acc, model, fallback, item, false);
+    } else if (family.entry) priceRow(acc, model, family, item, false);
     else if (reported > 0) acc.add(model, { basis: "reported" }, "reported", item.day, item.row, reported);
     else acc.add(model, { basis: "unpriced" }, "unpriced", item.day, item.row, 0);
   }

@@ -709,7 +709,12 @@ Codex 续接 / 压缩后的会话可能在第一条 `turn_context` 之前就有�
   缓存写价。输出含思考 token。Batch、区域加价（Claude `inference_geo`，本机均为 not_available）、缓存存储费、
   服务档位都不计。订阅内的用量同样按 API 等价估算，不等于实际支出。
 - `@agent-average`（WorkBuddy `auto`）：每种 token 按同一窗口内该 Agent 其他已定价模型的 token 加权平均单价计
-  （缓存读 / 写没有样本时按平均输入价）；没有可平均的模型时按 id 的系列兜底，再不行用产品自报费用，否则未定价。
+  （缓存读 / 写没有样本时按平均输入价）；没有可平均的模型时依次用估算的 `fallback` 模型（`auto` 为 `glm-5.2`，
+  本机 WorkBuddy 最常用的模型）、id 的系列、产品自报费用，否则未定价。加载时校验 `fallback` 指向存在的模型。
+- 复核日期：模型条目可带 `reviewBy`（YYYY-MM-DD，促销 / 预览价的复核日，如 `gpt-5.6-sol` 2026-11-21、三个
+  Gemini Flash 促销价 2026-12-31）；表头 `reviewAfterDays: 90`。本地日期晚于 `reviewBy` 的条目列入
+  `pricingStale`，`checkedAt` 距今超过 `reviewAfterDays` 天时 `tableStale` / `pricingTable.stale` 为 true，
+  界面据此提示“价格可能已变，请核对”。
 - 数据库会话（Hermes、OpenClaw、QClaw）：有可定价模型时按官方价估算，产品自报的费用另列为 `reportedCostUsd`；
   没有模型或模型未定价时用产品自报费用（`basis: "reported"`）。
 - 依据 `basis`：`official` | `estimate` | `family` | `reported` | `unpriced`（未定价的 token 计入 `unpricedTokens`，
@@ -756,12 +761,15 @@ type ModelRow = {
 ```ts
 { generatedAt, windowDays, index, status, totals: Cost,
   models: Array<ModelRow & { agents: Array<{ agentId, tokens /* 合计 */, costUsd }> }>,  // 同一 id 与依据合并
-  unpriced: string[] }                                                                   // 未定价的模型 id
+  unpriced: string[],                                                                    // 未定价的模型 id
+  pricingStale: { ids: string[], since: "YYYY-MM-DD" /* 最早过期的 reviewBy */ } | null,
+  pricingTable: { checkedAt, ageDays: number | null, reviewAfterDays: number | null, stale: boolean } }
 ```
 
-`GET /api/usage/pricing` → 价目表：`{ schema, checkedAt, currency: "USD", unit, vendors, schedules, fx,
-buckets: [{ id: "s" | "l200" | "l272" | "l512", floor }], models, estimates, families }`（`models` 各条含 `source`、
-`note`、`status`、`aliases`、`long`、`offPeak`、`changes`、`fast`；`families[].match` 为正则文本）。
+`GET /api/usage/pricing` → 价目表：`{ schema, checkedAt, reviewAfterDays, checkedAgeDays, tableStale, pricingStale,
+currency: "USD", unit, vendors, schedules, fx, buckets: [{ id: "s" | "l200" | "l272" | "l512", floor }], models, estimates,
+families }`（`models` 各条含 `source`、`note`、`status`、`reviewBy`、`aliases`、`long`、`offPeak`、`changes`、`fast`；
+`estimates` 可带 `fallback`；`families[].match` 为正则文本）。
 
 `GET /api/usage/skill?name=<技能名>&days=90`（名称也匹配 `插件:技能` 的后半段）
 

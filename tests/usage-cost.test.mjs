@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { compileTable } from "../server/pricing.mjs";
 import { priceRows } from "../server/usage-cost.mjs";
 import { loadUsageIndex, runUsageIndex } from "../server/usage-index.mjs";
 import { usageForAgent, usageForSkill, usageModels, usageSummary } from "../server/usage-query.mjs";
@@ -178,7 +179,8 @@ test("costs: official prices per rule, agent averages, families, reported figure
 test("GET /api/usage/models shape: one row per model and basis, with the agents that used it", async (context) => {
   const { index } = await setup(context);
   const result = usageModels(index, { days: 30 });
-  assert.deepEqual(Object.keys(result).sort(), ["generatedAt", "index", "models", "totals", "unpriced", "windowDays"]);
+  assert.deepEqual(Object.keys(result).sort(), ["generatedAt", "index", "models", "pricingStale", "pricingTable", "totals", "unpriced", "windowDays"]);
+  assert.deepEqual(Object.keys(result.pricingTable).sort(), ["ageDays", "checkedAt", "reviewAfterDays", "stale"]);
   assert.deepEqual(result.unpriced, ["mystery-model"]);
   const deepseek = result.models.find((row) => row.model === "deepseek-v4-pro");
   assert.deepEqual(deepseek.agents.map((item) => item.agentId), ["workbuddy", "hermes"]);
@@ -189,13 +191,25 @@ test("GET /api/usage/models shape: one row per model and basis, with the agents 
   near(result.totals.costUsd, usageSummary(index, { days: 30 }).cost.costUsd, "totals");
 });
 
-test("an agent average with nothing to average falls back to the family, then to unpriced", () => {
+test("an agent average with nothing to average: fallback model, then family, then reported, then unpriced", () => {
   const rows = (model) => new Map([[model, [{ day: "2026-10-06", bucket: "s", row: [1_000_000, 0, 0, 0, 0, 1] }]]]);
-  const alone = priceRows("workbuddy", { rows: rows("auto") });
-  assert.deepEqual([alone.costUsd, alone.unpricedTokens, alone.byModel[0].basis], [0, 1_000_000, "unpriced"]);
-  // A record with the product's own figure keeps that figure instead.
-  const reported = priceRows("workbuddy", { records: [{ model: "auto", day: "2026-10-06", bucket: "s", row: [10, 0, 0, 0, 0, 1], reported: 0.5 }] });
+  const record = { model: "auto", day: "2026-10-06", bucket: "s", row: [1_000_000, 0, 0, 0, 0, 1], reported: 0.5 };
+  // Bundled table: WorkBuddy "auto" falls back to GLM-5.2 (1M input × 1.4).
+  const alone = priceRows("workbuddy", { rows: rows("auto") }).byModel[0];
+  assert.deepEqual([alone.basis, alone.priceAs, alone.costUsd, alone.priceRef], ["estimate", "glm-5.2", 1.4, { section: "estimates", id: "auto" }]);
+  assert.equal(priceRows("workbuddy", { records: [record] }).costBasis.estimate, 1.4, "the fallback comes before the reported figure");
+
+  const model = (id, input) => ({ id, vendor: "x", input, output: input });
+  const custom = (estimate, families = []) =>
+    compileTable({ schedules: {}, models: [model("base", 1), model("fam", 2)], estimates: [{ id: "auto", priceAs: "@agent-average", ...estimate }], families });
+  const withFallback = priceRows("any", { rows: rows("auto") }, { table: custom({ fallback: "base" }, [{ id: "f", match: "^auto", priceAs: "fam" }]) });
+  assert.deepEqual([withFallback.byModel[0].priceAs, withFallback.costUsd], ["base", 1], "fallback before family");
+  const family = priceRows("any", { rows: rows("auto") }, { table: custom({}, [{ id: "f", match: "^auto", priceAs: "fam" }]) });
+  assert.deepEqual([family.byModel[0].basis, family.byModel[0].priceAs, family.costBasis.family], ["family", "fam", 2]);
+  const reported = priceRows("any", { records: [record] }, { table: custom({}) });
   assert.deepEqual([reported.costUsd, reported.costBasis.reported], [0.5, 0.5]);
-  const family = priceRows("claude", { rows: rows("claude-opus-9") });
-  assert.deepEqual([family.byModel[0].basis, family.byModel[0].priceAs, family.costBasis.family], ["family", "claude-opus-5-5", 4]);
+  const unpriced = priceRows("any", { rows: rows("auto") }, { table: custom({}) });
+  assert.deepEqual([unpriced.costUsd, unpriced.unpricedTokens, unpriced.byModel[0].basis], [0, 1_000_000, "unpriced"]);
+  const opus = priceRows("claude", { rows: rows("claude-opus-9") });
+  assert.deepEqual([opus.byModel[0].basis, opus.byModel[0].priceAs, opus.costBasis.family], ["family", "claude-opus-5-5", 4]);
 });

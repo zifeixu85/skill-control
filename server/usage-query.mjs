@@ -1,3 +1,4 @@
+import { pricingFreshness } from "./pricing.mjs";
 import { costIndex, modelsAcrossAgents, roundUsd, sumCosts } from "./usage-cost.mjs";
 import { dayKey } from "./usage-sources.mjs";
 
@@ -234,6 +235,7 @@ export function usageModels(index, { days = 30, now = Date.now() } = {}) {
   const dates = windowDays(days, now);
   const costs = costIndex(index, windowFilter(dates));
   const models = modelsAcrossAgents(costs);
+  const freshness = pricingFreshness(undefined, now);
   return {
     generatedAt: new Date(now).toISOString(),
     windowDays: days,
@@ -241,6 +243,9 @@ export function usageModels(index, { days = 30, now = Date.now() } = {}) {
     totals: sumCosts([...costs.values()]),
     models,
     unpriced: models.filter((model) => model.basis === "unpriced").map((model) => model.model),
+    // Promotions and previews past their review date, and the age of the whole table.
+    pricingStale: freshness.pricingStale,
+    pricingTable: freshness.table,
   };
 }
 

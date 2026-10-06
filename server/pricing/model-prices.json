@@ -1,6 +1,7 @@
 {
  "schema": 1,
  "checkedAt": "2026-10-07",
+ "reviewAfterDays": 90,
  "currency": "USD",
  "unit": "per 1M tokens",
  "vendors": {
@@ -353,6 +354,7 @@
     "cacheWrite": 10
    },
    "status": "promo",
+   "reviewBy": "2026-11-21",
    "source": "https://developers.openai.com/api/docs/pricing",
    "note": "2026-08-21 起的促销价，官方称至少持续到 2026-11-21。"
   },
@@ -565,6 +567,7 @@
     }
    ],
    "status": "promo",
+   "reviewBy": "2026-12-31",
    "source": "https://ai.google.dev/gemini-api/docs/pricing",
    "note": "促销价至 2026-12-31，2027-01-01 起翻倍。缓存存储按小时另计，本表不计。"
   },
@@ -584,6 +587,7 @@
     }
    ],
    "status": "promo",
+   "reviewBy": "2026-12-31",
    "source": "https://ai.google.dev/gemini-api/docs/pricing",
    "note": "促销价至 2026-12-31，2027-01-01 起翻倍。"
   },
@@ -603,6 +607,7 @@
     }
    ],
    "status": "promo",
+   "reviewBy": "2026-12-31",
    "source": "https://ai.google.dev/gemini-api/docs/pricing"
   },
   {
@@ -1146,6 +1151,7 @@
    "id": "auto",
    "agent": "workbuddy",
    "priceAs": "@agent-average",
+   "fallback": "glm-5.2",
    "reason": "WorkBuddy 的自动模式，官方未公布它在哪些模型之间切换；按本机 WorkBuddy 其他模型的加权平均单价估算。"
   },
   {

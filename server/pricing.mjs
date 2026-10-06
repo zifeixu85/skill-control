@@ -24,6 +24,8 @@ export const MODEL_ID = /^[\w.:@/<>-]{1,80}$/u;
 const IGNORED = new Set(["<synthetic>"]);
 const DATE_SUFFIX = /(?:[-@]\d{8}|-\d{4}-\d{2}-\d{2})$/u;
 const PRICE_FILE = new URL("./pricing/model-prices.json", import.meta.url);
+const DATE = /^\d{4}-\d{2}-\d{2}$/u;
+const DAY_MS = 86_400_000;
 
 export const emptyRow = () => [0, 0, 0, 0, 0, 0];
 
@@ -83,7 +85,8 @@ export function compileTable(raw) {
       fail(`${model.id} 的长上下文阈值 ${model.long.above} 不在索引分档内。`);
     }
     if (model.offPeak && !schedules[model.offPeak.schedule]) fail(`${model.id} 引用了不存在的时段 ${model.offPeak.schedule}。`);
-    for (const change of model.changes || []) if (!/^\d{4}-\d{2}-\d{2}$/u.test(change?.from || "")) fail(`${model.id} 的换价日期无效。`);
+    for (const change of model.changes || []) if (!DATE.test(change?.from || "")) fail(`${model.id} 的换价日期无效。`);
+    if (model.reviewBy !== undefined && !DATE.test(model.reviewBy)) fail(`${model.id} 的 reviewBy 日期无效。`);
     for (const id of [model.id, ...(model.aliases || [])]) {
       const key = normalize(id);
       if (byId.has(key)) fail(`重复的模型 id 或别名：${key}`);
@@ -93,12 +96,15 @@ export function compileTable(raw) {
   const estimates = new Map();
   for (const estimate of raw.estimates || []) {
     if (estimate.priceAs !== "@agent-average" && !byId.has(normalize(estimate.priceAs))) fail(`估算 ${estimate.id} 指向不存在的模型。`);
+    if (estimate.fallback !== undefined && !byId.has(normalize(estimate.fallback))) fail(`估算 ${estimate.id} 的 fallback 指向不存在的模型。`);
     estimates.set(normalize(estimate.id), estimate);
   }
   const families = (raw.families || []).map((family) => {
     if (!byId.has(normalize(family.priceAs))) fail(`系列 ${family.id} 指向不存在的模型。`);
     return { ...family, regex: new RegExp(family.match, "u") };
   });
+  if (raw.reviewAfterDays !== undefined && !(Number.isInteger(raw.reviewAfterDays) && raw.reviewAfterDays > 0)) fail("reviewAfterDays 必须是正整数。");
+  if (raw.checkedAt !== undefined && !DATE.test(raw.checkedAt)) fail("checkedAt 日期无效。");
   return { raw, byId, estimates, families, schedules, memo: new Map() };
 }
 
@@ -131,7 +137,11 @@ function resolveUncached(raw, table, agentId) {
     const estimate = table.estimates.get(candidate);
     if (!estimate || (estimate.agent && estimate.agent !== agentId)) continue;
     const ref = { section: "estimates", id: estimate.id };
-    if (estimate.priceAs === "@agent-average") return { basis: "estimate", average: true, priceAs: "@agent-average", reason: estimate.reason, priceRef: ref };
+    if (estimate.priceAs === "@agent-average") {
+      // `fallback` prices the tokens when the agent has nothing else to average.
+      const fallback = estimate.fallback ? table.byId.get(normalize(estimate.fallback)) : null;
+      return { basis: "estimate", average: true, priceAs: "@agent-average", fallback, reason: estimate.reason, priceRef: ref };
+    }
     const entry = table.byId.get(normalize(estimate.priceAs));
     return { basis: "estimate", entry, priceAs: entry.id, reason: estimate.reason, priceRef: ref };
   }
@@ -221,12 +231,40 @@ export function bucketFor({ model, promptTokens = 0, timestamp = null, fast = fa
   return bucket;
 }
 
-/** The table for GET /api/usage/pricing (data only, no compiled regexes). */
-export function publicPriceTable(table = priceTable()) {
+/** Local calendar day (YYYY-MM-DD) of a time in ms. */
+const localDay = (ms) => {
+  const date = new Date(ms);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+};
+
+/**
+ * How current the table is on `now`: its age against `reviewAfterDays`, and the entries
+ * whose `reviewBy` date (promotions, previews) has passed — "价格可能已变，请核对".
+ */
+export function pricingFreshness(table = priceTable(), now = Date.now()) {
   const { raw } = table;
+  const today = localDay(now);
+  const checked = DATE.test(raw.checkedAt || "") ? Date.parse(`${raw.checkedAt}T00:00:00`) : null;
+  const ageDays = checked === null ? null : Math.max(0, Math.floor((Date.parse(`${today}T00:00:00`) - checked) / DAY_MS));
+  const reviewAfterDays = raw.reviewAfterDays ?? null;
+  const overdue = raw.models.filter((model) => model.reviewBy && today > model.reviewBy).sort((left, right) => left.reviewBy.localeCompare(right.reviewBy));
+  return {
+    table: { checkedAt: raw.checkedAt || null, ageDays, reviewAfterDays, stale: ageDays !== null && reviewAfterDays !== null && ageDays > reviewAfterDays },
+    pricingStale: overdue.length ? { ids: overdue.map((model) => model.id), since: overdue[0].reviewBy } : null,
+  };
+}
+
+/** The table for GET /api/usage/pricing (data only, no compiled regexes). */
+export function publicPriceTable(table = priceTable(), now = Date.now()) {
+  const { raw } = table;
+  const freshness = pricingFreshness(table, now);
   return {
     schema: raw.schema,
     checkedAt: raw.checkedAt,
+    reviewAfterDays: raw.reviewAfterDays ?? null,
+    checkedAgeDays: freshness.table.ageDays,
+    tableStale: freshness.table.stale,
+    pricingStale: freshness.pricingStale,
     currency: raw.currency,
     unit: raw.unit,
     vendors: raw.vendors,
