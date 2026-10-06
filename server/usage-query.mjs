@@ -1,5 +1,6 @@
 import { pricingFreshness } from "./pricing.mjs";
 import { costIndex, modelsAcrossAgents, roundUsd, sumCosts } from "./usage-cost.mjs";
+import { agentProjects, costProjects, projectsAcrossAgents } from "./usage-projects.mjs";
 import { dayKey } from "./usage-sources.mjs";
 
 /**
@@ -230,6 +231,19 @@ export function usageSummary(index, { days = 30, now = Date.now() } = {}) {
   return { generatedAt: new Date(now).toISOString(), windowDays: days, index: indexStatus(index), cost: sumCosts([...costs.values()]), agents, topSkills };
 }
 
+/** GET /api/usage/projects */
+export function usageProjects(index, { days = 30, now = Date.now() } = {}) {
+  const dates = windowDays(days, now);
+  const inWindow = windowFilter(dates);
+  const costs = costIndex(index, inWindow);
+  return {
+    generatedAt: new Date(now).toISOString(),
+    windowDays: days,
+    index: indexStatus(index),
+    ...projectsAcrossAgents(costProjects(index, inWindow, costs), costs),
+  };
+}
+
 /** GET /api/usage/models */
 export function usageModels(index, { days = 30, now = Date.now() } = {}) {
   const dates = windowDays(days, now);
@@ -301,7 +315,8 @@ export function usageForAgent(index, agentId, { days = 90, now = Date.now() } = 
   const inWindow = windowFilter(dates);
   const byDay = dailyByAgent(index, inWindow).get(agentId) || new Map();
   const skills = skillsByAgent(index, inWindow).get(agentId) || new Map();
-  const priced = costIndex(index, inWindow).get(agentId) || NO_COST;
+  const costs = costIndex(index, inWindow);
+  const priced = costs.get(agentId) || NO_COST;
   const totals = {
     sessions: 0,
     activeDays: 0,
@@ -314,28 +329,7 @@ export function usageForAgent(index, agentId, { days = 90, now = Date.now() } = 
     if (row.sessions || row.tokens.total) totals.activeDays += 1;
     for (const field of FIELDS) totals.tokens[field] += row.tokens[field];
   }
-  const projects = new Map();
-  const addProject = (name, sessions, tokens) => {
-    if (!name) return;
-    const row = projects.get(name) || { name, sessions: 0, tokens: 0 };
-    row.sessions += sessions;
-    row.tokens += tokens;
-    projects.set(name, row);
-  };
-  for (const entry of Object.values(index.files || {})) {
-    if (entry.a !== agentId || !entry.p) continue;
-    let sessions = 0;
-    let tokens = 0;
-    for (const [day, values] of Object.entries(entry.d || {})) {
-      if (!inWindow(day)) continue;
-      sessions += values[0];
-      tokens += values[5];
-    }
-    if (sessions || tokens) addProject(entry.p, sessions, tokens);
-  }
-  for (const record of Object.values(index.records?.[agentId] || {})) {
-    if (inWindow(record.d)) addProject(record.p, 1, record.t[4] || 0);
-  }
+  const { topProjects, otherProjects } = agentProjects(costProjects(index, inWindow, costs, { agentId }).get(agentId));
   return {
     agentId,
     windowDays: days,
@@ -358,7 +352,8 @@ export function usageForAgent(index, agentId, { days = 90, now = Date.now() } = 
       .filter((skill) => skill.count > 0 || skill.tokens > 0)
       .sort((left, right) => right.count - left.count || right.tokens - left.tokens)
       .slice(0, 30),
-    topProjects: [...projects.values()].sort((left, right) => right.tokens - left.tokens || right.sessions - left.sessions).slice(0, 20),
+    topProjects,
+    otherProjects,
     sources: sourcesFor(agentId),
   };
 }

@@ -79,7 +79,24 @@ test("indexes tokens, sessions and skills from every source without keeping any 
   const hermesSkill = usageForSkill(index, "flat-skill", { days: 90 });
   assert.deepEqual(hermesSkill.agents.map((item) => [item.agentId, item.reportedTotal, item.confidence]), [["hermes", 7, "reported"]]);
   const codex = usageForAgent(index, "codex", { days: 90 });
-  assert.deepEqual(codex.topProjects, [{ name: "beta-project", sessions: 2, tokens: 1_680 }]);
+  assert.deepEqual(codex.topProjects, [
+    {
+      name: "beta-project",
+      sessions: 2,
+      tokens: 1_680,
+      tokenSplit: { input: 600, output: 80, cacheRead: 1_000, cacheWrite: 0, cacheWrite1h: 0 },
+      costUsd: 0.00542,
+      costBasis: { official: 0.0054, estimate: 0.00002, family: 0, reported: 0 },
+      unpricedTokens: 0,
+      topModels: [
+        { model: "gpt-5.5", name: "GPT-5.5", costUsd: 0.0054 },
+        { model: "codex-auto-review", name: "codex-auto-review", costUsd: 0.00002 },
+      ],
+    },
+  ]);
+  assert.deepEqual(codex.otherProjects, { count: 0, costUsd: 0, tokens: 0 });
+  // Hermes sessions without a working folder form the unnamed project.
+  assert.deepEqual(usageForAgent(index, "hermes", { days: 30 }).topProjects.map((project) => [project.name, project.sessions, project.costUsd]), [[null, 2, 0.42]]);
   assert.equal(codex.series.length, 90);
   assert.equal(usageForAgent(index, "workbuddy", { days: 30 }).topProjects[0].name, "gamma-project");
 

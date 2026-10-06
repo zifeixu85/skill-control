@@ -232,6 +232,14 @@ test("no planted secret or message text leaks from agent files, tools, usage, he
   const models = JSON.parse((await get("usage:models", "/api/usage/models?days=30")).body);
   assert.ok(models.models.some((row) => row.model === "claude-opus-5-5" && row.basis === "official" && row.agents[0].agentId === "claude"));
   assert.deepEqual(Object.keys(models.totals).sort(), ["costBasis", "costUsd", "unpricedTokens"]);
+  const projects = JSON.parse((await get("usage:projects", "/api/usage/projects?days=30")).body);
+  assert.ok(projects.projects.some((row) => row.name === "alpha-project" && row.agents[0].agentId === "claude"));
+  assert.ok(projects.projects.every((row) => row.name === null || !/[\\/]/u.test(row.name)), "folder names only, never paths");
+  for (const agentId of ["claude", "codex", "workbuddy"]) {
+    const agent = JSON.parse((await get(`usage:agent:projects:${agentId}`, `/api/usage/agent?id=${agentId}&days=30`)).body);
+    const listed = agent.topProjects.reduce((sum, row) => sum + row.costUsd, 0) + agent.otherProjects.costUsd;
+    assert.ok(Math.abs(listed - agent.totals.costUsd) < 1e-5, `${agentId} projects reconcile`);
+  }
   const pricing = JSON.parse((await get("usage:pricing", "/api/usage/pricing")).body);
   assert.deepEqual([pricing.currency, pricing.buckets.length, pricing.models.length > 50], ["USD", 4, true]);
   for (const agentId of ["claude", "codex", "workbuddy", "hermes", "openclaw"]) {
@@ -257,7 +265,7 @@ test("no planted secret or message text leaks from agent files, tools, usage, he
   const stored = await readFile(path.join(home, ".agent-skill-manager", "usage-index.json"), "utf8");
   assert.doesNotMatch(stored, /MSGTEXT|ZZ9/u);
 
-  for (const pathname of ["/api/agent-files?agent=codex", `/api/agent-file?id=${files[0].id}`, "/api/agent-tools?agent=codex", "/api/usage/summary", "/api/usage/models", "/api/usage/pricing", "/api/health-report", "/api/agent-icon?id=codex"]) {
+  for (const pathname of ["/api/agent-files?agent=codex", `/api/agent-file?id=${files[0].id}`, "/api/agent-tools?agent=codex", "/api/usage/summary", "/api/usage/models", "/api/usage/projects", "/api/usage/pricing", "/api/health-report", "/api/agent-icon?id=codex"]) {
     const crossSite = await request(pathname, { headers: { "Sec-Fetch-Site": "cross-site" } });
     assert.equal(crossSite.status, 403, pathname);
   }

@@ -15,6 +15,33 @@ const BASES = ["official", "estimate", "family", "reported"];
 export const roundUsd = (value) => Math.round((value || 0) * 1_000_000) / 1_000_000;
 const rowTotal = (row) => row[0] + row[1] + row[2] + row[3] + row[4];
 
+/** Adds the in-window rows of model → day → bucket to `target` (Map model → [{ day, bucket, row }]); returns whether any were added. */
+export function collectModelRows(target, byModel, inWindow) {
+  let added = false;
+  for (const [model, byDay] of Object.entries(byModel || {})) {
+    for (const [day, byBucket] of Object.entries(byDay)) {
+      if (!inWindow(day)) continue;
+      const list = target.get(model) || [];
+      for (const [bucket, row] of Object.entries(byBucket)) list.push({ day, bucket, row });
+      target.set(model, list);
+      added = true;
+    }
+  }
+  return added;
+}
+
+/** A database record as a priceable row. */
+export function recordRow(record) {
+  const t = record.t || [];
+  return {
+    model: record.m || null,
+    day: record.d,
+    bucket: record.b || "s",
+    row: [t[0] || 0, t[1] || 0, t[2] || 0, t[3] || 0, 0, record.n || 0],
+    reported: record.rc ?? record.c ?? 0,
+  };
+}
+
 /** Per agent within the window: { rows: Map(model → [{ day, bucket, row }]), records: [...] }. */
 export function modelRowsByAgent(index, inWindow) {
   const agents = new Map();
@@ -22,36 +49,18 @@ export function modelRowsByAgent(index, inWindow) {
     if (!agents.has(agentId)) agents.set(agentId, { rows: new Map(), records: [], skills: new Map() });
     return agents.get(agentId);
   };
-  const collect = (target, byModel) => {
-    for (const [model, byDay] of Object.entries(byModel || {})) {
-      for (const [day, byBucket] of Object.entries(byDay)) {
-        if (!inWindow(day)) continue;
-        const list = target.get(model) || [];
-        for (const [bucket, row] of Object.entries(byBucket)) list.push({ day, bucket, row });
-        target.set(model, list);
-      }
-    }
-  };
   for (const entry of Object.values(index.files || {})) {
     if (!entry.m && !entry.km) continue;
     const target = agent(entry.a);
-    collect(target.rows, entry.m);
+    collectModelRows(target.rows, entry.m, inWindow);
     for (const [skill, byModel] of Object.entries(entry.km || {})) {
       if (!target.skills.has(skill)) target.skills.set(skill, new Map());
-      collect(target.skills.get(skill), byModel);
+      collectModelRows(target.skills.get(skill), byModel, inWindow);
     }
   }
   for (const [agentId, records] of Object.entries(index.records || {})) {
     for (const record of Object.values(records)) {
-      if (!inWindow(record.d)) continue;
-      const t = record.t || [];
-      agent(agentId).records.push({
-        model: record.m || null,
-        day: record.d,
-        bucket: record.b || "s",
-        row: [t[0] || 0, t[1] || 0, t[2] || 0, t[3] || 0, 0, record.n || 0],
-        reported: record.rc ?? record.c ?? 0,
-      });
+      if (inWindow(record.d)) agent(agentId).records.push(recordRow(record));
     }
   }
   return agents;

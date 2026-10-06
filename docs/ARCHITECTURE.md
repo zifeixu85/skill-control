@@ -719,6 +719,10 @@ Codex 续接 / 压缩后的会话可能在第一条 `turn_context` 之前就有�
   没有模型或模型未定价时用产品自报费用（`basis: "reported"`）。
 - 依据 `basis`：`official` | `estimate` | `family` | `reported` | `unpriced`（未定价的 token 计入 `unpricedTokens`，
   不计费用）。金额保留到 0.000001 美元。
+- 项目费用（`server/usage-projects.mjs`）：项目 = 索引里保存的工作目录最后一段（从不返回完整路径），所以不同位置的
+  同名文件夹会合并成一个项目；没有工作目录的会话和数据库记录归入 `name: null`（界面显示“未识别项目”）。每个项目
+  用与 Agent 合计完全相同的行、分档和规则计价（`@agent-average` 用该 Agent 整个窗口的平均单价），所以一个 Agent
+  的各项目之和等于它的合计；超出行数上限的项目汇总为 `otherProjects` / `other`，列表与合计始终对得上。
 
 `GET /api/usage/summary?days=30`（`days` 取 1–400，默认 30）
 
@@ -766,6 +770,16 @@ type ModelRow = {
   pricingTable: { checkedAt, ageDays: number | null, reviewAfterDays: number | null, stale: boolean } }
 ```
 
+`GET /api/usage/projects?days=30`（`days` 取 1–400，常用 7 / 30 / 90）：跨 Agent 的项目费用
+
+```ts
+{ generatedAt, windowDays, index, status, totals: Cost,
+  projects: Array<Cost & { name: string | null, sessions, tokens /* 合计 */,
+                           agents: Array<{ agentId, tokens, costUsd }>,           // 按费用从高到低
+                           topModels: Array<{ model, name, costUsd }> }>,         // ≤ 3，跨 Agent 合并
+  other: { count, costUsd, tokens } }                                            // 第 31 个起的项目合计；projects ≤ 30
+```
+
 `GET /api/usage/pricing` → 价目表：`{ schema, checkedAt, reviewAfterDays, checkedAgeDays, tableStale, pricingStale,
 currency: "USD", unit, vendors, schedules, fx, buckets: [{ id: "s" | "l200" | "l272" | "l512", floor }], models, estimates,
 families }`（`models` 各条含 `source`、`note`、`status`、`reviewBy`、`aliases`、`long`、`offPeak`、`changes`、`fast`；
@@ -788,7 +802,10 @@ families }`（`models` 各条含 `source`、`note`、`status`、`reviewBy`、`al
   byModel: ModelRow[],
   series: Array<{ date, sessions, tokens: { input, output, cacheRead, cacheWrite, total }, costUsd }>,
   topSkills: Array<{ name, count, tokens, costUsd: number | null, lastUsedAt, confidence }>,  // ≤ 30
-  topProjects: Array<{ name /* 工作目录最后一段 */, sessions, tokens }>,                     // ≤ 20
+  topProjects: Array<Cost & { name: string | null /* 工作目录最后一段；null = 未识别项目 */, sessions, tokens /* 合计 */,
+    tokenSplit: { input, output, cacheRead, cacheWrite, cacheWrite1h },   // 计价所用的拆分
+    topModels: Array<{ model, name, costUsd }> }>,                         // ≤ 3；项目按费用、再按 token 排序，≤ 20
+  otherProjects: { count, costUsd, tokens },                               // 其余项目合计，与 totals 对得上
   sources }
 ```
 
@@ -1174,7 +1191,7 @@ OpenClaw、QClaw；修改后按用户的选择保存。状态判断仍只看常�
 | `GET /api/config-detail` | 见“配置详情（只读、脱敏）” |
 | `GET /api/agent-files`、`/api/agent-file` | 见“洞察接口 · Agent 文件” |
 | `GET /api/agent-tools` | 见“洞察接口 · Agent 工具” |
-| `GET /api/usage/summary`、`/api/usage/skill`、`/api/usage/agent`、`/api/usage/models`、`/api/usage/pricing`、`/api/usage/status` | 见“洞察接口 · 用量分析” |
+| `GET /api/usage/summary`、`/api/usage/skill`、`/api/usage/agent`、`/api/usage/models`、`/api/usage/projects`、`/api/usage/pricing`、`/api/usage/status` | 见“洞察接口 · 用量分析” |
 | `GET /api/health-report` | 见“洞察接口 · 体检报告” |
 | `GET /api/agent-icon` | 见“洞察接口 · 应用图标” |
 | `GET /api/updates`、`/api/updates/check-status`、`/api/updates/changes`；`POST /api/updates/check`、`/api/updates/plan`、`/api/updates/apply` | 见“更新检测与执行” |

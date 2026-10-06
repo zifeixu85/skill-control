@@ -6,7 +6,9 @@ import test from "node:test";
 import { compileTable } from "../server/pricing.mjs";
 import { priceRows } from "../server/usage-cost.mjs";
 import { loadUsageIndex, runUsageIndex } from "../server/usage-index.mjs";
-import { usageForAgent, usageForSkill, usageModels, usageSummary } from "../server/usage-query.mjs";
+import { costIndex } from "../server/usage-cost.mjs";
+import { agentProjects, costProjects } from "../server/usage-projects.mjs";
+import { usageForAgent, usageForSkill, usageModels, usageProjects, usageSummary } from "../server/usage-query.mjs";
 import { writeFixtureFile } from "./fixtures/smartorder.mjs";
 
 const line = (value) => `${JSON.stringify(value)}\n`;
@@ -189,6 +191,41 @@ test("GET /api/usage/models shape: one row per model and basis, with the agents 
   const unknown = result.models.find((row) => row.model === "unknown");
   assert.deepEqual([unknown.basis, unknown.costUsd, unknown.agents[0].agentId], ["reported", 0.25, "hermes"], "a session without a model keeps its own figure");
   near(result.totals.costUsd, usageSummary(index, { days: 30 }).cost.costUsd, "totals");
+});
+
+test("project costs: priced like the agent totals, unnamed sessions included, totals reconcile", async (context) => {
+  const { index } = await setup(context);
+  const summary = usageSummary(index, { days: 30 });
+  const agentCost = (agentId) => summary.agents.find((agent) => agent.agentId === agentId).costUsd;
+  // WorkBuddy and Hermes sessions here have no working folder: one unnamed project each.
+  const workBuddy = usageForAgent(index, "workbuddy", { days: 30 });
+  assert.deepEqual(workBuddy.topProjects.map((project) => [project.name, project.sessions]), [[null, 1]]);
+  near(workBuddy.topProjects[0].costUsd, agentCost("workbuddy"), "workbuddy project = agent total (auto at the agent average)");
+  assert.equal(workBuddy.topProjects[0].unpricedTokens, 77);
+  const claude = usageForAgent(index, "claude", { days: 30 }).topProjects[0];
+  assert.deepEqual([claude.name, claude.tokenSplit], ["priced", { input: 1_100, output: 2_100, cacheRead: 308_900, cacheWrite: 2_000, cacheWrite1h: 2_000 }]);
+  assert.deepEqual(claude.topModels.map((model) => model.model), ["claude-opus-5-5", "claude-sonnet-5-5"]);
+
+  const result = usageProjects(index, { days: 30 });
+  assert.deepEqual(Object.keys(result).sort(), ["generatedAt", "index", "other", "projects", "totals", "windowDays"]);
+  // WorkBuddy's DeepSeek and "auto" tokens make the unnamed project the most expensive one.
+  assert.deepEqual(result.projects.map((project) => project.name), [null, "priced"]);
+  const priced = result.projects[1];
+  assert.deepEqual(Object.keys(priced).sort(), ["agents", "costBasis", "costUsd", "name", "sessions", "tokens", "topModels", "unpricedTokens"]);
+  assert.deepEqual(priced.agents.map((agent) => agent.agentId), ["codex", "claude"]);
+  near(priced.costUsd, agentCost("codex") + agentCost("claude"), "priced");
+  assert.deepEqual(priced.topModels.map((model) => model.model), ["gpt-6.1-sol", "claude-opus-5-5", "claude-sonnet-5-5"]);
+  assert.deepEqual(result.projects[0].agents.map((agent) => agent.agentId), ["workbuddy", "hermes"]);
+  near(result.projects.reduce((sum, project) => sum + project.costUsd, 0) + result.other.costUsd, result.totals.costUsd, "projects add up");
+  assert.deepEqual(result.other, { count: 0, costUsd: 0, tokens: 0 });
+
+  // Past the row limit the rest is summed, so the list still reconciles.
+  const inWindow = () => true;
+  const projects = costProjects(index, inWindow, costIndex(index, inWindow));
+  const limited = agentProjects([...projects.values()].flat(), 1);
+  assert.equal(limited.topProjects.length, 1);
+  assert.equal(limited.otherProjects.count, 3);
+  near(limited.topProjects[0].costUsd + limited.otherProjects.costUsd, result.totals.costUsd, "limited");
 });
 
 test("an agent average with nothing to average: fallback model, then family, then reported, then unpriced", () => {

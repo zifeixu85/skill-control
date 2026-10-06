@@ -11,6 +11,13 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ### Added
 
+- Project costs. `/api/usage/agent` `topProjects` rows now carry `tokenSplit`,
+  `costUsd`, `costBasis`, `unpricedTokens` and `topModels`, are sorted by cost, include
+  sessions without a folder as `name: null` (未识别项目), and are followed by
+  `otherProjects` so they add up to the agent total. New `GET /api/usage/projects`
+  gives the cross-agent view (30 rows plus `other`). A project is the folder name
+  only; folders with the same name merge.
+
 - Estimated cost at each vendor's official API prices. `server/pricing/model-prices.json`
   (79 models, estimates, families, DeepSeek off-peak schedule, checked 2026-10-07) and the
   pure rules in `server/pricing.mjs`: id normalization (case, `provider/` prefix, date
