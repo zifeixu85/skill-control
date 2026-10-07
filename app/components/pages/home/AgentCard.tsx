@@ -7,8 +7,7 @@ import { formatCompact, shortTitle } from "../../../lib/format";
 import type { PageId } from "../../../lib/navigation";
 import { componentsOf, mergePlugins } from "../../../lib/plugins";
 import type { ActivityAgent } from "../../../lib/types";
-import { isIndexing, SESSIONS_HINT } from "../../../lib/usage";
-import { InfoIcon } from "../../icons";
+import { isIndexing, SESSIONS_HINT, type UsageSummary } from "../../../lib/usage";
 import { useData } from "../../providers/DataProvider";
 import { useNav } from "../../providers/NavProvider";
 import { AgentAvatar } from "../../ui/Avatar";
@@ -36,42 +35,19 @@ export function activityLine(activity: ActivityAgent | undefined, usage?: { sess
   return `近 30 天 ${activity.files30d} 个会话 · ${activity.activeDays30d} 天在用`;
 }
 
-/** Tokens and 预估费用 for the last 30 days, or a quiet placeholder while usage is being counted. */
-function UsageStrip({ agentId }: { agentId: string }) {
-  const { usage } = useData();
-  const data = usage.data;
-  const agent = data?.agents.find((item) => item.agentId === agentId);
-  if (!data || (!agent && isIndexing(data.status, data.index))) {
-    return (
-      <div className="acard-usage pending" aria-busy="true">
-        <span>统计中</span>
-      </div>
-    );
-  }
-  if (!agent || (!agent.tokens?.total && agent.costUsd === null)) {
-    return (
-      <div className="acard-usage pending">
-        <span>近 30 天没有用量记录</span>
-      </div>
-    );
-  }
+/**
+ * Tokens and 预估费用 for the last 30 days as one quiet line under the activity line,
+ * in the same text style. The estimated share and the basis stay in the tooltip.
+ */
+function usageLine(data: UsageSummary | null | undefined, agentId: string): { text: string; title?: string; busy?: boolean } | null {
+  if (!data) return { text: "用量统计中…", busy: true };
+  const agent = data.agents.find((item) => item.agentId === agentId);
+  if (!agent) return isIndexing(data.status, data.index) ? { text: "用量统计中…", busy: true } : null;
+  if (!agent.tokens?.total && agent.costUsd === null) return null;
+  // Cost first, so a narrow card cuts the token count rather than the figure people look for.
+  const parts = [agent.costUsd !== null ? `预估费用 ${formatCost(agent.costUsd)}` : "", agent.tokens?.total ? `${formatCompact(agent.tokens.total)} tokens` : ""].filter(Boolean);
   const estimated = estimatedPart(agent.costBasis);
-  return (
-    <div className="acard-usage">
-      <div>
-        <span>Tokens</span>
-        <b>{agent.tokens ? formatCompact(agent.tokens.total) : "—"}</b>
-      </div>
-      <div title={COST_HINT}>
-        <span>
-          预估费用
-          <InfoIcon className="info-dot" aria-label={COST_HINT} />
-        </span>
-        <b>{formatCost(agent.costUsd)}</b>
-        {estimated ? <small>{estimated}</small> : null}
-      </div>
-    </div>
-  );
+  return { text: parts.join(" · "), title: [COST_HINT, estimated].filter(Boolean).join("；") };
 }
 
 export function AgentCard({ agentId }: { agentId: string }) {
@@ -79,6 +55,7 @@ export function AgentCard({ agentId }: { agentId: string }) {
   const { go } = useNav();
   const agent = agentsById.get(agentId);
   const usageAgent = usage.data?.agents.find((item) => item.agentId === agentId) || null;
+  const usageText = usageLine(usage.data, agentId);
   const meta = agentMeta(agentId, agent);
   const plugins = mergePlugins(integrations.data?.plugins || []).filter((plugin) => plugin.agentId === agentId);
   const mcp = (integrations.data?.mcpServers || []).filter((server) => server.agentId === agentId);
@@ -122,16 +99,23 @@ export function AgentCard({ agentId }: { agentId: string }) {
       <div className="acard-head">
         <AgentAvatar id={agentId} size="lg" />
         <div className="acard-title">
-          <h2>
-            <button type="button" className="acard-name" onClick={() => go("agent", { agentId })} title={`查看 ${meta.name} 的详情`}>
-              {meta.name}
-            </button>
-          </h2>
+          <div className="acard-name-row">
+            <h2>
+              <button type="button" className="acard-name" onClick={() => go("agent", { agentId })} title={`查看 ${meta.name} 的详情`}>
+                {meta.name}
+              </button>
+            </h2>
+            <span className="tag">常用</span>
+          </div>
           <div className="meta" title={SESSIONS_HINT}>
             {activityLine(activityById.get(agentId), usageAgent)}
           </div>
+          {usageText ? (
+            <div className="meta" title={usageText.title} aria-busy={usageText.busy || undefined}>
+              {usageText.text}
+            </div>
+          ) : null}
         </div>
-        <span className="tag">常用</span>
       </div>
       <div className="stats">
         {stats.map((stat) => (
@@ -147,7 +131,6 @@ export function AgentCard({ agentId }: { agentId: string }) {
           </button>
         ))}
       </div>
-      <UsageStrip agentId={agentId} />
       <div className="used">
         <h3>最近 30 天用得最多的技能</h3>
         {used.length ? (
