@@ -33,7 +33,7 @@ const AGENT_NOTES: Record<string, string> = {
 };
 
 export function AgentPage({ agentId }: { agentId: string }) {
-  const { agentsById, scan, primary, config, updateConfig, savingConfig, agentName, activityById } = useData();
+  const { agentsById, scan, primary, config, updateConfig, savingConfig, agentName, activityById, usage } = useData();
   const { go } = useNav();
   const toast = useToast();
   const [tab, setTab] = useState<Tab>("overview");
@@ -99,7 +99,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
   const summary = [
     agent.productVersion ? `版本 ${agent.productVersion}` : "",
     `${agent.skillCount} 个技能`,
-    activityLine(activityById.get(agent.id)),
+    activityLine(activityById.get(agent.id), usage.data?.agents.find((item) => item.agentId === agent.id) || null),
     agent.managedBy?.length ? `由 ${joinNames(agent.managedBy)} 写入` : "",
   ]
     .filter(Boolean)

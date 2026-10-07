@@ -20,7 +20,13 @@ interface Stat {
   onClick?: () => void;
 }
 
-export function activityLine(activity: ActivityAgent | undefined): string {
+/**
+ * The "近 30 天 …" line. The usage index's count (sessions active in the window) wins when it
+ * is ready, so this line matches the figures on the cards and the 数据 page; the activity scan
+ * (session files touched in the window) is the fallback while usage is still being counted.
+ */
+export function activityLine(activity: ActivityAgent | undefined, usage?: { sessions: number; activeDays: number } | null): string {
+  if (usage && usage.sessions > 0) return `近 30 天 ${usage.sessions} 个会话 · ${usage.activeDays} 天在用`;
   if (!activity || activity.status === "unknown" || (!activity.files30d && !activity.tokens30d)) {
     return "近 30 天暂无记录";
   }
@@ -69,9 +75,10 @@ function UsageStrip({ agentId }: { agentId: string }) {
 }
 
 export function AgentCard({ agentId }: { agentId: string }) {
-  const { agentsById, activityById, integrations, capabilities, views } = useData();
+  const { agentsById, activityById, integrations, capabilities, views, usage } = useData();
   const { go } = useNav();
   const agent = agentsById.get(agentId);
+  const usageAgent = usage.data?.agents.find((item) => item.agentId === agentId) || null;
   const meta = agentMeta(agentId, agent);
   const plugins = mergePlugins(integrations.data?.plugins || []).filter((plugin) => plugin.agentId === agentId);
   const mcp = (integrations.data?.mcpServers || []).filter((server) => server.agentId === agentId);
@@ -121,7 +128,7 @@ export function AgentCard({ agentId }: { agentId: string }) {
             </button>
           </h2>
           <div className="meta" title={SESSIONS_HINT}>
-            {activityLine(activityById.get(agentId))}
+            {activityLine(activityById.get(agentId), usageAgent)}
           </div>
         </div>
         <span className="tag">常用</span>
