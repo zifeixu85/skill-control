@@ -33,7 +33,8 @@ export interface OtherProjects {
 }
 
 export interface ProjectsReport {
-  days: number;
+  /** Null for 所有时间. */
+  days: number | null;
   totals: Cost;
   projects: ProjectRow[];
   other: OtherProjects | null;
@@ -93,10 +94,10 @@ export function normalizeProjectList(value: unknown): ProjectRow[] {
   return sortProjects(asArray(value).map(normalizeProject));
 }
 
-export function normalizeProjectsReport(raw: unknown, days = 30): ProjectsReport {
+export function normalizeProjectsReport(raw: unknown, days: number | null = 30): ProjectsReport {
   const record = asRecord(raw);
   return {
-    days: asNumber(record.windowDays, days),
+    days: record.windowDays === null || days === null ? null : asNumber(record.windowDays, days),
     totals: normalizeCost(record.totals),
     projects: normalizeProjectList(record.projects),
     other: normalizeOtherProjects(record.other),

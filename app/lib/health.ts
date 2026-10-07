@@ -6,6 +6,7 @@ import {
   asString,
   pick,
 } from "./parse";
+import { normalizeRemedy, type Remedy } from "./remedy";
 
 export type SeverityLevel = "high" | "medium" | "low" | "info";
 
@@ -20,12 +21,15 @@ export interface HealthFinding {
   skillName: string | null;
   path: string | null;
   fix: { kind: string; label: string } | null;
+  remedy: Remedy | null;
 }
 
 export interface HealthReport {
   generatedAt: string | null;
   counts: Record<string, number>;
   findings: HealthFinding[];
+  /** One instruction covering every finding, for "复制给 AI，一次处理全部". */
+  remedyAll: Remedy | null;
 }
 
 export interface SeverityGroup {
@@ -120,12 +124,14 @@ export function normalizeHealthReport(raw: unknown): HealthReport {
       skillName: asOptionalString(finding.skillName),
       path: asOptionalString(finding.path),
       fix: fixLabel && asString(fix.kind) !== "none" ? { kind: asString(fix.kind), label: fixLabel } : null,
+      remedy: normalizeRemedy(finding.remedy),
     };
   });
   return {
     generatedAt: asOptionalString(pick(record, "generatedAt", "scannedAt")),
     counts,
     findings,
+    remedyAll: normalizeRemedy(record.remedyAll),
   };
 }
 

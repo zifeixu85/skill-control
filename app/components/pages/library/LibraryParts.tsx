@@ -1,5 +1,7 @@
 "use client";
 
+import { useOpenedItem } from "../../../hooks/usePageMemory";
+import { markOpened } from "../../../lib/page-memory";
 import {
   agentCounts,
   KIND_LABELS,
@@ -76,6 +78,7 @@ function Dot({ entry, agentId }: { entry: LibraryEntry; agentId: string }) {
 export function EntriesTable({ entries, agents }: { entries: LibraryEntry[]; agents: LibraryAgent[] }) {
   const { views } = useData();
   const { go } = useNav();
+  const opened = useOpenedItem("library");
   const byName = new Map(views.map((view) => [view.techName.toLowerCase(), view]));
   return (
     <div className="matrix">
@@ -99,12 +102,19 @@ export function EntriesTable({ entries, agents }: { entries: LibraryEntry[]; age
           {entries.map((entry) => {
             const view = byName.get(entry.name.toLowerCase());
             return (
-              <tr key={entry.name}>
+              <tr key={entry.name} data-memory-id={entry.name} className={opened === entry.name ? "opened" : undefined}>
                 <th scope="row" className="cell-main">
                   <ItemText
                     title={
                       view ? (
-                        <button type="button" className="link-btn" onClick={() => go("skills", { skillId: view.id })}>
+                        <button
+                          type="button"
+                          className="link-btn"
+                          onClick={() => {
+                            markOpened("library", entry.name);
+                            go("skills", { skillId: view.id });
+                          }}
+                        >
                           {entry.name}
                         </button>
                       ) : (

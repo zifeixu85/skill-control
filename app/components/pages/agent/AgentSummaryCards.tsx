@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { isUnsupported } from "../../../hooks/useResource";
-import { COST_HINT, estimatedPart, formatCost } from "../../../lib/cost";
+import { COST_HINT, formatCost } from "../../../lib/cost";
 import { formatCompact } from "../../../lib/format";
 import { projectLabel } from "../../../lib/projects";
 import { SESSIONS_HINT } from "../../../lib/usage";
@@ -57,7 +57,6 @@ export function AgentSummaryCards({ agentId, onOpen }: { agentId: string; onOpen
     );
   }
   const titles = new Map(views.map((view) => [view.techName.toLowerCase(), view.title]));
-  const estimated = estimatedPart(data.costBasis);
   return (
     <div className="summary-cards">
       <Card title={`使用 · 近 ${SUMMARY_DAYS} 天`} section="totals" onOpen={onOpen}>
@@ -74,7 +73,7 @@ export function AgentSummaryCards({ agentId, onOpen }: { agentId: string; onOpen
             <dt>Tokens</dt>
             <dd>{data.tokens ? formatCompact(data.tokens.total) : "—"}</dd>
           </div>
-          <div title={estimated ? `${COST_HINT}；${estimated}` : COST_HINT}>
+          <div title={COST_HINT}>
             <dt>{data.credits !== null ? "额度" : "预估费用"}</dt>
             <dd>{data.credits !== null ? formatCompact(data.credits) : formatCost(data.costUsd)}</dd>
           </div>

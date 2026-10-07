@@ -1,5 +1,6 @@
 import { normalizeCost, normalizeModelRows, type CostSplit, type ModelRow } from "./cost";
 import { normalizeOtherProjects, normalizeProjectList, type OtherProjects, type ProjectRow } from "./projects";
+import { windowLabel } from "./usage-window";
 import {
   asArray,
   asNumber,
@@ -28,6 +29,8 @@ export interface UsagePoint {
   date: string;
   /** Sessions active that day (a long session counts on every day it was used). */
   sessions: number;
+  /** Sessions that started that day (adds up across days). */
+  sessionsStarted: number;
   tokens: number;
   /** Estimated cost that day at official prices (0 when the service doesn't report it). */
   costUsd: number;
@@ -88,7 +91,9 @@ export interface UsageStatus {
 }
 
 export interface UsageSummary {
-  days: number;
+  /** Window length; null for 所有时间. */
+  days: number | null;
+  windowLabel: string;
   generatedAt: string | null;
   index: UsageIndex | null;
   status: UsageStatus | null;
@@ -136,6 +141,7 @@ function normalizeSeries(value: unknown): UsagePoint[] {
       return {
         date: asString(point.date),
         sessions: asNumber(pick(point, "sessions", "count")),
+        sessionsStarted: asNumber(point.sessionsStarted, asNumber(pick(point, "sessions", "count"))),
         tokens: tokenTotal(point.tokens),
         costUsd: asNumber(point.costUsd),
       };
@@ -263,10 +269,13 @@ function agentList(value: unknown): UnknownRecord[] {
   return Object.entries(asRecord(value)).map(([agentId, entry]) => ({ agentId, ...asRecord(entry) }));
 }
 
-export function normalizeUsageSummary(raw: unknown, days = 30): UsageSummary {
+export function normalizeUsageSummary(raw: unknown, days: number | null = 30): UsageSummary {
   const record = asRecord(raw);
+  // 所有时间: the service answers windowDays null (and windowLabel "所有时间").
+  const windowDays = record.windowDays === null || days === null ? null : asNumber(pick(record, "windowDays", "days"), days);
   return {
-    days: asNumber(pick(record, "windowDays", "days"), days),
+    days: windowDays,
+    windowLabel: windowLabel(windowDays, asOptionalString(record.windowLabel)),
     generatedAt: asOptionalString(record.generatedAt),
     index: normalizeIndex(record.index),
     status: normalizeUsageStatus(record.status),
@@ -356,7 +365,7 @@ export function fillSeries(series: UsagePoint[], days: number, endDate: string):
   const filled: UsagePoint[] = [];
   for (let offset = days - 1; offset >= 0; offset -= 1) {
     const day = new Date(end - offset * 86_400_000).toISOString().slice(0, 10);
-    filled.push(byDate.get(day) || { date: day, sessions: 0, tokens: 0, costUsd: 0 });
+    filled.push(byDate.get(day) || { date: day, sessions: 0, sessionsStarted: 0, tokens: 0, costUsd: 0 });
   }
   return filled;
 }

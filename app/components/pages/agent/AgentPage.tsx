@@ -30,6 +30,7 @@ const AGENT_NOTES: Record<string, string> = {
   hermes: "Hermes 会自动归档长期不用的技能；被归档的技能只显示，不参与对比。使用次数来自 Hermes 自己记录的 .usage.json。",
   qclaw: "QClaw 是腾讯基于 OpenClaw 的发行版。它的技能由 QClaw 远程同步和清理，Skill Control 只读。",
   openclaw: "OpenClaw 的技能目录可能由其他工具写入；指向技能根目录之外的软链接，OpenClaw 不会加载。",
+  "office-raccoon": "办公小浣熊只读取 ~/.box-agent/skills 里的真实文件夹，不跟随软链接；从技能库装给它时会复制一份。",
 };
 
 export function AgentPage({ agentId }: { agentId: string }) {

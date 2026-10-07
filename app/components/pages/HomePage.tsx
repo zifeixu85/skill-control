@@ -12,6 +12,7 @@ import { useToast } from "../providers/ToastProvider";
 import { AgentAvatar, ExpertAvatar } from "../ui/Avatar";
 import { Loading, SectionHeading, TopBar } from "../ui/basics";
 import { AgentCard } from "./home/AgentCard";
+import { AgentUpdatesHint } from "./home/AgentUpdatesHint";
 import { HomeNotes } from "./home/HomeNotes";
 
 export function RescanButton() {
@@ -149,6 +150,7 @@ export function HomePage() {
                 <AgentCard key={id} agentId={id} />
               ))}
             </div>
+            <AgentUpdatesHint />
             <SharedFolders />
             <SectionHeading title="值得看一眼" note="只看常用 Agent" />
             <HomeNotes />

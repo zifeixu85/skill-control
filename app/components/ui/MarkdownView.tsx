@@ -5,6 +5,7 @@ import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { isImagePath, resolveRelativePath } from "../../lib/file-tree";
 import { BlobImage } from "./BlobImage";
+import { ExternalLink } from "./ExternalLink";
 
 interface LinkContext {
   filePath?: string;
@@ -20,9 +21,7 @@ function MarkdownLink({ href, children }: { href?: string; children?: ReactNode 
   const target = href || "";
   if (/^https:\/\//i.test(target)) {
     return (
-      <a href={target} target="_blank" rel="noreferrer noopener">
-        {children}
-      </a>
+      <ExternalLink href={target}>{children}</ExternalLink>
     );
   }
   const relative = filePath ? resolveRelativePath(filePath, target) : null;

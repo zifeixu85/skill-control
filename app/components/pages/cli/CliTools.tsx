@@ -148,12 +148,12 @@ export function CliTools() {
   if (tools.status === "error" && !tools.data) return <EmptyState tone="error" title="检查失败">{errorMessage(tools.error)}</EmptyState>;
   if (!tools.data) return <Loading label="正在检查命令行工具…" rows={5} />;
   return (
-    <>
+    <div className="stack">
       <Why />
       {tools.data.map((tool) => (
         <ToolCard key={tool.id} tool={tool} />
       ))}
       <p className="footnote">只读取版本号和配置文件是否存在，不运行这些命令，也不读取任何密钥。</p>
-    </>
+    </div>
   );
 }

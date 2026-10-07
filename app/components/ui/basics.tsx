@@ -27,11 +27,12 @@ export function TopBar({
   );
 }
 
-export function SectionHeading({ title, note, id }: { title: ReactNode; note?: ReactNode; id?: string }) {
+export function SectionHeading({ title, note, id, action }: { title: ReactNode; note?: ReactNode; id?: string; action?: ReactNode }) {
   return (
     <div className="section-h">
       <h2 id={id}>{title}</h2>
       {note ? <span>{note}</span> : null}
+      {action ? <div className="section-act">{action}</div> : null}
     </div>
   );
 }

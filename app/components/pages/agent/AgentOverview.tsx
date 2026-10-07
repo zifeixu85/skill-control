@@ -18,6 +18,7 @@ const PROFILE_TITLES: Record<string, string> = {
   openclaw: "Agent",
   qclaw: "Agent",
   workbuddy: "专家",
+  "office-raccoon": "专家",
 };
 
 function SkillFolders({ agent }: { agent: ScanAgent }) {

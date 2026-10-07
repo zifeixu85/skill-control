@@ -13,6 +13,7 @@ import {
   type PricingTable,
   type VendorGroup,
 } from "../../../lib/pricing";
+import { ExternalLink } from "../../ui/ExternalLink";
 import { ItemText, TagStack } from "../../ui/Item";
 
 function modelChips(model: PriceModel, used: boolean, stale: boolean): ChipSpec[] {
@@ -80,9 +81,9 @@ function ModelRows({ model, table, used, stale }: { model: PriceModel; table: Pr
         </td>
         <td className="source">
           {model.source ? (
-            <a href={model.source} target="_blank" rel="noreferrer noopener" title={model.source}>
+            <ExternalLink href={model.source} title={model.source}>
               官方
-            </a>
+            </ExternalLink>
           ) : (
             <span className="none">—</span>
           )}
@@ -108,9 +109,7 @@ export function VendorTable({ group, table, used }: { group: VendorGroup; table:
     <section className="price-vendor" aria-labelledby={`vendor-${group.id}`}>
       <h3 id={`vendor-${group.id}`}>
         {group.pricingUrl ? (
-          <a href={group.pricingUrl} target="_blank" rel="noreferrer noopener">
-            {group.name}
-          </a>
+          <ExternalLink href={group.pricingUrl}>{group.name}</ExternalLink>
         ) : (
           group.name
         )}

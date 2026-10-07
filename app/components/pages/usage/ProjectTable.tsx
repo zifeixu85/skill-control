@@ -1,6 +1,6 @@
 "use client";
 
-import { COST_HINT, estimatedPart, formatCost } from "../../../lib/cost";
+import { COST_HINT, formatCost } from "../../../lib/cost";
 import { formatCompact } from "../../../lib/format";
 import { PROJECT_NOTE, projectLabel, topModelNames, type OtherProjects, type ProjectRow } from "../../../lib/projects";
 import { SESSIONS_HINT } from "../../../lib/usage";
@@ -16,7 +16,6 @@ function splitText(project: ProjectRow): string | undefined {
 
 function Row({ project, showAgents }: { project: ProjectRow; showAgents: boolean }) {
   const { agentName } = useData();
-  const estimated = estimatedPart(project.costBasis);
   const models = project.topModels.map((model) => `${model.name} ${formatCost(model.costUsd)}`).join("\n");
   return (
     <tr className={project.name ? "" : "unnamed"}>
@@ -40,7 +39,7 @@ function Row({ project, showAgents }: { project: ProjectRow; showAgents: boolean
       <td className="num" title={splitText(project)}>
         {formatCompact(project.tokens)}
       </td>
-      <td className="num cost" title={estimated ? `${COST_HINT}；${estimated}` : COST_HINT}>
+      <td className="num cost" title={COST_HINT}>
         {formatCost(project.costUsd)}
       </td>
       <td className="models" title={models || undefined}>

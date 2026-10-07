@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import { isUnsupported, useResource } from "../../../hooks/useResource";
+import { usePageMemory, useReturnHighlight } from "../../../hooks/usePageMemory";
 import { useScrollMemory } from "../../../hooks/useScrollMemory";
 import { api, errorMessage } from "../../../lib/api";
 import type { LibraryIssue } from "../../../lib/library";
@@ -28,8 +28,10 @@ export function LibraryPage() {
     const scope = scopeForIssue(issue);
     setLibraryRequest(scope ? { action: "batch", title: `整理：${issue.title}`, scope } : BATCH);
   };
-  const [allAgents, setAllAgents] = useState(false);
+  // Session memory: 查看 a skill → back keeps the same columns, scroll and highlights the row.
+  const [allAgents, setAllAgents] = usePageMemory<boolean>("library:all-agents", false);
   const data = library.data;
+  useReturnHighlight("library", Boolean(data));
   const shownAgents = data ? data.agents.filter((agent) => allAgents || !agent.collapsed) : [];
   const hiddenAgents = data ? data.agents.filter((agent) => agent.collapsed).length : 0;
 
@@ -69,7 +71,7 @@ export function LibraryPage() {
             <SectionHeading title="各 Agent 怎么读取技能库" note={hiddenAgents && !allAgents ? `另有 ${hiddenAgents} 个不常用的 Agent` : undefined} />
             <AgentStrip data={data} agents={shownAgents} />
             {hiddenAgents ? (
-              <button type="button" className="btn sm ghost" onClick={() => setAllAgents((value) => !value)}>
+              <button type="button" className="btn sm ghost" onClick={() => setAllAgents(!allAgents)}>
                 {allAgents ? "只看常用 Agent" : `显示全部 ${data.agents.length} 个 Agent`}
               </button>
             ) : null}

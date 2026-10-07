@@ -5,7 +5,7 @@ import { useNow } from "../../../hooks/useNow";
 import { usePolling } from "../../../hooks/usePolling";
 import { isUnsupported, useResource } from "../../../hooks/useResource";
 import { api, errorMessage } from "../../../lib/api";
-import { COST_HINT, estimatedPart, formatCost } from "../../../lib/cost";
+import { COST_HINT, formatCost } from "../../../lib/cost";
 import { formatCompact } from "../../../lib/format";
 import { revealInPage } from "../../../lib/reveal";
 import { fillSeries, isIndexing, localDate, SESSIONS_HINT, shouldPollUsage } from "../../../lib/usage";
@@ -13,7 +13,7 @@ import { AreaChart } from "../../charts/AreaChart";
 import { InfoIcon } from "../../icons";
 import { EmptyState, Loading, Segmented } from "../../ui/basics";
 import { IndexProgress } from "../usage/IndexProgress";
-import { dayLabel, SourceBadges } from "../usage/UsageAgentCard";
+import { dayLabel, SourceInfo } from "../usage/UsageAgentCard";
 import { ModelBreakdown, ProjectBreakdown, SkillRanking, USAGE_SECTIONS, type UsageSection } from "./AgentUsageSections";
 
 export const AGENT_USAGE_DAYS = 90;
@@ -69,7 +69,6 @@ export function AgentUsage({
   const hasTokens = Boolean(data.tokens?.total);
   const hasCost = data.series.some((point) => point.costUsd > 0);
   const shown: Metric = (metric === "tokens" && hasTokens) || (metric === "cost" && hasCost) ? metric : "sessions";
-  const estimated = estimatedPart(data.costBasis);
   const labels: Record<Metric, string> = { sessions: "每天活跃的会话数", tokens: "每天的 Tokens", cost: "每天的预估费用" };
 
   return (
@@ -77,7 +76,10 @@ export function AgentUsage({
       <IndexProgress status={data.status} index={data.index} />
       <section id={USAGE_SECTIONS.totals} className="usage-block">
         <div className="usage-head">
-          <SourceBadges sources={data.sources} />
+          <span className="usage-source">
+            数据来源
+            <SourceInfo sources={data.sources} name={agentName} />
+          </span>
           {hasTokens || hasCost ? (
             <Segmented
               label="图表指标"
@@ -116,7 +118,6 @@ export function AgentUsage({
                 {data.costUsd === null ? "费用未记录" : "预估费用"}
                 <InfoIcon className="info-dot" aria-label={COST_HINT} />
               </span>
-              {estimated ? <small>{estimated}</small> : null}
               {data.reportedCostUsd !== null ? <small>产品自报 {formatCost(data.reportedCostUsd)}</small> : null}
             </div>
           )}

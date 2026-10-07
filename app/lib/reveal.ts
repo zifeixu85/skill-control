@@ -2,15 +2,25 @@
  * Brings an element into view inside the page's own scroll area (`.scroll`) and flashes it
  * once. Never scrolls the window or the shell, so the page header stays where it is.
  */
-export function revealInPage(element: HTMLElement | null, { align = "center", flash = true }: { align?: "center" | "start"; flash?: boolean } = {}) {
+export function revealInPage(
+  element: HTMLElement | null,
+  { align = "center", flash = true, ifNeeded = false }: { align?: "center" | "start"; flash?: boolean; ifNeeded?: boolean } = {},
+) {
   if (!element) return;
   const scroll = element.closest<HTMLElement>(".scroll");
   if (scroll) {
     const box = element.getBoundingClientRect();
-    const offset = box.top - scroll.getBoundingClientRect().top;
+    const area = scroll.getBoundingClientRect();
+    const offset = box.top - area.top;
+    const visible = box.top >= area.top && box.bottom <= area.bottom;
+    if (ifNeeded && visible) return flashOnce(element, flash);
     const margin = align === "start" ? 12 : Math.max(16, (scroll.clientHeight - box.height) / 2);
     scroll.scrollTop += offset - margin;
   }
+  flashOnce(element, flash);
+}
+
+function flashOnce(element: HTMLElement, flash: boolean) {
   if (!flash) return;
   element.classList.remove("flash");
   // Restart the animation even when the same element is shown twice.

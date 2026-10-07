@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { useNow } from "../../hooks/useNow";
+import { useOpenedItem, usePageMemory, useReturnHighlight } from "../../hooks/usePageMemory";
 import { isUnsupported, primeResource, useResource } from "../../hooks/useResource";
 import { useScrollMemory } from "../../hooks/useScrollMemory";
 import { api, errorMessage } from "../../lib/api";
 import { formatRelative } from "../../lib/format";
+import { markOpened } from "../../lib/page-memory";
 import { groupFindings, SEVERITY_LABELS, type HealthFinding, type SeverityLevel } from "../../lib/health";
 import { InfoIcon, RefreshIcon, WarnIcon } from "../icons";
 import { CopyPathButton } from "../files/ConfigDetailView";
@@ -15,6 +17,7 @@ import { useToast } from "../providers/ToastProvider";
 import { connectorsTabStore } from "./ConnectorsPage";
 import { AgentAvatar } from "../ui/Avatar";
 import { EmptyState, Loading, SectionHeading, TopBar } from "../ui/basics";
+import { RemedyAllBar, RemedyButton, RemedyPanel } from "../ui/RemedyPanel";
 
 const TONE: Record<SeverityLevel, string> = { high: "danger", medium: "warn", low: "info", info: "mute" };
 
@@ -22,8 +25,11 @@ const MCP_NAME = /MCP「([^」]+)」/;
 const UPDATE_CATEGORIES = new Set(["update-available", "locally-modified", "lock-drift"]);
 const LIBRARY_CATEGORIES = new Set(["library-drift", "library-external-link"]);
 
-function FindingRow({ finding }: { finding: HealthFinding }) {
-  const { views, agentName } = useData();
+const PAGE = "health";
+
+/** Where a finding's action leads; remembered so coming back highlights the row. */
+function useFindingAction(finding: HealthFinding) {
+  const { views } = useData();
   const { go, openDrawer } = useNav();
   const updates = useResource("updates", () => api.updates());
   const skillName = finding.skillName?.toLowerCase();
@@ -57,8 +63,24 @@ function FindingRow({ finding }: { finding: HealthFinding }) {
       : finding.category === "plugin-state"
         ? { label: "查看插件", run: () => go("plugins") }
         : null;
+  return action
+    ? {
+        label: action.label,
+        run: () => {
+          markOpened(PAGE, finding.id);
+          action.run();
+        },
+      }
+    : null;
+}
+
+function FindingRow({ finding, opened }: { finding: HealthFinding; opened: boolean }) {
+  const { agentName } = useData();
+  const action = useFindingAction(finding);
+  const [fixOpen, setFixOpen] = useState(false);
+  const remedyId = useId();
   return (
-    <li className="finding">
+    <li className={`finding ${opened ? "opened" : ""}`} data-memory-id={finding.id}>
       <span className={`sev ${TONE[finding.severity]}`} role="img" aria-label={SEVERITY_LABELS[finding.severity]}>
         {finding.severity === "info" ? <InfoIcon /> : <WarnIcon />}
       </span>
@@ -87,26 +109,34 @@ function FindingRow({ finding }: { finding: HealthFinding }) {
             {action.label}
           </button>
         ) : null}
+        {finding.remedy ? <RemedyButton open={fixOpen} onToggle={() => setFixOpen((value) => !value)} controls={remedyId} /> : null}
         {finding.path ? <CopyPathButton path={finding.path} /> : null}
       </div>
+      {finding.remedy && fixOpen ? (
+        <div className="remedy-slot">
+          <RemedyPanel id={remedyId} remedy={finding.remedy} label={finding.title} />
+        </div>
+      ) : null}
     </li>
   );
 }
 
 const PREVIEW = 6;
 
-function FindingList({ findings }: { findings: HealthFinding[] }) {
-  const [expanded, setExpanded] = useState(false);
+function FindingList({ findings, memoryKey }: { findings: HealthFinding[]; memoryKey: string }) {
+  // Kept for the session, so 查看详情 → back shows the same rows.
+  const [expanded, setExpanded] = usePageMemory<boolean>(`${PAGE}:expanded:${memoryKey}`, false);
+  const opened = useOpenedItem(PAGE);
   const shown = expanded ? findings : findings.slice(0, PREVIEW);
   return (
     <>
       <ul className="findings">
         {shown.map((finding) => (
-          <FindingRow key={finding.id} finding={finding} />
+          <FindingRow key={finding.id} finding={finding} opened={finding.id === opened} />
         ))}
       </ul>
       {findings.length > PREVIEW ? (
-        <button type="button" className="btn sm ghost more-findings" onClick={() => setExpanded((value) => !value)}>
+        <button type="button" className="btn sm ghost more-findings" onClick={() => setExpanded(!expanded)}>
           {expanded ? "收起" : `显示全部 ${findings.length} 项`}
         </button>
       ) : null}
@@ -132,6 +162,7 @@ export function HealthPage() {
   const scrollRef = useScrollMemory<HTMLDivElement>("health");
   const now = useNow();
   const groups = report.data ? groupFindings(report.data.findings) : [];
+  useReturnHighlight(PAGE, Boolean(report.data));
   return (
     <section className="page" aria-labelledby="page-title">
       <TopBar
@@ -162,6 +193,7 @@ export function HealthPage() {
           <EmptyState title="没有发现问题">技能、插件和 MCP 配置看起来都正常。</EmptyState>
         ) : (
           <>
+            <RemedyAllBar remedy={report.data.remedyAll} what="这次体检发现的问题" />
             <div className="health-summary">
               {groups.map((group) => (
                 <div key={group.severity} className={`hs ${TONE[group.severity]}`}>
@@ -178,7 +210,7 @@ export function HealthPage() {
                     <h3>
                       {category.label} <em>{category.findings.length}</em>
                     </h3>
-                    <FindingList findings={category.findings} />
+                    <FindingList findings={category.findings} memoryKey={`${group.severity}:${category.category}`} />
                   </div>
                 ))}
               </section>

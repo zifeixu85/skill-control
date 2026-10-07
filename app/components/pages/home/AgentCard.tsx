@@ -2,7 +2,7 @@
 
 import type { CSSProperties } from "react";
 import { agentMeta, tintFor } from "../../../lib/agents";
-import { COST_HINT, estimatedPart, formatCost } from "../../../lib/cost";
+import { COST_HINT, formatCost } from "../../../lib/cost";
 import { formatCompact, shortTitle } from "../../../lib/format";
 import type { PageId } from "../../../lib/navigation";
 import { componentsOf, mergePlugins } from "../../../lib/plugins";
@@ -37,7 +37,7 @@ export function activityLine(activity: ActivityAgent | undefined, usage?: { sess
 
 /**
  * Tokens and 预估费用 for the last 30 days as one quiet line under the activity line,
- * in the same text style. The estimated share and the basis stay in the tooltip.
+ * in the same text style. Every figure is an estimate, so the tooltip only says how it's made.
  */
 function usageLine(data: UsageSummary | null | undefined, agentId: string): { text: string; title?: string; busy?: boolean } | null {
   if (!data) return { text: "用量统计中…", busy: true };
@@ -46,8 +46,7 @@ function usageLine(data: UsageSummary | null | undefined, agentId: string): { te
   if (!agent.tokens?.total && agent.costUsd === null) return null;
   // Cost first, so a narrow card cuts the token count rather than the figure people look for.
   const parts = [agent.costUsd !== null ? `预估费用 ${formatCost(agent.costUsd)}` : "", agent.tokens?.total ? `${formatCompact(agent.tokens.total)} tokens` : ""].filter(Boolean);
-  const estimated = estimatedPart(agent.costBasis);
-  return { text: parts.join(" · "), title: [COST_HINT, estimated].filter(Boolean).join("；") };
+  return { text: parts.join(" · "), title: COST_HINT };
 }
 
 export function AgentCard({ agentId }: { agentId: string }) {
@@ -74,7 +73,7 @@ export function AgentCard({ agentId }: { agentId: string }) {
             label: "子代理",
             value: plugins.reduce((sum, plugin) => sum + componentsOf(plugin).agents.length, 0),
           }
-        : agentId === "workbuddy"
+        : agentId === "workbuddy" || agentId === "office-raccoon"
           ? { label: "专家", value: profiles.length, onClick: goTo("experts") }
           : agentId === "hermes"
             ? { label: "Profile", value: profiles.length, onClick: goTo("experts") }

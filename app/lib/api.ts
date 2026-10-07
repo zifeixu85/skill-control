@@ -1,4 +1,5 @@
 import { normalizeAgentFile, normalizeAgentFiles, normalizeAgentTools } from "./agent-extras";
+import { normalizeAgentVersions } from "./agent-versions";
 import { resolveApiBase } from "./api-base";
 import { normalizeCliApply, normalizeCliPlan, normalizeCliTools } from "./cli-tools";
 import { normalizeModelsReport } from "./cost";
@@ -37,7 +38,12 @@ import {
 
 declare global {
   interface Window {
-    skillManagerDesktop?: { apiBase?: string };
+    skillManagerDesktop?: {
+      apiBase?: string;
+      openExternal?: (url: string) => Promise<unknown>;
+      /** Resolves true when copied (the packaged app can't use navigator.clipboard). */
+      copyText?: (text: string) => Promise<boolean>;
+    };
   }
 }
 
@@ -277,16 +283,18 @@ export const api = {
   agentFile: async (id: string) => normalizeAgentFile(await getJson<unknown>("/api/agent-file", { id })),
   agentTools: async (agent: string) =>
     normalizeAgentTools(await getJson<unknown>("/api/agent-tools", { agent })),
-  usageSummary: async (days = 30) =>
-    normalizeUsageSummary(await getJson<unknown>("/api/usage/summary", { days }), days),
+  usageSummary: async (days: number | "all" = 30) =>
+    normalizeUsageSummary(await getJson<unknown>("/api/usage/summary", { days }), days === "all" ? null : days),
   usageSkill: async (name: string, days = 90) =>
     normalizeSkillUsage(await getJson<unknown>("/api/usage/skill", { name, days }), name),
   usageAgent: async (id: string, days = 90) =>
     normalizeAgentUsage(await getJson<unknown>("/api/usage/agent", { id, days }), id),
   usageStatus: async () => normalizeUsageStatus(await getJson<unknown>("/api/usage/status")),
-  usageModels: async (days = 30) => normalizeModelsReport(await getJson<unknown>("/api/usage/models", { days }), days),
+  usageModels: async (days: number | "all" = 30) =>
+    normalizeModelsReport(await getJson<unknown>("/api/usage/models", { days }), days === "all" ? null : days),
   usagePricing: async () => normalizePricing(await getJson<unknown>("/api/usage/pricing")),
-  usageProjects: async (days = 30) => normalizeProjectsReport(await getJson<unknown>("/api/usage/projects", { days }), days),
+  usageProjects: async (days: number | "all" = 30) =>
+    normalizeProjectsReport(await getJson<unknown>("/api/usage/projects", { days }), days === "all" ? null : days),
   updates: async () => normalizeUpdates(await getJson<unknown>("/api/updates")),
   checkUpdates: async (unitKeys?: string[]) =>
     normalizeCheckJob(await sendJson<unknown>("POST", "/api/updates/check", unitKeys?.length ? { unitKeys } : {})),
@@ -333,6 +341,12 @@ export const api = {
     normalizeCliApply(await sendJson<unknown>("POST", "/api/cli-tools/apply", { planId, confirm: true }, WRITE)),
   healthReport: async (refresh?: boolean) =>
     normalizeHealthReport(await getJson<unknown>("/api/health-report", force(refresh))),
+  agentVersions: async () => normalizeAgentVersions(await getJson<unknown>("/api/agent-versions")),
+  /** Checks now; answers with the fresh report, or null when it only acknowledged the request. */
+  checkAgentVersions: async () => {
+    const raw = await sendJson<unknown>("POST", "/api/agent-versions/check", {}, { timeout: TIMEOUTS.updatePlan });
+    return Array.isArray((raw as { agents?: unknown } | null)?.agents) ? normalizeAgentVersions(raw) : null;
+  },
 };
 
 export const assetUrl = {

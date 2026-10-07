@@ -1,5 +1,7 @@
 "use client";
 
+import { useOpenedItem } from "../../../hooks/usePageMemory";
+import { markOpened } from "../../../lib/page-memory";
 import { isUnsupported, useResource } from "../../../hooks/useResource";
 import { api, errorMessage } from "../../../lib/api";
 import {
@@ -7,7 +9,6 @@ import {
   BASIS_HINTS,
   BASIS_LABELS,
   COST_HINT,
-  estimatedPart,
   formatCost,
   longShareLabel,
   priceTarget,
@@ -16,6 +17,7 @@ import {
 } from "../../../lib/cost";
 import { formatCompact } from "../../../lib/format";
 import { useData } from "../../providers/DataProvider";
+import { windowLabel, windowParam, type UsageWindow } from "../../../lib/usage-window";
 import { useNav } from "../../providers/NavProvider";
 import { AgentAvatar } from "../../ui/Avatar";
 import { Loading } from "../../ui/basics";
@@ -52,13 +54,15 @@ function Banners({ report, onOpen }: { report: ModelsReport; onOpen: (row?: stri
 function Row({ row }: { row: ModelRow }) {
   const { agentName } = useData();
   const { go } = useNav();
+  const memoryId = `model:${row.model}`;
+  const opened = useOpenedItem("usage") === memoryId;
   const chip = basisChip(row.basis);
   const unpriced = row.basis === "unpriced";
   const long = longShareLabel(row.longShare);
   const meta = row.name !== row.model ? row.model : row.priceAs && !row.priceAs.startsWith("@") ? `按 ${row.priceAs} 计` : row.priceAs ? "按本机其他模型的平均单价计" : null;
   const writes = row.tokens.cacheWrite + row.tokens.cacheWrite1h;
   return (
-    <tr className={unpriced ? "warn-row" : ""}>
+    <tr className={`${unpriced ? "warn-row" : ""} ${opened ? "opened" : ""}`.trim() || undefined} data-memory-id={memoryId}>
       <th scope="row" className="cell-main">
         <ItemText
           title={row.name}
@@ -88,7 +92,10 @@ function Row({ row }: { row: ModelRow }) {
           type="button"
           className={`tag chip-btn ${chip.tone === "ok" ? "" : chip.tone}`}
           title={`${BASIS_HINTS[row.basis]} · 在价格表中查看`}
-          onClick={() => go("pricing", { priceRow: priceTarget(row) })}
+          onClick={() => {
+            markOpened("usage", memoryId);
+            go("pricing", { priceRow: priceTarget(row) });
+          }}
         >
           {BASIS_LABELS[row.basis]}
         </button>
@@ -98,8 +105,9 @@ function Row({ row }: { row: ModelRow }) {
 }
 
 /** 按模型: every model used in the window, priced at official rates, most expensive first. */
-export function ModelTable({ days }: { days: number }) {
-  const models = useResource(`usage:models:${days}`, () => api.usageModels(days));
+export function ModelTable({ window }: { window: UsageWindow }) {
+  const models = useResource(`usage:models:${window}`, () => api.usageModels(windowParam(window)));
+  const label = windowLabel(window === "all" ? null : Number(window));
   const { go } = useNav();
   const open = (row?: string) => go("pricing", row ? { priceRow: row } : {});
   if (isUnsupported(models.error)) return <p className="muted small">本地服务还没有按模型的统计，更新 Skill Control 后可以看到。</p>;
@@ -112,14 +120,13 @@ export function ModelTable({ days }: { days: number }) {
   }
   const report = models.data;
   if (!report) return <Loading label="正在按模型汇总…" rows={4} />;
-  if (!report.models.length) return <p className="muted small">最近 {days} 天的会话记录里没有模型信息。</p>;
-  const estimated = estimatedPart(report.totals.costBasis);
+  if (!report.models.length) return <p className="muted small">{label}的会话记录里没有模型信息。</p>;
   return (
     <>
       <Banners report={report} onOpen={open} />
       <div className="matrix model-table">
         <table>
-          <caption className="sr-only">最近 {days} 天各模型的用量和预估费用</caption>
+          <caption className="sr-only">{label}各模型的用量和预估费用</caption>
           <thead>
             <tr>
               <th scope="col">模型</th>
@@ -142,7 +149,7 @@ export function ModelTable({ days }: { days: number }) {
           <tfoot>
             <tr>
               <th scope="row" colSpan={6}>
-                合计{estimated ? <small className="muted"> · {estimated}</small> : null}
+                合计
                 {report.totals.unpricedTokens ? <small className="muted"> · 另有 {formatCompact(report.totals.unpricedTokens)} tokens 未定价</small> : null}
               </th>
               <td className="num cost" title={COST_HINT}>

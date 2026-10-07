@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useOpenedItem, useReturnHighlight } from "../../../hooks/usePageMemory";
+import { markOpened } from "../../../lib/page-memory";
 import { useNow } from "../../../hooks/useNow";
 import { usePolling } from "../../../hooks/usePolling";
 import { isUnsupported, useResource } from "../../../hooks/useResource";
@@ -14,16 +15,23 @@ import { AgentAvatar } from "../../ui/Avatar";
 import { EmptyState, Loading, SectionHeading, Segmented, TopBar } from "../../ui/basics";
 import { ItemText } from "../../ui/Item";
 import { COST_HINT } from "../../../lib/cost";
+import { usePersistent } from "../../../hooks/usePersistent";
+import { persistentStore } from "../../../lib/storage";
+import { windowLabel, windowParam, WINDOW_OPTIONS, type UsageWindow } from "../../../lib/usage-window";
 import { ModelTable } from "./ModelTable";
 import { ProjectsSection } from "./ProjectsSection";
 import { IndexProgress } from "./IndexProgress";
 import { UsageAgentCard } from "./UsageAgentCard";
 
-type Days = "7" | "30" | "90";
+/** The 7 / 30 / 90 / 所有时间 choice, remembered so coming back to 数据 shows the same window. */
+const PAGE = "usage";
+
+export const usageWindowStore = persistentStore<UsageWindow>("usage-window", "30", (value) => WINDOW_OPTIONS.some((option) => option.id === value));
 
 function TopSkillsTable({ skills, agentIds }: { skills: TopSkill[]; agentIds: string[] }) {
   const { views, agentName } = useData();
   const { go } = useNav();
+  const opened = useOpenedItem(PAGE);
   const byName = new Map(views.map((view) => [view.techName.toLowerCase(), view]));
   const max = skills[0]?.count || 1;
   return (
@@ -49,12 +57,19 @@ function TopSkillsTable({ skills, agentIds }: { skills: TopSkill[]; agentIds: st
             const shortName = skill.name.split(":").pop() || skill.name;
             const view = byName.get(skill.name.toLowerCase()) || byName.get(shortName.toLowerCase());
             return (
-              <tr key={skill.name}>
+              <tr key={skill.name} data-memory-id={`skill:${skill.name}`} className={opened === `skill:${skill.name}` ? "opened" : undefined}>
                 <th scope="row" className="cell-main">
                   <ItemText
                     title={
                       view ? (
-                        <button type="button" className="link-btn" onClick={() => go("skills", { skillId: view.id })}>
+                        <button
+                          type="button"
+                          className="link-btn"
+                          onClick={() => {
+                            markOpened(PAGE, `skill:${skill.name}`);
+                            go("skills", { skillId: view.id });
+                          }}
+                        >
                           {view.title}
                         </button>
                       ) : (
@@ -138,7 +153,9 @@ function ActivityFallback() {
   );
 }
 
-function SummaryView({ summary, days }: { summary: UsageSummary; days: number }) {
+function SummaryView({ summary, window }: { summary: UsageSummary; window: UsageWindow }) {
+  const days = summary.days;
+  const label = windowLabel(days, summary.windowLabel);
   const now = useNow();
   const endDate = localDate(summary.generatedAt) || localDate(now || null);
   const { primary } = useData();
@@ -160,15 +177,15 @@ function SummaryView({ summary, days }: { summary: UsageSummary; days: number })
           ))}
         </div>
       ) : (
-        <EmptyState title={`最近 ${days} 天没有会话记录`}>
+        <EmptyState title={`${label}没有会话记录`}>
           {isIndexing(summary.status, summary.index) ? "统计完成后会显示在这里。" : null}
         </EmptyState>
       )}
-      <SectionHeading title="按模型" note={`最近 ${days} 天 · ${COST_HINT}`} />
-      <ModelTable days={days} />
-      <SectionHeading title="按项目" note={`最近 ${days} 天 · 项目成本，按预估费用排序`} />
-      <ProjectsSection days={days} />
-      <SectionHeading title="用得最多的技能" note={`最近 ${days} 天 · 会话里实际调用或读取的次数`} />
+      <SectionHeading title="按模型" note={`${label} · ${COST_HINT}`} />
+      <ModelTable window={window} />
+      <SectionHeading title="按项目" note={`${label} · 项目成本，按预估费用排序`} />
+      <ProjectsSection window={window} />
+      <SectionHeading title="用得最多的技能" note={`${label} · 会话里实际调用或读取的次数`} />
       {summary.topSkills.length ? (
         <TopSkillsTable skills={summary.topSkills} agentIds={skillAgents} />
       ) : (
@@ -183,14 +200,15 @@ function SummaryView({ summary, days }: { summary: UsageSummary; days: number })
 
 export function UsagePage() {
   const { go } = useNav();
-  const [days, setDays] = useState<Days>("30");
+  const [window, setWindow] = usePersistent(usageWindowStore);
   const scrollRef = useScrollMemory<HTMLDivElement>("usage");
   const now = useNow();
-  const summary = useResource(`usage:summary:${days}`, () => api.usageSummary(Number(days)));
+  const summary = useResource(`usage:summary:${window}`, () => api.usageSummary(windowParam(window)));
   const data = summary.data;
   usePolling(Boolean(data && shouldPollUsage(data.status, data.index)), () => void summary.reload(), 3_000);
   const unsupported = isUnsupported(summary.error);
   const updatedAt = data?.index?.updatedAt || data?.status?.updatedAt;
+  useReturnHighlight(PAGE, Boolean(data));
 
   return (
     <section className="page" aria-labelledby="page-title">
@@ -205,16 +223,7 @@ export function UsagePage() {
         <button type="button" className="btn ghost" onClick={() => go("pricing")}>
           模型价格表
         </button>
-        <Segmented
-          label="时间范围"
-          value={days}
-          onChange={setDays}
-          items={[
-            { id: "7", label: "7 天" },
-            { id: "30", label: "30 天" },
-            { id: "90", label: "90 天" },
-          ]}
-        />
+        <Segmented label="时间范围" value={window} onChange={setWindow} items={WINDOW_OPTIONS} />
       </TopBar>
       <div className="scroll" ref={scrollRef}>
         {data ? <IndexProgress status={data.status} index={data.index} /> : null}
@@ -237,7 +246,7 @@ export function UsagePage() {
         ) : !data ? (
           <Loading label="正在统计使用数据…" rows={6} />
         ) : (
-          <SummaryView summary={data} days={Number(days)} />
+          <SummaryView summary={data} window={window} />
         )}
         {unsupported || (summary.status === "error" && !data) ? <ActivityFallback /> : null}
       </div>

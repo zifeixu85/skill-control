@@ -6,6 +6,8 @@ import { formatRelative } from "../../lib/format";
 import type { MainPage } from "../../lib/navigation";
 import { mergePlugins } from "../../lib/plugins";
 import { actionableCount } from "../../lib/updates";
+import { agentsWithUpdates } from "../../lib/agent-versions";
+import { AGENT_VERSIONS_KEY, loadAgentVersions } from "../pages/updates/AgentVersions";
 import { useResource } from "../../hooks/useResource";
 import { api } from "../../lib/api";
 import {
@@ -77,6 +79,8 @@ export function Sidebar() {
   const { views, integrations, capabilities, primary, agents, activityById } = useData();
   const updates = useResource("updates", () => api.updates());
   const library = useResource("library", () => api.library());
+  const agentVersions = useResource(AGENT_VERSIONS_KEY, loadAgentVersions);
+  const pendingUpdates = actionableCount(updates.data) + agentsWithUpdates(agentVersions.data).length;
   const { route, go } = useNav();
   const plugins = mergePlugins(integrations.data?.plugins || []);
   // Grouped so later sections (统一技能库、更新) slot into "管理" without reshuffling.
@@ -97,7 +101,7 @@ export function Sidebar() {
       Icon: ConnectorsIcon,
       count: (integrations.data?.connectors.length || 0) + (integrations.data?.mcpMatrix.length || 0) || undefined,
     },
-    { id: "updates", label: "更新", Icon: UpdateIcon, count: actionableCount(updates.data) || undefined, badge: true },
+    { id: "updates", label: "更新", Icon: UpdateIcon, count: pendingUpdates || undefined, badge: true },
   ];
   const insight: NavItem[] = [
     { id: "usage", label: "数据", Icon: UsageIcon },

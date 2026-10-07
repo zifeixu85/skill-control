@@ -7,6 +7,7 @@ import {
   asString,
   asStringList,
 } from "./parse";
+import { normalizeRemedy, type Remedy } from "./remedy";
 
 /** Shapes from docs/ARCHITECTURE.md · 更新检测与执行, parsed tolerantly. */
 
@@ -44,6 +45,7 @@ export interface UpdateUnit {
   action: { kind: ActionKind; label: string; command: string | null };
   binaries: { path: string; version: string; hermes: boolean }[];
   possibleSource: string | null;
+  remedy: Remedy | null;
 }
 
 export interface CheckJob {
@@ -65,6 +67,8 @@ export interface UpdatesData {
   counts: Record<string, number>;
   units: UpdateUnit[];
   job: CheckJob;
+  /** One instruction covering every pending update. */
+  remedyAll: Remedy | null;
 }
 
 export interface PlanStep {
@@ -228,6 +232,7 @@ function normalizeUnit(value: unknown): UpdateUnit | null {
       return { path: asString(binary.path), version: asString(binary.version), hermes: binary.hermes === true };
     }),
     possibleSource: asOptionalString(unit.possibleSource),
+    remedy: normalizeRemedy(unit.remedy),
   };
 }
 
@@ -248,6 +253,7 @@ export function normalizeUpdates(raw: unknown): UpdatesData {
       .map(normalizeUnit)
       .filter((unit): unit is UpdateUnit => Boolean(unit)),
     job: normalizeCheckJob(record.job),
+    remedyAll: normalizeRemedy(record.remedyAll),
   };
 }
 

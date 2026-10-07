@@ -4,6 +4,7 @@ import { useId, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { useElementWidth } from "../../hooks/useElementWidth";
 import { areaPath, linePath, niceMax, plotPoints, ticks, type ChartBox } from "../../lib/chart";
 import { formatCompact } from "../../lib/format";
+import { Modal } from "../ui/Modal";
 
 export interface SeriesPoint {
   label: string;
@@ -22,6 +23,7 @@ export function AreaChart({
   label,
   compact,
   format,
+  periodLabel,
 }: {
   points: SeriesPoint[];
   unit: string;
@@ -29,7 +31,10 @@ export function AreaChart({
   compact?: boolean;
   /** Value text for axis, tooltip and table (default: counts). Money charts may go below 1. */
   format?: (value: number) => string;
+  /** Heading of the first table column: 日期 / 周 / 月. */
+  periodLabel?: string;
 }) {
+  const [tableOpen, setTableOpen] = useState(false);
   const text = format || ((value: number) => value.toLocaleString("zh-CN"));
   const tickText = format || formatCompact;
   const id = useId();
@@ -123,25 +128,33 @@ export function AreaChart({
           </div>
         ) : null}
       </div>
-      <details className="chart-table">
-        <summary>查看数据表</summary>
-        <table>
-          <thead>
-            <tr>
-              <th scope="col">日期</th>
-              <th scope="col">{unit}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {points.map((point) => (
-              <tr key={point.label}>
-                <td>{point.label}</td>
-                <td>{text(point.value)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </details>
+      <button type="button" className="chart-table-btn" onClick={() => setTableOpen(true)}>
+        查看数据表
+      </button>
+      {tableOpen ? (
+        <Modal title={label} onClose={() => setTableOpen(false)}>
+          <div className="chart-table">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">{periodLabel || "日期"}</th>
+                  <th scope="col" className="num">
+                    {unit}
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {points.map((point) => (
+                  <tr key={point.label}>
+                    <td>{point.label}</td>
+                    <td className="num">{text(point.value)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Modal>
+      ) : null}
     </figure>
   );
 }

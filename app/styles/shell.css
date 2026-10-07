@@ -280,6 +280,17 @@
   overscroll-behavior: contain;
 }
 
+/* Cards stacked directly in a page keep one rhythm: no touching, no doubled margins. */
+.stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+  align-content: start;
+}
+.stack > .footnote {
+  margin-top: -4px;
+}
+
 .gate {
   display: grid;
   place-items: center;

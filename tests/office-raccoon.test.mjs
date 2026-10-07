@@ -29,7 +29,7 @@ test("detects 办公小浣熊 and scans its skills the way the app loads them", 
   const install = await resolveRaccoonInstall(home);
   assert.deepEqual([install.available, install.version, install.workspaceDir], [true, "1.0.17", path.join(home, ".box-agent")]);
   const config = {
-    agents: [{ id: "office-raccoon", name: "办公小浣熊", shortName: "浣", color: "#f2b56b", paths: ["~/.box-agent/skills"] }],
+    agents: [{ id: "office-raccoon", name: "办公小浣熊", shortName: "浣", color: "#f2b56b", paths: [path.join(home, ".box-agent", "skills")] }],
     visibleAgentIds: ["office-raccoon"],
     primaryAgentIds: ["office-raccoon"],
   };

@@ -11,6 +11,7 @@ import { useToast } from "../providers/ToastProvider";
 import { useNav } from "../providers/NavProvider";
 import { AgentPicker } from "../shell/AgentPicker";
 import { HistoryList } from "./settings/HistoryList";
+import { AgentVersionsSetting } from "./settings/AgentVersionsSetting";
 import { AgentAvatar } from "../ui/Avatar";
 import { Loading, TopBar } from "../ui/basics";
 
@@ -209,6 +210,7 @@ export function SettingsPage() {
                 </div>
               </section>
             ) : null}
+            <AgentVersionsSetting />
             <section className="set-block" aria-labelledby="set-history">
               <h2 id="set-history">历史与撤销</h2>
               <p>

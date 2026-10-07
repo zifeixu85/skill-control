@@ -12,6 +12,7 @@ import { UPDATES_KEY } from "../pages/updates/UpdatesPage";
 import { useData } from "../providers/DataProvider";
 import { LetterLogo } from "../ui/Avatar";
 import { KvTable } from "../ui/basics";
+import { RemedyPanel } from "../ui/RemedyPanel";
 import { Drawer } from "./Drawer";
 
 function ChangesSection({ unitKey, initial }: { unitKey: string; initial: { title: string }[] }) {
@@ -139,6 +140,11 @@ export function UpdateDrawer({ unitKey, onClose }: { unitKey: string; onClose: (
         ) : null}
         {changeable || unit.changes.length ? <ChangesSection unitKey={unit.unitKey} initial={unit.changes} /> : null}
         <UpdateFlow key={unit.unitKey} unit={unit} />
+        {unit.remedy ? (
+          <section>
+            <RemedyPanel remedy={unit.remedy} label={unit.title} />
+          </section>
+        ) : null}
       </div>
     </Drawer>
   );

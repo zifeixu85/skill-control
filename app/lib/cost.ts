@@ -53,7 +53,8 @@ export interface ModelRow {
 }
 
 export interface ModelsReport {
-  days: number;
+  /** Null for 所有时间. */
+  days: number | null;
   totals: Cost;
   models: ModelRow[];
   unpriced: string[];
@@ -139,12 +140,12 @@ export function normalizeModelRow(value: unknown): ModelRow | null {
 export const normalizeModelRows = (value: unknown): ModelRow[] =>
   sortModelRows(asArray(value).map(normalizeModelRow).filter((row): row is ModelRow => Boolean(row)));
 
-export function normalizeModelsReport(raw: unknown, days = 30): ModelsReport {
+export function normalizeModelsReport(raw: unknown, days: number | null = 30): ModelsReport {
   const record = asRecord(raw);
   const stale = asRecord(record.pricingStale);
   const table = asRecord(record.pricingTable);
   return {
-    days: asNumber(record.windowDays, days),
+    days: record.windowDays === null || days === null ? null : asNumber(record.windowDays, days),
     totals: normalizeCost(record.totals),
     models: normalizeModelRows(record.models),
     unpriced: asStringList(record.unpriced),
@@ -188,13 +189,6 @@ export function sumCosts(items: { costUsd: number | null; costBasis: CostSplit |
     costUsd: items.reduce((sum, item) => sum + (item.costUsd || 0), 0),
     costBasis: splits.length ? { official: add("official"), estimate: add("estimate"), family: add("family"), reported: add("reported") } : null,
   };
-}
-
-/** "含估算 $2.80" when part of a total came from estimates or family fallbacks. */
-export function estimatedPart(split: CostSplit | null): string | null {
-  if (!split) return null;
-  const part = split.estimate + split.family;
-  return part > 0 ? `含估算 ${formatCost(part)}` : null;
 }
 
 /** "长上下文 63%" for rows where part of the tokens were billed at the long-context price. */

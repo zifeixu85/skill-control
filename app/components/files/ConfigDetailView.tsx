@@ -3,19 +3,13 @@
 import { useState, type ReactNode } from "react";
 import { isUnsupported, useResource } from "../../hooks/useResource";
 import { api, ApiError, errorMessage } from "../../lib/api";
+import { COPY_FAILED, copyText } from "../../lib/clipboard";
 import { CopiesIcon } from "../icons";
 import { useToast } from "../providers/ToastProvider";
 import { CodeView, languageLabel, MaskNote } from "../ui/CodeView";
 import { EmptyState, KvTable, Loading } from "../ui/basics";
 
-export async function copyText(text: string): Promise<boolean> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
+export { copyText };
 
 export function CopyPathButton({ path, label = "复制路径" }: { path: string; label?: string }) {
   const toast = useToast();
@@ -23,7 +17,10 @@ export function CopyPathButton({ path, label = "复制路径" }: { path: string;
     <button
       type="button"
       className="btn sm"
-      onClick={async () => toast.show((await copyText(path)) ? `已${label.replace(/^复制/, "复制")}` : "复制失败，可以手动选中")}
+      onClick={async () => {
+        const copied = await copyText(path);
+        toast.show(copied ? `已${label}` : COPY_FAILED, copied ? {} : { tone: "error" });
+      }}
     >
       <CopiesIcon />
       {label}

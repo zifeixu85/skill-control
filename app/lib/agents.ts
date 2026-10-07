@@ -23,6 +23,7 @@ const BRANDS: Record<string, { name: string; color: string; letter?: string }> =
   hermes: { name: "Hermes Agent", color: "#6b5cf0" },
   qclaw: { name: "QClaw", color: "#1f7aff" },
   openclaw: { name: "OpenClaw", color: "#e5533d" },
+  "office-raccoon": { name: "办公小浣熊", color: "#f2b56b", letter: "浣" },
 };
 
 export function agentMeta(id: string, agent?: Pick<ScanAgent, "name" | "color"> | null): AgentMeta {

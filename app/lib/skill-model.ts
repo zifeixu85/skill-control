@@ -55,6 +55,7 @@ const READ_ONLY_REASONS: Record<string, string> = {
   "qclaw-remote": "由 QClaw 远程同步管理",
   "qclaw-config": "由 QClaw 管理",
   skillhub: "来自 QClaw SkillHub，由 QClaw 管理",
+  "office-raccoon-bundled": "办公小浣熊内置技能，随应用更新",
 };
 
 export function isReadOnlyInstance(instance: SkillInstance): boolean {

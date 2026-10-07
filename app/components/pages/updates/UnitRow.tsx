@@ -2,10 +2,12 @@
 
 import type { KeyboardEvent } from "react";
 import { useNow } from "../../../hooks/useNow";
+import { useOpenedItem } from "../../../hooks/usePageMemory";
 import { useResource } from "../../../hooks/useResource";
 import { api } from "../../../lib/api";
 import { isLibraryPath } from "../../../lib/library";
 import { formatRelative } from "../../../lib/format";
+import { markOpened } from "../../../lib/page-memory";
 import { shortRevision, STATUS_LABELS, STATUS_TONES, type UpdateUnit } from "../../../lib/updates";
 import type { ChipSpec } from "../../../lib/chips";
 import { useData } from "../../providers/DataProvider";
@@ -76,7 +78,11 @@ export function UnitRow({ unit }: { unit: UpdateUnit }) {
   const { openDrawer } = useNav();
   const now = useNow();
   const share = useLibraryShare(unit);
-  const open = () => openDrawer({ kind: "update", id: unit.unitKey });
+  const opened = useOpenedItem("updates") === unit.unitKey;
+  const open = () => {
+    markOpened("updates", unit.unitKey);
+    openDrawer({ kind: "update", id: unit.unitKey });
+  };
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
       event.preventDefault();
@@ -87,7 +93,8 @@ export function UnitRow({ unit }: { unit: UpdateUnit }) {
   const actionable = unit.action.kind !== "none" && (unit.status === "update-available" || unit.status === "conflict" || unit.action.kind === "guide");
   return (
     <div
-      className="urow"
+      className={`urow ${opened ? "opened" : ""}`}
+      data-memory-id={unit.unitKey}
       role="button"
       tabIndex={0}
       data-detail-trigger=""

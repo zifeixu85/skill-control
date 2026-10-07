@@ -150,3 +150,9 @@ export const LibraryIcon = (props: IconProps) => (
     <path d="m13 5.2 2.8-.7 2.2 10.4-2.8.7z" />
   </Icon>
 );
+export const SparkIcon = (props: IconProps) => (
+  <Icon strokeWidth={1.6} {...props}>
+    <path d="M10 3.5c.4 3.3 1.9 5 5.5 5.5-3.6.5-5.1 2.2-5.5 5.5-.4-3.3-1.9-5-5.5-5.5 3.6-.5 5.1-2.2 5.5-5.5Z" />
+    <path d="M15 13.5v3M13.5 15h3" />
+  </Icon>
+);

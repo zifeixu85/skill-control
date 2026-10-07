@@ -1,25 +1,30 @@
 "use client";
 
-import { useState } from "react";
-import { COST_HINT, estimatedPart, formatCost } from "../../../lib/cost";
+import { usePageMemory } from "../../../hooks/usePageMemory";
+import { COST_HINT, formatCost } from "../../../lib/cost";
 import { formatCompact } from "../../../lib/format";
-import { CONFIDENCE_HINTS, confidenceLabel, fillSeries, SESSIONS_HINT, type UsageAgent, type UsagePoint, type UsageSource } from "../../../lib/usage";
+import { CONFIDENCE_HINTS, confidenceLabel, SESSIONS_HINT, type UsageAgent, type UsageSource } from "../../../lib/usage";
+import { chartPoints, perPeriod, PERIOD_NAMES, sessionsMetricLabel, windowLabel, type ChartPoint, type Period } from "../../../lib/usage-window";
 import { InfoIcon } from "../../icons";
 import { AreaChart } from "../../charts/AreaChart";
 import { useData } from "../../providers/DataProvider";
 import { AgentAvatar } from "../../ui/Avatar";
 import { Segmented } from "../../ui/basics";
+import { InfoPopover } from "../../ui/InfoPopover";
 
-type Metric = "sessions" | "tokens" | "cost";
+export type Metric = "sessions" | "tokens" | "cost";
 
-const METRIC_UNITS: Record<Metric, string> = { sessions: "个活跃会话", tokens: "Tokens", cost: "美元（预估）" };
-const METRIC_LABELS: Record<Metric, string> = { sessions: "每天活跃的会话数", tokens: "每天的 Tokens", cost: "每天的预估费用" };
-const metricValue = (point: UsagePoint, metric: Metric) =>
+export function metricText(metric: Metric, period: Period): { label: string; unit: string } {
+  if (metric === "sessions") return { label: sessionsMetricLabel(period), unit: period === "day" ? "个活跃会话" : "个会话" };
+  if (metric === "tokens") return { label: `${perPeriod(period)}的 Tokens`, unit: "Tokens" };
+  return { label: `${perPeriod(period)}的预估费用`, unit: "美元（预估）" };
+}
+
+export const metricValue = (point: ChartPoint, metric: Metric) =>
   metric === "sessions" ? point.sessions : metric === "tokens" ? point.tokens : point.costUsd;
 
-/** 预估费用 with what it's based on: the estimated part and, for Hermes / OpenClaw, the product's own figure. */
+/** 预估费用, and for Hermes / OpenClaw the figure the product records itself. */
 function CostStat({ usage }: { usage: UsageAgent }) {
-  const estimated = estimatedPart(usage.costBasis);
   return (
     <div className="ustat-cost" title={COST_HINT}>
       <b>{formatCost(usage.costUsd)}</b>
@@ -27,7 +32,6 @@ function CostStat({ usage }: { usage: UsageAgent }) {
         {usage.costUsd === null ? "费用未记录" : "预估费用"}
         <InfoIcon className="info-dot" aria-label={COST_HINT} />
       </span>
-      {estimated ? <small>{estimated}</small> : null}
       {usage.reportedCostUsd !== null ? <small>产品自报 {formatCost(usage.reportedCostUsd)}</small> : null}
     </div>
   );
@@ -35,39 +39,46 @@ function CostStat({ usage }: { usage: UsageAgent }) {
 
 export const dayLabel = (date: string) => `${Number(date.slice(5, 7))}月${Number(date.slice(8, 10))}日`;
 
-export function SourceBadges({ sources }: { sources: UsageSource[] }) {
+/** Where the numbers come from and how sure they are — behind a small ⓘ next to the name. */
+export function SourceInfo({ sources, name }: { sources: UsageSource[]; name: string }) {
   if (!sources.length) return null;
   return (
-    <span className="source-badges">
-      {sources.map((source) => (
-        <span
-          key={`${source.id}-${source.label}`}
-          className={`conf ${source.confidence || "unknown"}`}
-          title={source.confidence ? CONFIDENCE_HINTS[source.confidence] : undefined}
-        >
-          {source.label || source.id} · {confidenceLabel(source.confidence)}
-        </span>
-      ))}
-    </span>
+    <InfoPopover label={`${name} 的数据来源`}>
+      <b className="info-pop-title">数据来源</b>
+      <ul className="source-list">
+        {sources.map((source) => (
+          <li key={`${source.id}-${source.label}`}>
+            <span>{source.label || source.id}</span>
+            <span className={`conf ${source.confidence || "unknown"}`} title={source.confidence ? CONFIDENCE_HINTS[source.confidence] : undefined}>
+              {confidenceLabel(source.confidence)}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <small>精确 = 从会话记录逐条统计；推断 = 从读取 SKILL.md 的动作推断；产品自报 = 产品自己记录的数字。</small>
+    </InfoPopover>
   );
 }
 
-export function UsageAgentCard({ usage, days, endDate }: { usage: UsageAgent; days: number; endDate: string }) {
+export function UsageAgentCard({ usage, days, endDate }: { usage: UsageAgent; days: number | null; endDate: string }) {
   const { agentName } = useData();
   const hasTokens = Boolean(usage.tokens?.total) || usage.series.some((point) => point.tokens > 0);
   const hasCost = usage.series.some((point) => point.costUsd > 0);
-  const [metric, setMetric] = useState<Metric>("sessions");
-  const series = fillSeries(usage.series, days, endDate);
+  const [metric, setMetric] = usePageMemory<Metric>(`usage:metric:${usage.agentId}`, "sessions");
+  const { period, points } = chartPoints(usage.series, days, endDate);
   const shown: Metric = (metric === "tokens" && hasTokens) || (metric === "cost" && hasCost) ? metric : "sessions";
   const name = agentName(usage.agentId);
   const tokens = usage.tokens;
+  const text = metricText(shown, period);
   return (
     <article className="ucard">
       <header className="ucard-head">
         <AgentAvatar id={usage.agentId} size="md" />
         <div className="ucard-title">
-          <h3>{name}</h3>
-          <SourceBadges sources={usage.sources} />
+          <h3>
+            {name}
+            <SourceInfo sources={usage.sources} name={name} />
+          </h3>
         </div>
         {hasTokens || hasCost ? (
           <Segmented
@@ -104,12 +115,13 @@ export function UsageAgentCard({ usage, days, endDate }: { usage: UsageAgent; da
           <CostStat usage={usage} />
         )}
       </div>
-      {series.length ? (
+      {points.length ? (
         <AreaChart
-          label={`${name} 最近 ${days} 天${METRIC_LABELS[shown]}`}
-          unit={METRIC_UNITS[shown]}
+          label={`${name} · ${windowLabel(days)} · ${text.label}`}
+          unit={text.unit}
+          periodLabel={PERIOD_NAMES[period]}
           format={shown === "cost" ? formatCost : undefined}
-          points={series.map((point) => ({ label: dayLabel(point.date), value: metricValue(point, shown) }))}
+          points={points.map((point) => ({ label: point.label, value: metricValue(point, shown) }))}
         />
       ) : (
         <p className="muted small">没有按天的数据。</p>

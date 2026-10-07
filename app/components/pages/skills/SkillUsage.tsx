@@ -5,7 +5,7 @@ import { isUnsupported, useResource } from "../../../hooks/useResource";
 import { api } from "../../../lib/api";
 import { formatCompact, formatMonthDay } from "../../../lib/format";
 import type { SkillView } from "../../../lib/skill-model";
-import { COST_HINT, estimatedPart, formatCost, sumCosts } from "../../../lib/cost";
+import { COST_HINT, formatCost, sumCosts } from "../../../lib/cost";
 import { CONFIDENCE_HINTS, confidenceLabel, fillSeries, localDate } from "../../../lib/usage";
 import { InfoIcon } from "../../icons";
 import { AreaChart } from "../../charts/AreaChart";
@@ -46,14 +46,14 @@ export function SkillUsage({ view }: { view: SkillView }) {
   const end = localDate(now || null);
   // Cost only where tokens were attributed to the skill (Claude logs); null elsewhere.
   const priced = agents.filter((agent) => agent.costUsd !== null);
-  const { costUsd: cost, costBasis: split } = sumCosts(priced);
+  const { costUsd: cost } = sumCosts(priced);
   const daily = new Map<string, number>();
   for (const agent of agents) {
     for (const point of agent.series) daily.set(point.date, (daily.get(point.date) || 0) + point.count);
   }
   const series = end
     ? fillSeries(
-        [...daily.entries()].map(([date, count]) => ({ date, sessions: count, tokens: 0, costUsd: 0 })),
+        [...daily.entries()].map(([date, count]) => ({ date, sessions: count, sessionsStarted: count, tokens: 0, costUsd: 0 })),
         DAYS,
         end,
       )
@@ -80,7 +80,6 @@ export function SkillUsage({ view }: { view: SkillView }) {
         <p className="skill-cost" title={COST_HINT}>
           预估费用 <b>{formatCost(cost)}</b>
           <InfoIcon className="info-dot" aria-label={COST_HINT} />
-          {estimatedPart(split) ? <small>{estimatedPart(split)}</small> : null}
         </p>
       ) : null}
       {series.some((point) => point.sessions > 0) ? (

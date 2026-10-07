@@ -2,15 +2,18 @@
 
 import { useState } from "react";
 import { useNow } from "../../../hooks/useNow";
+import { usePageMemory, useReturnHighlight } from "../../../hooks/usePageMemory";
 import { usePolling } from "../../../hooks/usePolling";
 import { invalidateResources, isUnsupported, primeResource, useResource } from "../../../hooks/useResource";
 import { useScrollMemory } from "../../../hooks/useScrollMemory";
 import { api, errorMessage } from "../../../lib/api";
 import { formatDateTime, formatRelative, joinNames } from "../../../lib/format";
-import { groupUnits, STATUS_HINTS, STATUS_LABELS, type CheckJob, type UpdatesData, type UpdateStatus } from "../../../lib/updates";
+import { groupUnits, STATUS_HINTS, STATUS_LABELS, type CheckJob, type UpdatesData, type UpdateStatus, type UpdateUnit } from "../../../lib/updates";
 import { RefreshIcon } from "../../icons";
 import { useToast } from "../../providers/ToastProvider";
 import { EmptyState, Loading, SectionHeading, TopBar } from "../../ui/basics";
+import { RemedyAllBar } from "../../ui/RemedyPanel";
+import { AgentVersions } from "./AgentVersions";
 import { UnitRow } from "./UnitRow";
 
 export const UPDATES_KEY = "updates";
@@ -64,12 +67,43 @@ function Footer({ data }: { data: UpdatesData }) {
   );
 }
 
+/** One status group; folded groups stay open after 查看详情 → back (session memory). */
+function UnitGroup({ status, units }: { status: UpdateStatus; units: UpdateUnit[] }) {
+  const [open, setOpen] = usePageMemory<boolean>(`updates:expanded:${status}`, false);
+  const folded = FOLDED.has(status) && !open;
+  return (
+    <section aria-label={STATUS_LABELS[status]}>
+      <SectionHeading
+        title={STATUS_LABELS[status]}
+        note={`${units.length} 个 · ${STATUS_HINTS[status]}`}
+        action={
+          FOLDED.has(status) && open ? (
+            <button type="button" className="btn sm ghost" onClick={() => setOpen(false)}>
+              收起
+            </button>
+          ) : null
+        }
+      />
+      {folded ? (
+        <button type="button" className="btn sm ghost" onClick={() => setOpen(true)}>
+          显示 {units.length} 个
+        </button>
+      ) : (
+        <div className="ulist">
+          {units.map((unit) => (
+            <UnitRow key={unit.unitKey} unit={unit} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function UpdatesPage() {
   const updates = useResource(UPDATES_KEY, () => api.updates());
   const toast = useToast();
   const scrollRef = useScrollMemory<HTMLDivElement>("updates");
   const [job, setJob] = useState<CheckJob | null>(null);
-  const [expanded, setExpanded] = useState<Set<UpdateStatus>>(new Set());
   const activeJob = job || updates.data?.job || null;
   const running = activeJob?.state === "running";
 
@@ -105,10 +139,11 @@ export function UpdatesPage() {
 
   const data = updates.data;
   const groups = data ? groupUnits(data.units) : [];
+  useReturnHighlight("updates", Boolean(data));
 
   return (
     <section className="page" aria-labelledby="page-title">
-      <TopBar title={<span id="page-title">更新</span>} sub="技能和插件的上游有没有新版本；更新前都会先给你看计划，确认后才执行">
+      <TopBar title={<span id="page-title">更新</span>} sub="Agent 软件、技能和插件有没有新版本；更新前都会先给你看计划，确认后才执行">
         <button type="button" className="btn primary" disabled={running || !data} onClick={() => void startCheck()}>
           <RefreshIcon className={running ? "spin" : ""} />
           {running ? "正在检查…" : "检查更新"}
@@ -132,6 +167,9 @@ export function UpdatesPage() {
                 上次检查没有完成：{activeJob.error || "未知错误"}。已拿到的结果仍然有效。
               </p>
             ) : null}
+            <RemedyAllBar remedy={data.remedyAll} what="所有待处理的更新" />
+            <AgentVersions />
+            <SectionHeading title="技能和插件" note="上游有没有新版本" />
             <div className="health-summary">
               {groups.map((group) => (
                 <div key={group.status} className={`hs ${group.status === "update-available" ? "info" : group.status === "conflict" || group.status === "check-failed" ? "danger" : group.status === "locally-modified" ? "warn" : ""}`}>
@@ -141,29 +179,9 @@ export function UpdatesPage() {
               ))}
             </div>
             {!data.units.length ? <EmptyState title="没有找到可以追踪来源的技能或插件" /> : null}
-            {groups.map((group) => {
-              const folded = FOLDED.has(group.status) && !expanded.has(group.status);
-              return (
-                <section key={group.status} aria-label={STATUS_LABELS[group.status]}>
-                  <SectionHeading title={STATUS_LABELS[group.status]} note={`${group.units.length} 个 · ${STATUS_HINTS[group.status]}`} />
-                  {folded ? (
-                    <button
-                      type="button"
-                      className="btn sm ghost"
-                      onClick={() => setExpanded((current) => new Set([...current, group.status]))}
-                    >
-                      显示 {group.units.length} 个
-                    </button>
-                  ) : (
-                    <div className="ulist">
-                      {group.units.map((unit) => (
-                        <UnitRow key={unit.unitKey} unit={unit} />
-                      ))}
-                    </div>
-                  )}
-                </section>
-              );
-            })}
+            {groups.map((group) => (
+              <UnitGroup key={group.status} status={group.status} units={group.units} />
+            ))}
             <Footer data={data} />
           </>
         )}
