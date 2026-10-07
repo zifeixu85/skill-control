@@ -15,7 +15,9 @@ test("cost formatting: two decimals, <$0.01 for tiny amounts, — for none", () 
   assert.equal(cost.formatCost(0.0099), "<$0.01");
   assert.equal(cost.formatCost(0.01), "$0.01");
   assert.equal(cost.formatCost(2.8), "$2.80");
-  assert.equal(cost.formatCost(1234.567), "$1,234.57");
+  assert.equal(cost.formatCost(999.994), "$999.99");
+  assert.equal(cost.formatCost(1234.567), "$1,235");
+  assert.equal(cost.formatCost(16373.3), "$16,373");
   assert.equal(cost.estimatedPart({ official: 10, estimate: 2.5, family: 0.3, reported: 1 }), "含估算 $2.80");
   assert.equal(cost.estimatedPart({ official: 10, estimate: 0, family: 0, reported: 1 }), null, "reported figures aren't estimates");
   assert.equal(cost.estimatedPart(null), null);

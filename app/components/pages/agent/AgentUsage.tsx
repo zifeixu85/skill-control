@@ -22,7 +22,8 @@ const DAYS = AGENT_USAGE_DAYS;
 type Metric = "sessions" | "tokens" | "cost";
 
 /** The usage resource shared by the 概览 cards and this tab. */
-export const useAgentUsage = (agentId: string) => useResource(`usage:agent:${agentId}:${DAYS}`, () => api.usageAgent(agentId, DAYS));
+export const useAgentUsage = (agentId: string, days: number = DAYS) =>
+  useResource(`usage:agent:${agentId}:${days}`, () => api.usageAgent(agentId, days));
 
 export function AgentUsage({
   agentId,

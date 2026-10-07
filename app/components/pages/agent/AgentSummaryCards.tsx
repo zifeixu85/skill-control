@@ -7,7 +7,10 @@ import { formatCompact } from "../../../lib/format";
 import { projectLabel } from "../../../lib/projects";
 import { SESSIONS_HINT } from "../../../lib/usage";
 import { useData } from "../../providers/DataProvider";
-import { AGENT_USAGE_DAYS, useAgentUsage } from "./AgentUsage";
+import { useAgentUsage } from "./AgentUsage";
+
+/** Same window as the page header and the 概览 cards. */
+const SUMMARY_DAYS = 30;
 import type { UsageSection } from "./AgentUsageSections";
 
 function Card({ title, section, onOpen, children }: { title: string; section: UsageSection; onOpen: (section: UsageSection) => void; children: ReactNode }) {
@@ -42,7 +45,7 @@ function TopList({ rows, empty }: { rows: { key: string; name: string; value: st
 
 /** The top of an Agent's 概览: usage, top skills, models and projects, each linking to 使用数据. */
 export function AgentSummaryCards({ agentId, onOpen }: { agentId: string; onOpen: (section: UsageSection) => void }) {
-  const usage = useAgentUsage(agentId);
+  const usage = useAgentUsage(agentId, SUMMARY_DAYS);
   const { views } = useData();
   if (isUnsupported(usage.error) || (usage.status === "error" && !usage.data)) return null;
   const data = usage.data;
@@ -57,8 +60,8 @@ export function AgentSummaryCards({ agentId, onOpen }: { agentId: string; onOpen
   const estimated = estimatedPart(data.costBasis);
   return (
     <div className="summary-cards">
-      <Card title={`使用 · 近 ${AGENT_USAGE_DAYS} 天`} section="totals" onOpen={onOpen}>
-        <dl className="summary-stats" aria-label={`近 ${AGENT_USAGE_DAYS} 天的使用`}>
+      <Card title={`使用 · 近 ${SUMMARY_DAYS} 天`} section="totals" onOpen={onOpen}>
+        <dl className="summary-stats" aria-label={`近 ${SUMMARY_DAYS} 天的使用`}>
           <div title={SESSIONS_HINT}>
             <dt>会话</dt>
             <dd>{data.sessions.toLocaleString("zh-CN")}</dd>

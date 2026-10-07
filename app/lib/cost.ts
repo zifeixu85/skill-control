@@ -175,7 +175,9 @@ export function sortModelRows(rows: ModelRow[]): ModelRow[] {
 export function formatCost(value: number | null | undefined): string {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
   if (value > 0 && value < 0.01) return "<$0.01";
-  return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  // Cents are noise from $1,000 up and crowd narrow cards.
+  const digits = Math.abs(value) >= 1000 ? 0 : 2;
+  return `$${value.toLocaleString("en-US", { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
 }
 
 /** Total of several costs (e.g. a skill across Agents), keeping the basis split. */
