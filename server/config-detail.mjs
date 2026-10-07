@@ -445,6 +445,9 @@ function productStateRows(instance, homes) {
   if (instance.hiddenByProduct === "symlink-escape") {
     rows.push(row("生效情况", "软链接指向技能目录之外，产品本身会跳过它", homes));
   }
+  if (instance.hiddenByProduct === "symlink-not-followed") {
+    rows.push(row("生效情况", "这个产品不跟随软链接，这份副本不会被加载；需要时改为复制安装", homes));
+  }
   if (instance.usage) {
     const usage = instance.usage;
     rows.push(

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isTokenLike, MASK, maskCommandLine } from "./config-mask.mjs";
 import { hermesSettingsDetail } from "./hermes.mjs";
+import { raccoonSettingsDetail } from "./office-raccoon.mjs";
 import { openClawSettingsDetail } from "./openclaw.mjs";
 import {
   multilineText,
@@ -242,6 +243,7 @@ const READERS = {
   hermes: (homeDirectory, homes) => hermesSettingsDetail(homeDirectory, homes),
   openclaw: (homeDirectory, homes) => openClawSettingsDetail("openclaw", homeDirectory, homes),
   qclaw: (homeDirectory, homes) => openClawSettingsDetail("qclaw", homeDirectory, homes),
+  "office-raccoon": (homeDirectory, homes) => raccoonSettingsDetail(homeDirectory, homes),
 };
 
 export const AGENT_DETAIL_IDS = Object.keys(READERS);

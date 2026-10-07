@@ -2,6 +2,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { envFor, expandUserPath } from "./config-files.mjs";
 import { hermesHomeFor, hermesSkillSources } from "./hermes.mjs";
+import { raccoonAppDataDir, raccoonSkillSources } from "./office-raccoon.mjs";
 import { openClawSkillSources } from "./openclaw.mjs";
 
 /**
@@ -13,6 +14,7 @@ export const SKILL_ADAPTERS = {
   hermes: (homeDirectory) => hermesSkillSources(homeDirectory),
   openclaw: (homeDirectory) => openClawSkillSources("openclaw", homeDirectory),
   qclaw: (homeDirectory) => openClawSkillSources("qclaw", homeDirectory),
+  "office-raccoon": (homeDirectory) => raccoonSkillSources(homeDirectory),
 };
 
 /** Paths whose existence means the product is installed (beyond its skill folders). */
@@ -30,6 +32,8 @@ export function detectionPaths(agentId, homeDirectory = homedir()) {
       return [path.join(homeDirectory, ".qclaw", "qclaw.json")];
     case "smartorder":
       return [path.join(homeDirectory, ".smartorder", "config.toml")];
+    case "office-raccoon":
+      return [path.join(raccoonAppDataDir(homeDirectory), "settings.json"), path.join(homeDirectory, ".box-agent", "config")];
     default:
       return [];
   }

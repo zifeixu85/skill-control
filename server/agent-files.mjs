@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { lstat, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { dumpYaml, parseYamlSafe } from "./config-files.mjs";
+import { dumpYaml, expandUserPath, parseYamlSafe } from "./config-files.mjs";
 import { maskConfig } from "./config-mask.mjs";
 import {
   compactHomeInText,
@@ -10,12 +10,14 @@ import {
   isSensitiveFileName,
   isWithin,
   MASK,
+  object,
   readBoundedText,
   readTextPrefix,
   resolveInside,
   scrubTokens,
 } from "./fs-safe.mjs";
 import { hermesCronJobs, hermesHomeFor, listHermesProfiles } from "./hermes.mjs";
+import { raccoonMemoryEntries, resolveRaccoonInstall } from "./office-raccoon.mjs";
 import { openClawAgents, resolveOpenClawInstall } from "./openclaw.mjs";
 
 /**
@@ -71,9 +73,14 @@ const kindForName = (name) => {
   return "other";
 };
 
-/** One file inside `root`, or null when it is missing, sensitive or escapes the root. */
-async function fileEntry(root, relativePath, { agentId, kind, homes, render = null, note = null }) {
-  if (isSensitiveFileName(relativePath)) return null;
+/**
+ * One file inside `root`, or null when it is missing, sensitive or escapes the root. A
+ * `virtual` entry ({ key, name }) lists one part of a file (e.g. one memory entry inside a
+ * settings file) under its own id; its `render` returns Markdown text.
+ */
+async function fileEntry(root, relativePath, { agentId, kind, homes, render = null, note = null, virtual = null }) {
+  // A virtual entry only ever shows what its renderer picks out, never the file itself.
+  if (!(virtual && render) && isSensitiveFileName(relativePath)) return null;
   const realFile = await resolveInside(root, relativePath);
   if (!realFile) return null;
   let info;
@@ -84,16 +91,16 @@ async function fileEntry(root, relativePath, { agentId, kind, homes, render = nu
   }
   if (!info.isFile()) return null;
   const absolutePath = path.join(root, relativePath);
-  const name = path.basename(relativePath);
-  const id = fileId(agentId, absolutePath);
+  const name = virtual?.name || path.basename(relativePath);
+  const id = fileId(agentId, virtual ? `${absolutePath}#${virtual.key}` : absolutePath);
   if (registry.size >= REGISTRY_LIMIT) registry.clear();
-  registry.set(id, { agentId, root, relativePath, name, render, language: render ? "json" : languageOf(name) });
+  registry.set(id, { agentId, root, relativePath, name, render, virtual: Boolean(virtual && render), language: virtual ? "md" : render ? "json" : languageOf(name) });
   return {
     id,
     name,
     kind: kind || kindForName(name),
-    size: info.size,
-    modifiedAt: new Date(info.mtimeMs).toISOString(),
+    size: virtual?.size ?? info.size,
+    modifiedAt: virtual?.modifiedAt || new Date(info.mtimeMs).toISOString(),
     displayPath: compactHomePath(absolutePath, homes),
     ...(note ? { note } : {}),
   };
@@ -136,6 +143,22 @@ async function group(id, label, root, relativePaths, options) {
   return files.length ? { id, label, ...(options.note ? { note: options.note } : {}), files } : null;
 }
 
+/**
+ * Declarative groups: known persona and memory file names (`files`) plus bounded scans of
+ * known subfolders (`scan: { dir, pattern, depth, limit }`), all relative to `root`.
+ */
+async function specGroups(root, specs, options) {
+  const groups = [];
+  for (const spec of specs) {
+    const relativePaths = [
+      ...(spec.files || []),
+      ...(spec.scan ? await listFiles(root, spec.scan.dir, { pattern: spec.scan.pattern, depth: spec.scan.depth || 0, limit: spec.scan.limit || NEWEST_LIMIT }) : []),
+    ];
+    groups.push(await group(spec.id, spec.label, root, relativePaths, { ...options, ...(spec.kind ? { kind: spec.kind } : {}), ...(spec.note ? { note: spec.note } : {}) }));
+  }
+  return groups;
+}
+
 async function codexGroups(homeDirectory, homes) {
   const root = path.join(homeDirectory, ".codex");
   const options = { agentId: "codex", homes };
@@ -171,14 +194,73 @@ async function claudeGroups(homeDirectory, homes) {
   ];
 }
 
+const PERSONA_FILES = ["SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md", "AGENTS.md"];
+
+/**
+ * WorkBuddy keeps a global persona in ~/.workbuddy and, in newer versions, one per account
+ * in user-<id>-personal/. No setting says which one is active, so both are listed.
+ */
 async function workBuddyGroups(homeDirectory, homes) {
   const root = path.join(homeDirectory, ".workbuddy");
+  const accounts = (await listDirectoryNames(root)).filter((name) => /^user-[\w-]{1,80}-personal$/u.test(name)).slice(0, 5);
+  const options = { agentId: "workbuddy", homes };
+  const accountNote = "按账号保存的人格与记忆。没有设置标明哪一份生效，较新版本的 WorkBuddy 通常用账号目录这一份。";
   return [
-    await group("identity", "身份与记忆", root, ["SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md", "AGENTS.md"], {
-      agentId: "workbuddy",
-      homes,
-    }),
+    ...(await specGroups(root, [{ id: "identity", label: accounts.length ? "身份与记忆（全局）" : "身份与记忆", files: PERSONA_FILES, ...(accounts.length ? { note: "早期版本的全局文件；下方还有按账号保存的一份。" } : {}) }], options)),
+    ...(await specGroups(
+      root,
+      accounts.map((account, index) => ({
+        id: index ? `account-${index}` : "account",
+        label: accounts.length > 1 ? `身份与记忆（账号 ${index + 1}）` : "身份与记忆（账号）",
+        files: PERSONA_FILES.slice(0, 4).map((name) => path.join(account, name)),
+        note: accountNote,
+      })),
+      options,
+    )),
+    ...(await specGroups(
+      root,
+      [
+        { id: "memory", label: "记忆", kind: "memory", scan: { dir: "memory", pattern: /\.md$/u } },
+        { id: "automations", label: "自动化记忆", kind: "memory", scan: { dir: "automations", pattern: /^memory\.md$/u, depth: 1 } },
+        { id: "plans", label: "计划", kind: "other", scan: { dir: "plans", pattern: /\.md$/u } },
+      ],
+      options,
+    )),
   ];
+}
+
+/** 办公小浣熊: the agent workspace's memory folder, plus memory entries kept in the app's settings. */
+async function raccoonGroups(homeDirectory, homes) {
+  const install = await resolveRaccoonInstall(homeDirectory);
+  if (!install.available) return [];
+  const root = install.workspaceDir;
+  const options = { agentId: "office-raccoon", homes };
+  const groups = await specGroups(
+    root,
+    [
+      { id: "memory", label: "记忆", kind: "memory", files: ["memory/MEMORY.md", "memory/memory_summary.md", "memory/CONTEXT.archive.md"] },
+      { id: "memory-context", label: "记忆上下文", kind: "memory", scan: { dir: path.join("memory", "context"), pattern: /\.(?:md|json)$/u, depth: 1 } },
+      { id: "memory-v2", label: "记忆（v2）", kind: "memory", scan: { dir: path.join("memory", "v2"), pattern: /\.(?:md|json)$/u, depth: 2 } },
+    ],
+    options,
+  );
+  const entries = raccoonMemoryEntries(install, homes);
+  const files = [];
+  for (const [index, entry] of entries.entries()) {
+    const render = async () => {
+      const current = raccoonMemoryEntries(await resolveRaccoonInstall(homeDirectory), homes).find((item) => item.key === entry.key);
+      return current ? current.markdown : "这条记忆已不存在，请刷新文件列表。";
+    };
+    const file = await fileEntry(install.appDataDir, "settings.json", {
+      ...options,
+      kind: "memory",
+      render,
+      virtual: { key: entry.key, name: `记忆条目 ${index + 1}.md`, size: Buffer.byteLength(entry.markdown), modifiedAt: entry.updatedAt },
+    });
+    if (file) files.push(file);
+  }
+  if (files.length) groups.push({ id: "settings-memory", label: "应用设置里的记忆条目", note: "来自应用设置（settings.json 的 memoryEntries），已做脱敏。", files });
+  return groups;
 }
 
 async function singleFileGroups(agentId, homeDirectory, homes) {
@@ -229,39 +311,66 @@ async function hermesGroups(homeDirectory, homes, profileName) {
   };
 }
 
+const OPENCLAW_AGENT_LIMIT = 30;
+
+/**
+ * OpenClaw / QClaw: every agent's workspace (agents.defaults.workspace, agents.list[].
+ * workspace; default ~/.openclaw/workspace) with its memory/YYYY-MM-DD.md files, the
+ * agents/<id>/ folders (LESSONS.md …, bounded) and the global files including LumiClaw's
+ * .lumiclaw/*.md. With an `agent` parameter only that agent's groups are listed.
+ */
 async function openClawGroups(kind, homeDirectory, homes, agentIdParam) {
   const install = await resolveOpenClawInstall(kind, homeDirectory);
   if (!install.available) return { groups: [], agents: [] };
   const configured = openClawAgents(install);
   const stateAgentDirs = await listDirectoryNames(path.join(install.stateDir, "agents"));
-  const agentIds = [...new Set([...configured.map((agent) => agent.id), ...stateAgentDirs])];
-  const selectedId = agentIdParam || configured.find((agent) => agent.isDefault)?.id || configured[0]?.id || "main";
-  if (!agentIds.includes(selectedId)) return { groups: [], agents: agentIds };
-  const selected = configured.find((agent) => agent.id === selectedId);
+  const agentIds = [...new Set([...configured.map((agent) => agent.id), ...stateAgentDirs])].slice(0, OPENCLAW_AGENT_LIMIT);
+  if (agentIdParam && !agentIds.includes(agentIdParam)) return { groups: [], agents: agentIds };
+  const shown = agentIdParam ? [agentIdParam] : agentIds;
+  const single = shown.length === 1;
   const options = { agentId: kind, homes };
   const lumiclaw = install.managedBy.includes("LumiClaw") ? "由 LumiClaw 写入" : null;
   const groups = [];
-  // A configured workspace is only read inside the home directory.
-  if (selected?.workspace && isWithin(homeDirectory, path.resolve(selected.workspace))) {
-    const workspace = path.resolve(selected.workspace);
+  const workspaces = new Set();
+  for (const id of shown) {
+    const selected = configured.find((agent) => agent.id === id);
+    const suffix = single ? "" : `:${id}`;
+    const prefix = single ? "" : `${id} · `;
+    // A configured workspace is only read inside the home directory, and listed once.
+    const workspace = selected?.workspace ? path.resolve(selected.workspace) : null;
+    if (workspace && isWithin(homeDirectory, workspace) && !workspaces.has(workspace)) {
+      workspaces.add(workspace);
+      groups.push(
+        await group(`workspace${suffix}`, `${prefix}工作区文件`, workspace, OPENCLAW_WORKSPACE_FILES.map(([name]) => name), options),
+        await group(`memory${suffix}`, `${prefix}记忆（最近 50 个）`, workspace, await listFiles(workspace, "memory", { pattern: /\.md$/u, limit: NEWEST_LIMIT }), {
+          ...options,
+          kind: "memory",
+        }),
+      );
+    }
+    if (stateAgentDirs.includes(id)) {
+      groups.push(
+        await group(`agent-state${suffix}`, `${prefix}Agent 目录文件`, install.stateDir, await listFiles(install.stateDir, path.join("agents", id), { pattern: /\.md$/u, depth: 1, limit: NEWEST_LIMIT }), {
+          ...options,
+          note: lumiclaw,
+        }),
+      );
+    }
+  }
+  // The defaults workspace (agents.defaults.workspace, else <state>/workspace) even when no listed agent uses it.
+  const configuredDefault = object(object(install.config.agents).defaults).workspace;
+  const defaultWorkspace = (typeof configuredDefault === "string" && expandUserPath(configuredDefault, { homeDirectory })) || path.join(install.stateDir, "workspace");
+  if (!agentIdParam && isWithin(homeDirectory, defaultWorkspace) && !workspaces.has(defaultWorkspace)) {
     groups.push(
-      await group("workspace", "工作区文件", workspace, OPENCLAW_WORKSPACE_FILES.map(([name]) => name), options),
-      await group("memory", "记忆（最近 50 个）", workspace, await listFiles(workspace, "memory", { pattern: /\.md$/u, limit: NEWEST_LIMIT }), {
-        ...options,
-        kind: "memory",
-      }),
+      await group("workspace:default", "默认工作区 · 工作区文件", defaultWorkspace, OPENCLAW_WORKSPACE_FILES.map(([name]) => name), options),
+      await group("memory:default", "默认工作区 · 记忆（最近 50 个）", defaultWorkspace, await listFiles(defaultWorkspace, "memory", { pattern: /\.md$/u, limit: NEWEST_LIMIT }), { ...options, kind: "memory" }),
     );
   }
-  if (stateAgentDirs.includes(selectedId)) {
-    groups.push(
-      await group("agent-state", "Agent 目录文件", install.stateDir, await listFiles(install.stateDir, path.join("agents", selectedId), { pattern: /\.md$/u }), {
-        ...options,
-        note: lumiclaw,
-      }),
-    );
-  }
-  groups.push(await group("state", "全局文件", install.stateDir, ["AGENTS.md", "LUMICLAW.md"], { ...options, note: lumiclaw }));
-  return { groups, agents: agentIds, agentId: selectedId };
+  groups.push(
+    await group("state", "全局文件", install.stateDir, ["AGENTS.md", "LUMICLAW.md"], { ...options, note: lumiclaw }),
+    await group("lumiclaw", "LumiClaw 任务", install.stateDir, await listFiles(install.stateDir, ".lumiclaw", { pattern: /\.md$/u, limit: NEWEST_LIMIT }), { ...options, note: lumiclaw }),
+  );
+  return { groups, agents: agentIds, ...(agentIdParam ? { agentId: agentIdParam } : {}) };
 }
 
 /**
@@ -280,6 +389,9 @@ export async function listAgentFiles(agentId, { homeDirectory = homedir(), homes
     case "workbuddy":
       result = { groups: await workBuddyGroups(homeDirectory, homes) };
       break;
+    case "office-raccoon":
+      result = { groups: await raccoonGroups(homeDirectory, homes) };
+      break;
     case "hermes":
       result = await hermesGroups(homeDirectory, homes, profile);
       break;
@@ -293,7 +405,7 @@ export async function listAgentFiles(agentId, { homeDirectory = homedir(), homes
   return { agentId, ...result, groups: result.groups.filter(Boolean) };
 }
 
-export const AGENT_FILE_AGENTS = ["codex", "claude", "workbuddy", "gemini", "cursor", "hermes", "openclaw", "qclaw"];
+export const AGENT_FILE_AGENTS = ["codex", "claude", "workbuddy", "gemini", "cursor", "hermes", "openclaw", "qclaw", "office-raccoon"];
 
 /** Re-lists every agent, profile and OpenClaw agent so ids survive a service restart. */
 async function rebuildRegistry(homeDirectory, homes) {
@@ -337,13 +449,14 @@ export async function readAgentFile(id, { homeDirectory = homedir(), homes = [ho
   if (!registry.has(id)) await rebuildRegistry(homeDirectory, homes);
   const entry = registry.get(id);
   if (!entry) throw new AgentFileError(404, "找不到这个文件，请刷新文件列表。");
-  if (isSensitiveFileName(entry.relativePath)) throw new AgentFileError(403, "这类文件不会开放预览。");
+  if (!entry.virtual && isSensitiveFileName(entry.relativePath)) throw new AgentFileError(403, "这类文件不会开放预览。");
   const realFile = await resolveInside(entry.root, entry.relativePath);
   if (!realFile) throw new AgentFileError(404, "文件已不存在或指向了允许范围之外。");
   const base = { name: entry.name, language: entry.language };
   if (entry.render) {
-    // Renderers emit an allow-listed summary; it is only scrubbed, not value-masked.
+    // Renderers emit an allow-listed summary (or Markdown text); it is scrubbed, not value-masked.
     const rendered = await entry.render(realFile);
+    if (typeof rendered === "string") return { ...base, language: "md", ...redactText(rendered, homes), truncated: false };
     return { ...base, ...redactText(`${JSON.stringify(rendered, null, 2)}\n`, homes), truncated: false };
   }
   if (entry.language === "yaml" || entry.language === "json") {

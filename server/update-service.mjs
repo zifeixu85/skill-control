@@ -5,6 +5,7 @@ import { defaultSearchDirectories, findCommand } from "./path-lookup.mjs";
 import { resolveUpdateUnits } from "./provenance.mjs";
 import { CACHE_VERSION, emptyCache, runUpdateCheck, unitStatus } from "./update-check.mjs";
 import { commandLine, createUpdateExecutor, runCommand, UpdateError } from "./update-apply.mjs";
+import { remedyForUpdate, remedyForUpdates } from "./remedies.mjs";
 import { createTransport, TransportError, UPDATE_HOSTS } from "./update-transport.mjs";
 
 /**
@@ -172,13 +173,15 @@ export function createUpdateService({
       .sort((left, right) => STATUS_ORDER.indexOf(left.status) - STATUS_ORDER.indexOf(right.status) || left.title.localeCompare(right.title));
     const counts = {};
     for (const unit of list) counts[unit.status] = (counts[unit.status] || 0) + 1;
+    const remedyContext = { homes };
     return {
       checkedAt: cache.checkedAt,
       hosts: cache.hosts,
       allowedHosts: UPDATE_HOSTS,
       github: cache.github?.resetAt ? { remaining: cache.github.remaining ?? null, resetAt: new Date(cache.github.resetAt).toISOString() } : null,
       counts,
-      units: list,
+      units: list.map((unit) => ({ ...unit, remedy: remedyForUpdate(unit, remedyContext) })),
+      remedyAll: remedyForUpdates(list, remedyContext),
       job: { ...job },
     };
   }

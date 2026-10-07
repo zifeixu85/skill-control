@@ -6,6 +6,7 @@ import { tokenizeCommand } from "./config-mask.mjs";
 import { frontmatterBlock, readYamlScalar } from "./frontmatter.mjs";
 import { compactHomePath, homeVariants, object, readTextPrefix, text } from "./fs-safe.mjs";
 import { createCommandLookup, defaultSearchDirectories } from "./path-lookup.mjs";
+import { remedyForFinding, remedyForFindings } from "./remedies.mjs";
 import { secretFieldReport } from "./secret-fields.mjs";
 
 /**
@@ -216,7 +217,7 @@ async function checkSkillState(scan, context) {
       byAgent.set(instance.agentId, list);
       const base = { agentId: instance.agentId, skillName: instance.name, path: instance.path };
       if (instance.hiddenByProduct) {
-        context.add({ ...base, severity: "info", category: "hidden-by-product", title: `${instance.agentName || instance.agentId} 不会加载：${instance.name}`, detail: instance.hiddenByProduct === "symlink-escape" ? "链接指向技能目录之外，产品出于安全考虑会跳过。" : "产品规则隐藏了这份副本。", fix: FIX.none });
+        context.add({ ...base, severity: "info", category: "hidden-by-product", title: `${instance.agentName || instance.agentId} 不会加载：${instance.name}`, detail: instance.hiddenByProduct === "symlink-escape" ? "链接指向技能目录之外，产品出于安全考虑会跳过。" : instance.hiddenByProduct === "symlink-not-followed" ? "这个产品只读取真实文件夹，不跟随软链接；需要时改为复制安装。" : "产品规则隐藏了这份副本。", fix: FIX.none });
       } else if (instance.shadowed) {
         context.add({ ...base, severity: "info", category: "shadowed", title: `被同名技能覆盖：${instance.name}`, detail: `生效的是来自「${instance.shadowedBy || "其他目录"}」的副本。`, fix: FIX.none });
       }
@@ -243,14 +244,14 @@ async function checkRequirements(instance, base, context) {
     const result = await context.lookup(bin);
     if (!result.checked) continue;
     if (!result.found) {
-      context.add({ ...base, severity: "warn", category: "missing-bin", title: `缺少命令 ${text(bin, 40)}：${instance.name}`, detail: "技能声明需要这个命令，但在常见安装位置都没有找到。", fix: { kind: "configure", label: `安装 ${text(bin, 40)}` } });
+      context.add({ ...base, severity: "warn", category: "missing-bin", title: `缺少命令 ${text(bin, 40)}：${instance.name}`, detail: "技能声明需要这个命令，但在常见安装位置都没有找到。", hint: { command: text(bin, 40) }, fix: { kind: "configure", label: `安装 ${text(bin, 40)}` } });
     } else if (result.nvmOnly) {
-      context.add({ ...base, severity: "warn", category: "nvm-only", title: `${text(bin, 40)} 只在 nvm 中可用：${instance.name}`, detail: "从程序坞启动的 Agent 不会加载 nvm，可能找不到这个命令。", fix: FIX.configure });
+      context.add({ ...base, severity: "warn", category: "nvm-only", title: `${text(bin, 40)} 只在 nvm 中可用：${instance.name}`, detail: "从程序坞启动的 Agent 不会加载 nvm，可能找不到这个命令。", hint: { command: text(bin, 40) }, fix: FIX.configure });
     }
   }
   for (const name of (requirements.env || []).slice(0, 20)) {
     if (typeof name === "string" && /^[A-Z_][A-Z0-9_]{0,63}$/u.test(name) && !context.env[name]) {
-      context.add({ ...base, severity: "warn", category: "missing-env", title: `未设置环境变量 ${name}：${instance.name}`, detail: "技能声明需要这个环境变量；这里只检查名称，不读取值。", fix: FIX.configure });
+      context.add({ ...base, severity: "warn", category: "missing-env", title: `未设置环境变量 ${name}：${instance.name}`, detail: "技能声明需要这个环境变量；这里只检查名称，不读取值。", hint: { env: name }, fix: FIX.configure });
     }
   }
 }
@@ -279,14 +280,14 @@ async function checkMcp(entries, context) {
       const result = name ? await context.lookup(name) : { checked: false };
       const label = text(path.basename(name || ""), 40);
       if (result.checked && !result.found) {
-        context.add({ ...base, severity: "warn", category: "mcp-command-missing", title: `MCP「${entry.name}」的命令 ${label} 不存在`, detail: "Agent 启动这个 MCP 服务时会失败。", fix: FIX.configure });
+        context.add({ ...base, severity: "warn", category: "mcp-command-missing", title: `MCP「${entry.name}」的命令 ${label} 不存在`, detail: "Agent 启动这个 MCP 服务时会失败。", hint: { command: label, mcp: text(entry.name, 80) }, fix: FIX.configure });
       } else if (result.nvmOnly) {
-        context.add({ ...base, severity: "warn", category: "nvm-only", title: `MCP「${entry.name}」的命令 ${label} 只在 nvm 中可用`, detail: "从程序坞启动的 Agent 不会加载 nvm，可能无法启动这个服务。", fix: FIX.configure });
+        context.add({ ...base, severity: "warn", category: "nvm-only", title: `MCP「${entry.name}」的命令 ${label} 只在 nvm 中可用`, detail: "从程序坞启动的 Agent 不会加载 nvm，可能无法启动这个服务。", hint: { command: label, mcp: text(entry.name, 80) }, fix: FIX.configure });
       }
     }
     const likely = secretFieldReport(config).likely;
     if (likely.length) {
-      context.add({ ...base, severity: "warn", category: "mcp-literal-secret", title: `MCP「${entry.name}」配置里有明文密钥`, detail: `字段：${likely.slice(0, 10).join("、")}。建议改用环境变量引用。`, fix: FIX.configure });
+      context.add({ ...base, severity: "warn", category: "mcp-literal-secret", title: `MCP「${entry.name}」配置里有明文密钥`, detail: `字段：${likely.slice(0, 10).join("、")}。建议改用环境变量引用。`, hint: { mcp: text(entry.name, 80) }, fix: FIX.configure });
     }
   }
 }
@@ -348,14 +349,14 @@ function checkLibraryAndCli(library, cliTools, context) {
   for (const tool of cliTools || []) {
     const versions = [...new Set((tool.binaries || []).map((binary) => binary.version).filter(Boolean))];
     if (versions.length > 1) {
-      context.add({ severity: "warn", category: "cli-version-skew", title: `${tool.name} 有 ${versions.length} 个不同版本`, detail: (tool.binaries || []).map((binary) => `${binary.path} ${binary.version || "未知"}`).join("；"), fix: FIX.configure });
+      context.add({ severity: "warn", category: "cli-version-skew", title: `${tool.name} 有 ${versions.length} 个不同版本`, detail: (tool.binaries || []).map((binary) => `${binary.path} ${binary.version || "未知"}`).join("；"), hint: { command: tool.command || tool.id }, fix: FIX.configure });
     }
     for (const agent of tool.agents || []) {
       if (tool.binaries?.length && agent.resolves === null) {
-        context.add({ severity: "warn", category: "cli-not-on-agent-path", agentId: agent.agentId, title: `${agent.agentId} 找不到 ${tool.name}`, detail: `按 ${agent.pathSource} 的 PATH 查找不到这个命令。`, fix: FIX.configure });
+        context.add({ severity: "warn", category: "cli-not-on-agent-path", agentId: agent.agentId, title: `${agent.agentId} 找不到 ${tool.name}`, detail: `按 ${agent.pathSource} 的 PATH 查找不到这个命令。`, hint: { command: tool.command || tool.id }, fix: FIX.configure });
       }
       if (agent.workspace && agent.workspace !== "local" && agent.workspaceConfigured === false) {
-        context.add({ severity: "warn", category: "cli-workspace-unconfigured", agentId: agent.agentId, title: `${agent.agentId} 使用的 ${tool.name} 工作区未配置`, detail: `该 Agent 运行时会改用 ${agent.workspace} 工作区，需要单独绑定（lark-cli config bind --source ${agent.workspace}）。`, fix: FIX.configure });
+        context.add({ severity: "warn", category: "cli-workspace-unconfigured", agentId: agent.agentId, title: `${agent.agentId} 使用的 ${tool.name} 工作区未配置`, detail: `该 Agent 运行时会改用 ${agent.workspace} 工作区，需要单独绑定（lark-cli config bind --source ${agent.workspace}）。`, hint: { command: tool.command || tool.id, workspace: agent.workspace }, fix: FIX.configure });
       }
     }
   }
@@ -446,5 +447,14 @@ export async function buildHealthReport({
     counts[finding.severity] += 1;
     categories[finding.category] = (categories[finding.category] || 0) + 1;
   }
-  return { generatedAt: new Date().toISOString(), counts, categories, findings };
+  // Copyable fixes: an AI prompt per finding (plus safe commands), and one for all of them.
+  const agentNames = Object.fromEntries((scan?.agents || []).map((agent) => [agent.id, agent.name]));
+  const remedyContext = { agentNames, homes: allHomes };
+  return {
+    generatedAt: new Date().toISOString(),
+    counts,
+    categories,
+    findings: findings.map((finding) => ({ ...finding, remedy: remedyForFinding(finding, remedyContext) })),
+    remedyAll: remedyForFindings(findings, remedyContext),
+  };
 }

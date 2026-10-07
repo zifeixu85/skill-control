@@ -23,6 +23,7 @@ import {
   createQClawHome,
 } from "./fixtures/claw-hermes.mjs";
 import { createAgentFilesHome, createTranscriptsHome } from "./fixtures/insights.mjs";
+import { createRaccoonHome } from "./fixtures/office-raccoon.mjs";
 import { createLarkCliHome, createLibraryHome } from "./fixtures/library.mjs";
 import { createUpdatesHome } from "./fixtures/updates.mjs";
 import { startTestServer } from "./fixtures/server.mjs";
@@ -111,10 +112,11 @@ test("no planted Hermes, OpenClaw, QClaw or LumiClaw secret appears in any local
   await createOpenClawHome(home);
   await createQClawHome(home);
   await createLumiClawHome(home);
+  await createRaccoonHome(home);
   const { request } = await startTestServer(context, home);
   const responses = [];
-  const get = async (label, pathname) => {
-    const response = await request(pathname);
+  const get = async (label, pathname, options) => {
+    const response = await request(pathname, options);
     const body = await response.text();
     responses.push({ label, status: response.status, body });
     return { status: response.status, body };
@@ -122,7 +124,7 @@ test("no planted Hermes, OpenClaw, QClaw or LumiClaw secret appears in any local
 
   const config = JSON.parse((await get("config", "/api/config")).body);
   const detected = config.agents.map((agent) => agent.id);
-  for (const id of ["hermes", "openclaw", "qclaw"]) {
+  for (const id of ["hermes", "openclaw", "qclaw", "office-raccoon"]) {
     assert.ok(detected.includes(id), id);
     const { status } = await get(`agent:${id}`, `/api/config-detail?kind=agent&id=${id}`);
     assert.equal(status, 200, id);
@@ -133,9 +135,10 @@ test("no planted Hermes, OpenClaw, QClaw or LumiClaw secret appears in any local
   }
   const capabilities = JSON.parse((await get("capabilities", "/api/capabilities")).body);
   const items = capabilities.products
-    .filter((product) => ["hermes", "openclaw", "qclaw"].includes(product.id))
+    .filter((product) => ["hermes", "openclaw", "qclaw", "office-raccoon"].includes(product.id))
     .flatMap((product) => product.items);
-  assert.ok(items.length >= 4);
+  assert.ok(items.length >= 6);
+  assert.ok(items.some((item) => item.productId === "office-raccoon" && item.kind === "expert-team"));
   for (const item of items) {
     await get(`expert:${item.name}`, `/api/config-detail?kind=expert&id=${item.id}`);
     const listing = JSON.parse((await get(`files:${item.name}`, `/api/capability-files?capabilityId=${item.id}`)).body);
@@ -149,7 +152,7 @@ test("no planted Hermes, OpenClaw, QClaw or LumiClaw secret appears in any local
   }
   const scan = JSON.parse((await get("scan", "/api/scan?force=1")).body);
   for (const skill of scan.skills) {
-    for (const instance of skill.instances.filter((item) => ["hermes", "openclaw", "qclaw"].includes(item.agentId))) {
+    for (const instance of skill.instances.filter((item) => ["hermes", "openclaw", "qclaw", "office-raccoon"].includes(item.agentId))) {
       await get(`skill:${instance.agentId}:${skill.name}`, `/api/config-detail?kind=skill&id=${skill.id}&instance=${instance.id}`);
     }
   }
@@ -164,6 +167,20 @@ test("no planted Hermes, OpenClaw, QClaw or LumiClaw secret appears in any local
   }
   await get("mcp", "/api/mcp");
   await get("activity", "/api/agents/activity?force=1");
+  // 办公小浣熊 memory files and entries, product versions (offline: no request) and remedies.
+  const raccoonFiles = JSON.parse((await get("files:office-raccoon", "/api/agent-files?agent=office-raccoon")).body);
+  for (const file of raccoonFiles.groups.flatMap((group) => group.files)) await get(`agentfile:raccoon:${file.name}`, `/api/agent-file?id=${file.id}`);
+  assert.ok(raccoonFiles.groups.some((group) => group.id === "settings-memory"));
+  const versions = JSON.parse((await get("agent-versions", "/api/agent-versions")).body);
+  assert.deepEqual([versions.offline, versions.agents.find((row) => row.id === "office-raccoon-app")?.installed.version], [true, "1.0.17"]);
+  const checked = await get("agent-versions:check", "/api/agent-versions/check", { method: "POST", body: "{}" });
+  assert.equal(checked.status, 200);
+  assert.equal((await request("/api/agent-versions/check", { method: "POST", body: "{}", headers: { "Sec-Fetch-Site": "cross-site" } })).status, 403);
+  const health = JSON.parse((await get("health", "/api/health-report?force=1")).body);
+  assert.ok(health.findings.every((finding) => typeof finding.remedy?.prompt === "string" && finding.remedy.prompt.length <= 1_500));
+  assert.equal(typeof health.remedyAll.prompt, "string");
+  const updates = JSON.parse((await get("updates", "/api/updates")).body);
+  assert.equal(typeof updates.remedyAll.prompt, "string");
 
   const leaks = responses
     .map((response) => ({ label: response.label, markers: leaksIn(response.body) }))

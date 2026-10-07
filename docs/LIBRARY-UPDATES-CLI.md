@@ -19,6 +19,7 @@
 | A 原生读取 | Codex、Gemini CLI、Cursor、Copilot CLI、VS Code Copilot、OpenCode、Amp、Windsurf（源码或更新日志已核对）；OpenClaw、QClaw | 不建链；清理该 Agent 自己目录里的同名副本。Codex 不合并同名技能，两份都会出现（按路径去重），且 `~/.codex/skills` 已被官方标为过时 |
 | B 配置额外目录 | Hermes（`skills.external_dirs`）；Copilot CLI 另有 `skillDirectories`、OpenCode 有 `skills.paths`、VS Code 有 `chat.agentSkillsLocations`（这些 Agent 已原生读取，通常不需要） | 优先经产品 CLI 写配置（`hermes config set`），写前展示 diff 并备份；清理 `~/.hermes/skills` 中同名不同内容的副本（否则 Hermes 报 Ambiguous skill name） |
 | C 逐技能软链 | Claude Code、Kiro、CodeBuddy、WorkBuddy、Trae（全局目录） | `<agent>/skills/<name> → ~/.agents/skills/<name>`，优先相对路径。只链目录，不要单独链接 `SKILL.md` 文件（Codex 会忽略）；避免链接成环（OpenCode 会卡死） |
+| 不分发 | 办公小浣熊（v1.0.17 已核对：只读取 `~/.box-agent/skills` 下的真实文件夹，`readdir` 后只保留 `isDirectory()` 为真的条目，不跟随软链接；停用开关是 `~/.box-agent/config/skill-settings.json` 的 `disabledSkillNames`） | 不建链；可以通过同步 / 导入复制安装；停用写 `disabledSkillNames`（先备份） |
 | D 复制兜底 | Windows 无链接权限、可见性验证失败 | Windows 依次尝试 symlink → junction → 复制；复制记录 `sourceHash`，库更新后重新复制，界面标“副本” |
 
 分发后做可见性体检：按每个 Agent 的真实规则（是否跟随软链、是否做根目录包含检查、同名优先级、停用开关）逐技能给出“可见 / 被隐藏（原因）/ 重复”。

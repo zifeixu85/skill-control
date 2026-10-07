@@ -35,6 +35,7 @@ import { isSensitiveCapabilityPath, scanWorkBuddyExperts } from "./workbuddy-exp
 import { readWorkBuddyExpertUsage } from "./workbuddy-usage.mjs";
 import { scanHermesProfiles } from "./hermes.mjs";
 import { scanOpenClawAgents } from "./openclaw.mjs";
+import { scanRaccoonExperts } from "./office-raccoon.mjs";
 import {
   compactHomeInText,
   compactHomePath,
@@ -270,6 +271,13 @@ const AGENT_CATALOG = [
     color: "#6fa8f5",
     paths: ["~/.qclaw/skills"],
   },
+  {
+    id: "office-raccoon",
+    name: "办公小浣熊",
+    shortName: "浣",
+    color: "#f2b56b",
+    paths: ["~/.box-agent/skills"],
+  },
 ];
 
 const LEGACY_AGENT_COLORS = new Map([
@@ -367,6 +375,7 @@ async function getCapabilityProducts(force = false) {
     scanHermesProfiles(HOME_DIRECTORY),
     scanOpenClawAgents("openclaw", HOME_DIRECTORY),
     scanOpenClawAgents("qclaw", HOME_DIRECTORY),
+    scanRaccoonExperts(HOME_DIRECTORY),
   ]);
   cachedCapabilityProducts = products;
   cachedCapabilityProductsAt = Date.now();
@@ -391,6 +400,7 @@ export async function scanCapabilityCatalog(
           scanHermesProfiles(homeDirectory),
           scanOpenClawAgents("openclaw", homeDirectory),
           scanOpenClawAgents("qclaw", homeDirectory),
+          scanRaccoonExperts(homeDirectory),
         ]);
   const availableProducts = products.filter((product) => product.available);
   return {
@@ -3528,7 +3538,10 @@ export function startServer({
     console.log(
       `  ➜  Skills:  http://${host}:${activePort} (local only)`,
     );
+    // Agent product versions: checked when the cache is older than 24 h, then daily.
+    getInsightRoutes().versions.start().catch(() => {});
   });
+  server.on("close", () => insightRoutes?.versions.stop());
   return server;
 }
 

@@ -2,6 +2,7 @@ import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { object, readBoundedJson, readBoundedToml } from "./fs-safe.mjs";
 import { hermesHomeFor, loadHermesHome } from "./hermes.mjs";
+import { raccoonDisabledSkills, resolveRaccoonInstall } from "./office-raccoon.mjs";
 import { resolveOpenClawInstall } from "./openclaw.mjs";
 
 /**
@@ -26,6 +27,8 @@ export const AGENT_TIERS = {
   codebuddy: { tier: "link", note: "逐技能相对链接" },
   workbuddy: { tier: "link", note: "逐技能相对链接" },
   trae: { tier: "link", note: "逐技能相对链接（全局目录）" },
+  // Verified in the app (v1.0.17): only real folders under ~/.box-agent/skills load; links are skipped.
+  "office-raccoon": { tier: "none", note: "只读取 ~/.box-agent/skills 下的真实文件夹，不跟随软链接；可以复制安装，不能链接到技能库", disable: "office-raccoon" },
 };
 
 export const tierOf = (agentId) => AGENT_TIERS[agentId]?.tier || "none";
@@ -82,6 +85,10 @@ export async function readAgentSwitches(agentId, homeDirectory) {
         externalDirs: state.externalDirs,
         disabled: state.disabled,
       };
+    }
+    case "office-raccoon": {
+      const install = await resolveRaccoonInstall(homeDirectory);
+      return { available: install.available, disabled: install.available ? await raccoonDisabledSkills(install) : new Set() };
     }
     default:
       return { disabled: new Set() };

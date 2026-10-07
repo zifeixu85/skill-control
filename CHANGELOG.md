@@ -11,6 +11,29 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ### Added
 
+- 办公小浣熊 (SenseTime Office Raccoon) as an agent: detection, app version and icon,
+  skills (user folder, copy-only; symlinked folders are reported as not loaded because
+  the app skips them; `skill-settings.json` disabledSkillNames as the disable switch;
+  bundled skills read-only), experts and teams with their skill dependencies, masked
+  settings rows, memory files and the app's memory entries (redacted), and usage from
+  local-chat.sqlite3 (tokens and skill calls; unpriced, no model is recorded).
+- Agent files: OpenClaw lists every agent's workspace, `memory/YYYY-MM-DD.md`,
+  `agents/<id>/*.md` (LESSONS.md) and LumiClaw's `.lumiclaw/*.md`; WorkBuddy lists
+  the account folder persona next to the global one, `memory/*.md`,
+  `automations/*/memory.md` and `plans/*.md`. Groups are declared per agent.
+- Agent product versions: `GET /api/agent-versions` and `POST /api/agent-versions/check`
+  compare installed versions (read from files) with official sources only (npm
+  registry, the app's own electron-updater or Sparkle feed, GitHub releases where the
+  product's own update config points there); checked at startup when older than 24 h,
+  then daily; offline mode makes no requests.
+- Remedies: every health finding and update item carries a copyable Chinese prompt for
+  the user's own AI agent plus safe, exact commands; the health report and updates
+  response add `remedyAll`.
+- All-time usage window: `days=all` (or 0) on the usage endpoints, with
+  `windowDays: null` and `windowLabel: "所有时间"`.
+- Desktop: `skillManagerDesktop.copyText(text)` copies through the main process
+  (packaged apps deny `navigator.clipboard`).
+
 - Project costs. `/api/usage/agent` `topProjects` rows now carry `tokenSplit`,
   `costUsd`, `costBasis`, `unpricedTokens` and `topModels`, are sorted by cost, include
   sessions without a folder as `name: null` (未识别项目), and are followed by
@@ -167,6 +190,10 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ### Changed
 
+- Usage index version 3 keeps ten years of days (was 400) and is rebuilt once to
+  recover older days still present in transcripts.
+- `GET /api/agent-files?agent=openclaw` without an agent lists every agent; group ids
+  carry an `:<agent>` suffix in that case.
 - Session counts mean sessions active in the window: a session counts when it, or one
   of its subagent transcripts, started, used tokens or called a skill on a day inside
   the window (long-running sessions started earlier now count). Series count a session

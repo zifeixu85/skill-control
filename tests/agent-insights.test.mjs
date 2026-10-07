@@ -69,10 +69,12 @@ test("lists agent persona, memory and rule files and reads them redacted", async
   assert.equal(research.profile, "research");
   assert.deepEqual(names(research, "persona"), ["SOUL.md"]);
 
+  // Without an agent parameter every agent's workspace and agents/<id>/ folder is listed.
   const openclaw = await listAgentFiles("openclaw", options);
   assert.deepEqual(openclaw.agents, ["main", "writer"]);
-  assert.deepEqual(names(openclaw, "workspace"), ["SOUL.md", "IDENTITY.md"]);
-  const agentState = openclaw.groups.find((group) => group.id === "agent-state");
+  assert.deepEqual(names(openclaw, "workspace:main"), ["SOUL.md", "IDENTITY.md"]);
+  assert.deepEqual(names(openclaw, "workspace:writer"), ["AGENTS.md"]);
+  const agentState = openclaw.groups.find((group) => group.id === "agent-state:main");
   assert.equal(agentState.note, "由 LumiClaw 写入");
   assert.deepEqual(agentState.files.map((file) => [file.name, file.kind]), [["LESSONS.md", "lessons"]]);
   assert.deepEqual(names(openclaw, "state"), ["AGENTS.md", "LUMICLAW.md"]);

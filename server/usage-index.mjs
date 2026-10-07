@@ -12,18 +12,20 @@ import { dayKey, discoverTranscripts, LINE_PROCESSORS, readSnapshots } from "./u
  * session and skill counts; per database session its day, tokens and cost. Message text is
  * never stored. Each run has a time budget and resumes where the last one stopped.
  *
- * Version 2 adds tokens per model: `m` (model → day → bucket → row) and `km` (skill → model
+ * Version 3 keeps ten years of days instead of 400. Version 2 added tokens per model: `m` (model → day → bucket → row) and `km` (skill → model
  * → day → bucket → row) per file, and `m` / `b` / `rc` per database record, where a row is
  * [input, output, cacheRead, cacheWrite5m, cacheWrite1h, requests] and the bucket is the
  * prompt-size tier plus :off / :fast (pricing.mjs). Costs are priced at query time.
  */
 
-export const USAGE_INDEX_VERSION = 2;
+export const USAGE_INDEX_VERSION = 3;
 export const USAGE_INDEX_FILE = "usage-index.json";
 const CHUNK_BYTES = 8 * 1024 * 1024;
 const MAX_LINE_BYTES = 64 * 1024 * 1024;
 const HEAD_BYTES = 64;
-const RETENTION_DAYS = 400;
+// Ten years: old days are kept (version 3 re-reads transcripts once to recover the days
+// that versions 1–2 pruned after 400 days).
+const RETENTION_DAYS = 3650;
 const SEEN_LIMIT = 400_000;
 const READ_FLAGS = constants.O_RDONLY | (constants.O_NONBLOCK ?? 0);
 
@@ -36,7 +38,7 @@ export const emptyIndex = () => ({
   files: {},
   records: {},
   credits: {},
-  reported: { hermes: {}, workbuddy: {} },
+  reported: { hermes: {}, workbuddy: {}, "office-raccoon": {} },
   seen: {},
 });
 
@@ -243,6 +245,10 @@ function applySnapshots(index, snapshots) {
     const days = { ...(previous?.days || {}) };
     if (previous && skill.count > previous.count) days[today] = (days[today] || 0) + skill.count - previous.count;
     index.reported.hermes[skill.name] = { count: skill.count, lastUsedAt: skill.lastUsedAt, days };
+  }
+  // 办公小浣熊 skill invocations are re-read in full from its database every run.
+  if (snapshots.reported["office-raccoon"]) {
+    index.reported["office-raccoon"] = Object.fromEntries(snapshots.reported["office-raccoon"].map((skill) => [skill.name, { days: skill.days, lastUsedAt: skill.lastUsedAt }]));
   }
   for (const skill of snapshots.reported.workbuddy || []) {
     const previous = index.reported.workbuddy[skill.name];

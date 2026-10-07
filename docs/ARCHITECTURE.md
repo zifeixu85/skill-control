@@ -435,6 +435,36 @@ SmartOrder 的系统/插件实例带 `readOnly` 和来源标签，安装/同步�
 stateDir, notes }`。是否存在由各自的状态目录决定，应用包只用来补充版本；从不读取它们的
 配置文件（LumiClaw 的 `config.json` 含令牌）。
 
+## 办公小浣熊（SenseTime Office Raccoon）
+
+`server/office-raccoon.mjs`，Agent id `office-raccoon`。应用 `办公小浣熊.app`（Bundle ID
+`com.sensetime.desktop.raccoon`，版本取 `Info.plist` 的 `CFBundleShortVersionString`，图标走 agent-icons）。
+应用数据在 `~/Library/Application Support/office-raccoon`：`settings.json` 的 `systemSetting.localAgentWorkspaceDir`
+决定 Agent 工作目录（只接受主目录内的位置，默认 `~/.box-agent`），`memoryEntries` 是应用里的记忆条目；
+`local-chat.sqlite3` 存对话。工作目录下：`skills/`、`config/{config.yaml,mcp.json,expert-profiles.json,
+skill-settings.json,workspaces.json}`、`memory/`。`config/auth.json` 从不读取。检测：设置文件、工作目录的
+`config/` 或应用包任一存在。
+
+- **技能**（适配器，已对照应用 v1.0.17 的代码核实）：应用用 `readdir(withFileTypes)` 列出 `~/.box-agent/skills`，
+  只保留 `isDirectory()` 为真且含 `SKILL.md` 的条目，所以软链接文件夹和散放的 `.md` 文件不会被加载——软链接副本
+  标为 `hiddenByProduct: "symlink-not-followed"`，`.md` 文件与 `.backups` 不算技能；`skill-settings.json` 的
+  `disabledSkillNames`（名称需匹配 `^[a-zA-Z0-9][a-zA-Z0-9._-]*$`）是停用开关；应用包内
+  `box-agent-runtime/bin/_internal/box_agent/skills` 是只读的内置技能。安装只能复制（`copyOnly`），技能库档位
+  为“不分发”（见 docs/LIBRARY-UPDATES-CLI.md §1.2），停用操作写 `disabledSkillNames`（先备份、可撤销）。
+- **专家**：`config/expert-profiles.json` 的 `experts` 与 `teams` 进入专家视图（`productId: "office-raccoon"`），
+  每项带 `skillDependencies: { required, default, optional, missing }`（`missing` 为本机用户技能与内置技能里都没有
+  的依赖），团队成员带各自的 `skills`；文件视图是一份脱敏后的 `profile.md`；`expert-profiles.json.bak-*` 不读取，
+  只计数为 `backupCount`。
+- **配置详情**：只给安全的标量行（模型、服务提供方、接口地址只显示主机名、API 密钥只显示“已配置”、记忆开关与
+  天数、文件访问范围、MCP 服务名、停用的技能、工作区数、记忆条目数）。
+- **Agent 文件**：`memory/MEMORY.md`、`memory_summary.md`、`CONTEXT.archive.md`、`memory/context/**`、
+  `memory/v2/**`（`.md`/`.json`，有上限）；`settings.json` 的 `memoryEntries` 逐条列为“记忆条目 n.md”（虚拟文件，
+  只渲染这条记忆的来源、时间与正文，经脱敏，不暴露设置文件本身）。
+- **用量**：`local-chat.sqlite3` 的 `messages.payload_json` 里每轮 `usage_metadata.token_usage`
+  （`promptTokens`/`completionTokens`/`totalTokens`/`calls`）与 `skill_invocations[].skill_code`、`used_skill_codes`；
+  只取这些数字和技能名，正文从不读取。会话按 `sessions.created_at_ms` 记日、`last_chatted_at_ms` 为结束日，项目取
+  `workspace_dir` 的最后一段。没有模型信息，token 记为未定价（`unpricedTokens`），可信度 reported。
+
 ## Agent 集成：插件、连接器与 MCP（只读）
 
 这些扫描器只读本机文件、不联网、不写入，返回前去掉所有配置值：
@@ -598,16 +628,23 @@ JWT、Google 等令牌格式；`Bearer`/`Basic` 只有后面跟着 ≥ 16 位令
 }
 ```
 
+分组由声明式规则生成（`specGroups`：已知的人格 / 记忆文件名 + 已知子目录的有界扫描）。
 来源（只列出存在的文件）：Codex `~/.codex/AGENTS.md`、`AGENTS.override.md`、`rules/*.rules`、
 `memories/*.md`、`memories/rollout_summaries/*.md`（最近 50 个）；Claude Code `~/.claude/CLAUDE.md`、
 `projects/*/memory/*.md`（最近 50 个）、`rules/**/*.md`（4 层、200 个）、`agents/*.md`、`commands/` 下两层内的 `*.md`；
-WorkBuddy `~/.workbuddy/{SOUL,IDENTITY,USER,MEMORY,AGENTS}.md`；Gemini `~/.gemini/GEMINI.md`；
+WorkBuddy `~/.workbuddy/{SOUL,IDENTITY,USER,MEMORY,AGENTS}.md`（全局）与账号目录
+`user-<id>-personal/{SOUL,IDENTITY,USER,MEMORY}.md`（没有设置标明哪一份生效，两份都列出并加说明）、
+`memory/*.md`（不含 `.bak`）、`automations/*/memory.md`（“自动化记忆”）、`plans/*.md`（“计划”）；
+办公小浣熊见上文；Gemini `~/.gemini/GEMINI.md`；
 Cursor `~/.cursor/rules/**/*.{md,mdc}`；Hermes（按 profile）`SOUL.md`、`AGENTS.md`、`profile.yaml`、
 `memories/*.md`、`cron/jobs.json`（只渲染名称、计划、状态、技能、工具集、上次/下次运行，不含提示词、
-脚本、错误与投递目标）；OpenClaw/QClaw（按 agent）工作区 `AGENTS.md`、`SOUL.md`、`IDENTITY.md`、
+脚本、错误与投递目标）；OpenClaw/QClaw 工作区 `AGENTS.md`、`SOUL.md`、`IDENTITY.md`、
 `USER.md`、`TOOLS.md`、`HEARTBEAT.md`、`BOOTSTRAP.md`、`BOOT.md`、`MEMORY.md`、`memory/*.md`
-（最近 50 个），`<stateDir>/agents/<id>/*.md` 与 `<stateDir>/{AGENTS,LUMICLAW}.md`。工作区必须位于
-主目录内。
+（最近 50 个，含 `YYYY-MM-DD.md`），`<stateDir>/agents/<id>/` 下两层内的 `*.md`（如 `LESSONS.md`；凭据与会话
+不列出）、`<stateDir>/{AGENTS,LUMICLAW}.md` 与 `<stateDir>/.lumiclaw/*.md`（“LumiClaw 任务”）。不带 `agentId`
+时列出所有 agent（最多 30 个）的工作区与目录，分组 id 带 `:<agent>` 后缀（如 `workspace:lumi`、`agent-state:ceo`），
+另含 `agents.defaults.workspace`（默认 `<stateDir>/workspace`）的 `workspace:default` / `memory:default`；带
+`agentId` 时只列这个 agent，分组 id 不带后缀。工作区必须位于主目录内。
 
 `GET /api/agent-file?id=<id>`
 
@@ -676,6 +713,7 @@ Hermes：静态解析的全部工具集（`enabled` 表示配置启用或被其�
 | WorkBuddy `workbuddy.db` | — | — | `session_usage.credit_json` 合计为 `credits`（reported） |
 | Hermes `state.db` | `sessions` 表 token、`model`、`api_call_count` 与自报费用（只读、`query_only`）；`input_tokens` 已扣除缓存，`reasoning_tokens` 是 `output_tokens` 的子集（Hermes 源码 `cli.py` 标为 “Reasoning (subset)”） | `skills/.usage.json` 计数，每次运行的增量计入当天 | reported |
 | OpenClaw/QClaw `sessions.json` | 会话 token 与费用；有 `model`（及 `modelProvider`）时记模型 | 会话 JSONL 中工具调用读取的 SKILL.md | token reported，技能 inferred |
+| 办公小浣熊 `local-chat.sqlite3` | 每轮 `usage_metadata.token_usage`（无模型，不计价） | `skill_invocations` / `used_skill_codes` 按天计数 | reported |
 
 每轮索引有 3 秒预算，按修改时间从新到旧处理，每轮至少推进一个文件；服务在后台线程中连续分片执行直到
 完成，此后请求发现索引超过 60 秒未更新时再增量刷新。会话文件被产品删除后其汇总仍保留（保留 400 天）；
@@ -734,7 +772,11 @@ Codex 续接 / 压缩后的会话可能在第一条 `turn_context` 之前就有�
   用与 Agent 合计完全相同的行、分档和规则计价（`@agent-average` 用该 Agent 整个窗口的平均单价），所以一个 Agent
   的各项目之和等于它的合计；超出行数上限的项目汇总为 `otherProjects` / `other`，列表与合计始终对得上。
 
-`GET /api/usage/summary?days=30`（`days` 取 1–400，默认 30）
+`days` 取 1–3650；`days=all`（或 `0`）表示所有时间：响应里 `windowDays` 为 null、`windowLabel` 为“所有时间”，
+序列从索引里最早的一天开始（最多 3650 天）；其他窗口 `windowLabel` 为“最近 N 天”。索引版本 3 不再在 400 天后删除
+旧日期（保留 3650 天），升级后全量重建一次，找回转录里仍在的旧日期。
+
+`GET /api/usage/summary?days=30`（默认 30）
 
 ```ts
 type Cost = { costUsd: number, costBasis: { official: number, estimate: number, family: number, reported: number }, unpricedTokens: number };
@@ -780,7 +822,7 @@ type ModelRow = {
   pricingTable: { checkedAt, ageDays: number | null, reviewAfterDays: number | null, stale: boolean } }
 ```
 
-`GET /api/usage/projects?days=30`（`days` 取 1–400，常用 7 / 30 / 90）：跨 Agent 的项目费用
+`GET /api/usage/projects?days=30`（常用 7 / 30 / 90 / all）：跨 Agent 的项目费用
 
 ```ts
 { generatedAt, windowDays, index, status, totals: Cost,
@@ -839,7 +881,10 @@ families }`（`models` 各条含 `source`、`note`、`status`、`reviewBy`、`al
     title: string, detail: string,            // 中文
     agentId?: string, skillName?: string, path?: string,   // path 为 "~/…"
     fix: { kind: "none" | "open" | "reinstall" | "remove-link" | "enable" | "configure", label: string },
+    hint?: { command?, env?, mcp?, workspace? },            // 生成修复命令用的名称（从不含值）
+    remedy: Remedy,                                          // 见“修复建议”
   }>,
+  remedyAll: Remedy,                                         // 需要处理 + 建议处理（error + warn）按类别分组
 }
 ```
 
@@ -858,10 +903,52 @@ OpenClaw `metadata.openclaw.requires.bins` 找不到（在服务 PATH、Homebrew
 
 `GET /api/agent-icon?id=<agentId>` → `image/png`（128 px），没有安装或非 macOS 时 404（前端回退为字母）。
 在 `/Applications` 与 `~/Applications` 中按已知名称查找应用，并核对 Bundle ID（codex、claude、workbuddy、
-cursor、trae、hermes、qclaw、lumiclaw、moticlaw、smartorder、kiro、windsurf）；读取 `CFBundleIconFile`，
+cursor、trae、hermes、qclaw、lumiclaw、moticlaw、smartorder、kiro、windsurf、office-raccoon）；读取 `CFBundleIconFile`，
 图标文件必须位于应用包内且不超过 20 MB；用 `/usr/bin/sips`（参数数组，不经 shell，10 秒超时）转换，
 结果须是 ≤ 512 KB 的 PNG，缓存在 `~/.agent-skill-manager/icons/<id>-<摘要>.png`，应用更新后自动重新转换。
 测试通过 `SKILL_MANAGER_APPLICATION_DIRS` 指向临时目录，从不读取真实的 `/Applications`。
+
+## 修复建议（Remedy）
+
+`server/remedies.mjs`。`Remedy = { commands?: Array<{ label?: string, command: string }>, prompt: string }`：
+`prompt` 是给用户自己的 AI 助手（Codex 或 Claude Code）的中文提示词，写明问题、涉及的 Agent 与 `~/…` 路径、
+目标状态和安全步骤（改动前备份到 `~/.agent-skill-manager/backups/`、不打印或移动任何密钥、删除前先问、
+完成后验证并汇报）；命令只给安全且确切的：只读检查（`ls -l`、`head -20`、`command -v`、`which -a`、
+`npm ls -g`）、官方更新命令（`claude update`、`hermes update`、`lark-cli config bind --source <ws>`、
+`<该 Node 的 npm> install -g <包>@latest`）和 `mv -n … ~/.Trash/`；从不包含 `rm` 或 `sudo`，路径不安全时不给命令。
+所有文本经密钥擦除与主目录压缩；单条提示词不超过 1,500 字，`remedyAll` 不超过 8,000 字（每类最多列 12 项、
+合并的检查命令最多 20 条且不含移动）。用在：体检的每条发现与 `remedyAll`；`/api/updates` 的每个单元
+（`remedy`，没有可执行更新时只给一句说明）与 `remedyAll`（全部可更新项，按“在 Skill Control 里更新 / 用各自的
+命令 / 按说明手动”分组）；`/api/agent-versions` 的每个产品（有新版本时；无法查询的应用给“在应用里检查更新”）。
+
+## Agent 产品版本
+
+`server/agent-versions.mjs`。本机版本只读文件、从不执行程序：应用包 `Info.plist`；npm 全局包——在已知 PATH 目录
+里解析命令、`realpath` 后向上找到同名 `package.json`；Claude Code 原生安装看 `~/.local/share/claude/versions/<版本>`；
+Hermes 取 `hermes_cli/__init__.py` 的 `__release_date__`（与它的 GitHub 版本标签同一套），没有时用
+`install-stamp.json` 的 `baseVersion`；自带的 CLI（`~/.hermes/node/bin/lark-cli`）。最新版本只来自官方来源：CLI
+包查 npm registry 的 `latest`；应用查自己的更新源——electron-updater 的 `Contents/Resources/app-update.yml`
+（`generic` → `<url>/<channel>-mac.yml`，`github` → 该仓库的 latest release）、Sparkle 的 `SUFeedURL` appcast；
+Hermes 按自己的 git 远端（GitHub）查 latest release。占位或不安全的地址（`example.com`、`.test`、IP、非 https）
+与没有更新源的应用一律 `unknown` 并说明原因。请求不带任何标识（只有固定 User-Agent 与 Accept），10 秒超时，最多
+4 个并发，每个来源只请求一次，响应最多 2 MB；`SKILL_MANAGER_UPDATES_OFFLINE=1` 时不发请求。结果缓存在
+`~/.agent-skill-manager/agent-versions.json`；服务启动时若缓存超过 24 小时就检查一次，此后每 24 小时一次。
+
+`GET /api/agent-versions`、`POST /api/agent-versions/check`（只读联网，普通 POST，受来源与跨站检查，不需要确认头）→
+
+```ts
+{ checkedAt: string | null, nextCheckAt: string | null, offline: boolean,
+  agents: Array<{
+    agentId: string,                 // codex、claude、hermes、office-raccoon、lark-cli …（同一 Agent 可有应用与 CLI 两行）
+    id: string,                      // codex-cli、codex-app、lark-cli-hermes …
+    name: string,
+    installed: { version: string | null, source: "app" | "npm" | "cli" | "bundled", path: string /* ~/… */ },
+    latest: { version, source: "npm" | "github" | "electron-updater" | "sparkle", url, releasedAt?, notesUrl? } | null,
+    status: "up-to-date" | "update-available" | "unknown" | "error",
+    error?: string, reason?: string, // reason：为什么是 unknown（没有更新源、占位地址、还没检查过）
+    remedy?: Remedy,
+  }> }
+```
 
 ## 更新检测与执行
 
@@ -1170,6 +1257,13 @@ OpenClaw、QClaw；修改后按用户的选择保存。状态判断仍只看常�
 没有显式 `code` 的 403 / 404 / 409 分别默认为 `forbidden`、`not-found`、`conflict`；Node 的系统错误码（如 `ENOENT`）
 不会透出。`ApiError` 带 `code`（旧服务为 null）。
 
+## 桌面应用
+
+打包后的应用拒绝 `navigator.clipboard`（会话的权限检查处理器返回 false，保持不变），复制走主进程：preload 在
+`window.skillManagerDesktop` 上提供 `copyText(text): Promise<boolean>`，经 IPC `desktop:copy-text` 调用 Electron
+`clipboard.writeText`。主进程只接受来自本应用主窗口顶层框架的请求，内容必须是字符串且 UTF-8 不超过 1 MB
+（校验在 `desktop/copy-text.mjs`）。
+
 ## 本地服务防护（新增）
 
 - 除 Origin 检查外，所有请求的 `Host` 必须是 `127.0.0.1:<端口>`、`localhost:<端口>`
@@ -1202,6 +1296,7 @@ OpenClaw、QClaw；修改后按用户的选择保存。状态判断仍只看常�
 | `GET /api/agent-files`、`/api/agent-file` | 见“洞察接口 · Agent 文件” |
 | `GET /api/agent-tools` | 见“洞察接口 · Agent 工具” |
 | `GET /api/usage/summary`、`/api/usage/skill`、`/api/usage/agent`、`/api/usage/models`、`/api/usage/projects`、`/api/usage/pricing`、`/api/usage/status` | 见“洞察接口 · 用量分析” |
+| `GET /api/agent-versions`、`POST /api/agent-versions/check` | 见“Agent 产品版本” |
 | `GET /api/health-report` | 见“洞察接口 · 体检报告” |
 | `GET /api/agent-icon` | 见“洞察接口 · 应用图标” |
 | `GET /api/updates`、`/api/updates/check-status`、`/api/updates/changes`；`POST /api/updates/check`、`/api/updates/plan`、`/api/updates/apply` | 见“更新检测与执行” |

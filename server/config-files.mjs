@@ -67,6 +67,19 @@ export function expandUserPath(value, { homeDirectory = homedir(), base = homeDi
   return path.isAbsolute(expanded) ? path.normalize(expanded) : path.resolve(base, expanded);
 }
 
+/**
+ * Where app bundles are looked up: SKILL_MANAGER_APPLICATION_DIRS when set (tests, sandboxes),
+ * else /Applications and ~/Applications for the real home, and only ~/Applications for any
+ * other home directory (so a fake home never reads the machine's real apps).
+ */
+export function applicationDirectoriesFor(homeDirectory = homedir(), env = process.env) {
+  const configured = String(env.SKILL_MANAGER_APPLICATION_DIRS || "")
+    .split(path.delimiter)
+    .filter((entry) => entry && path.isAbsolute(entry));
+  if (configured.length) return configured;
+  return homeDirectory === homedir() ? ["/Applications", path.join(homeDirectory, "Applications")] : [path.join(homeDirectory, "Applications")];
+}
+
 /** Environment variable for the real home only (tests use a fake home). */
 export function envFor(homeDirectory, name) {
   if (homeDirectory !== homedir()) return undefined;
@@ -74,7 +87,7 @@ export function envFor(homeDirectory, name) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-/** CFBundleIdentifier / CFBundleShortVersionString / CFBundleIconFile from an XML Info.plist. */
+/** CFBundleIdentifier / CFBundleShortVersionString / CFBundleIconFile / SUFeedURL from an XML Info.plist. */
 export async function readAppBundle(appPath) {
   const read = await readBoundedText(path.join(appPath, "Contents", "Info.plist"), 512_000);
   if (read.status !== "ok" || !read.text.startsWith("<?xml")) return null;
@@ -84,9 +97,12 @@ export async function readAppBundle(appPath) {
     const match = read.text.slice(index, index + 400).match(/<string>([^<]{1,128})<\/string>/u);
     return match ? match[1].trim() : null;
   };
+  const feedIndex = read.text.indexOf("<key>SUFeedURL</key>");
+  const feedUrl = feedIndex < 0 ? null : read.text.slice(feedIndex, feedIndex + 700).match(/<string>(https:\/\/[^<\s]{1,600})<\/string>/u)?.[1] || null;
   return {
     bundleId: value("CFBundleIdentifier"),
     version: value("CFBundleShortVersionString"),
     iconFile: value("CFBundleIconFile"),
+    ...(feedUrl ? { feedUrl } : {}),
   };
 }

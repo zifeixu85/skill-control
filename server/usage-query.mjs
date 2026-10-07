@@ -12,7 +12,8 @@ import { dayKey } from "./usage-sources.mjs";
  * at the vendors' official prices (usage-cost.mjs), with the share of each basis.
  */
 
-export const MAX_USAGE_DAYS = 400;
+export const MAX_USAGE_DAYS = 3650;
+export const ALL_TIME_LABEL = "所有时间";
 
 export const USAGE_SOURCES = {
   claude: {
@@ -41,6 +42,11 @@ export const USAGE_SOURCES = {
     skills: { label: "会话中读取的 SKILL.md", confidence: "inferred" },
     reportedCost: true,
   },
+  "office-raccoon": {
+    tokens: { label: "local-chat.sqlite3 每轮 token 记录（没有模型信息，不计价）", confidence: "reported" },
+    skills: { label: "对话中的技能调用记录", confidence: "reported" },
+    reportedCost: false,
+  },
   qclaw: {
     tokens: { label: "sessions.json", confidence: "reported" },
     skills: { label: "会话中读取的 SKILL.md", confidence: "inferred" },
@@ -48,13 +54,48 @@ export const USAGE_SOURCES = {
   },
 };
 
+/** `days` query value: 1–3650, or null for all time ("all" or "0"); anything else is the fallback. */
 export const clampDays = (value, fallback) => {
-  const days = Number.parseInt(String(value ?? ""), 10);
+  const text = String(value ?? "").trim().toLowerCase();
+  if (text === "all" || text === "0") return null;
+  const days = /^\d{1,6}$/u.test(text) ? Number.parseInt(text, 10) : Number.NaN;
   return Number.isFinite(days) ? Math.min(MAX_USAGE_DAYS, Math.max(1, days)) : fallback;
 };
 
-function windowDays(days, now = Date.now()) {
+export const windowLabel = (days) => (days === null ? ALL_TIME_LABEL : `最近 ${days} 天`);
+
+/** The earliest day anything in the index refers to (bounded by MAX_USAGE_DAYS). */
+function earliestDay(index, today, now) {
+  const floor = dayKey(now - (MAX_USAGE_DAYS - 1) * 86_400_000);
+  let earliest = today;
+  const see = (day) => {
+    if (typeof day === "string" && /^\d{4}-\d{2}-\d{2}$/u.test(day) && day < earliest) earliest = day;
+  };
+  for (const entry of Object.values(index.files || {})) {
+    for (const day of Object.keys(entry.d || {})) see(day);
+    for (const byName of [entry.k, entry.ki, entry.kt]) for (const byDay of Object.values(byName || {})) for (const day of Object.keys(byDay)) see(day);
+  }
+  for (const records of Object.values(index.records || {})) for (const record of Object.values(records)) see(record.d);
+  for (const credit of Object.values(index.credits || {})) see(credit.d);
+  for (const skill of Object.values(index.reported?.hermes || {})) for (const day of Object.keys(skill.days || {})) see(day);
+  for (const skill of Object.values(index.reported?.["office-raccoon"] || {})) for (const day of Object.keys(skill.days || {})) see(day);
+  for (const skill of Object.values(index.reported?.workbuddy || {})) for (const day of skill.days || []) see(day);
+  return earliest < floor ? floor : earliest;
+}
+
+/** The days of a window, oldest first; `days === null` is all time (from the earliest indexed day). */
+function windowDays(days, now = Date.now(), index = {}) {
+  const today = dayKey(now);
   const list = [];
+  if (days === null) {
+    const first = earliestDay(index, today, now);
+    for (let offset = 0; offset < MAX_USAGE_DAYS; offset += 1) {
+      const day = dayKey(now - offset * 86_400_000);
+      list.push(day);
+      if (day <= first) break;
+    }
+    return list.reverse();
+  }
   for (let offset = days - 1; offset >= 0; offset -= 1) list.push(dayKey(now - offset * 86_400_000));
   return list;
 }
@@ -137,6 +178,9 @@ function skillsByAgent(index, inWindow) {
   for (const [name, skill] of Object.entries(index.reported?.hermes || {})) {
     for (const [day, amount] of Object.entries(skill.days || {})) add("hermes", name, day, amount, "reported");
   }
+  for (const [name, skill] of Object.entries(index.reported?.["office-raccoon"] || {})) {
+    for (const [day, amount] of Object.entries(skill.days || {})) add("office-raccoon", name, day, amount, "reported");
+  }
   // usage-log.json only says on which days a skill was used: it fills days that the
   // transcripts (possibly deleted since) do not cover, and never adds to counted days.
   for (const [name, skill] of Object.entries(index.reported?.workbuddy || {})) {
@@ -189,7 +233,7 @@ const windowFilter = (dates) => (day) => typeof day === "string" && day >= dates
 
 /** GET /api/usage/summary */
 export function usageSummary(index, { days = 30, now = Date.now() } = {}) {
-  const dates = windowDays(days, now);
+  const dates = windowDays(days, now, index);
   const inWindow = windowFilter(dates);
   const { daily, windowSessions } = dailyByAgent(index, inWindow);
   const skills = skillsByAgent(index, inWindow);
@@ -245,17 +289,26 @@ export function usageSummary(index, { days = 30, now = Date.now() } = {}) {
     .filter((skill) => skill.count > 0 || skill.tokens > 0)
     .sort((left, right) => right.count - left.count || right.tokens - left.tokens || left.name.localeCompare(right.name))
     .slice(0, 50);
-  return { generatedAt: new Date(now).toISOString(), windowDays: days, index: indexStatus(index), cost: sumCosts([...costs.values()]), agents, topSkills };
+  return {
+    generatedAt: new Date(now).toISOString(),
+    windowDays: days,
+    windowLabel: windowLabel(days),
+    index: indexStatus(index),
+    cost: sumCosts([...costs.values()]),
+    agents,
+    topSkills,
+  };
 }
 
 /** GET /api/usage/projects */
 export function usageProjects(index, { days = 30, now = Date.now() } = {}) {
-  const dates = windowDays(days, now);
+  const dates = windowDays(days, now, index);
   const inWindow = windowFilter(dates);
   const costs = costIndex(index, inWindow);
   return {
     generatedAt: new Date(now).toISOString(),
     windowDays: days,
+    windowLabel: windowLabel(days),
     index: indexStatus(index),
     ...projectsAcrossAgents(costProjects(index, inWindow, costs), costs),
   };
@@ -263,13 +316,14 @@ export function usageProjects(index, { days = 30, now = Date.now() } = {}) {
 
 /** GET /api/usage/models */
 export function usageModels(index, { days = 30, now = Date.now() } = {}) {
-  const dates = windowDays(days, now);
+  const dates = windowDays(days, now, index);
   const costs = costIndex(index, windowFilter(dates));
   const models = modelsAcrossAgents(costs);
   const freshness = pricingFreshness(undefined, now);
   return {
     generatedAt: new Date(now).toISOString(),
     windowDays: days,
+    windowLabel: windowLabel(days),
     index: indexStatus(index),
     totals: sumCosts([...costs.values()]),
     models,
@@ -282,7 +336,7 @@ export function usageModels(index, { days = 30, now = Date.now() } = {}) {
 
 /** GET /api/usage/skill */
 export function usageForSkill(index, name, { days = 90, now = Date.now() } = {}) {
-  const dates = windowDays(days, now);
+  const dates = windowDays(days, now, index);
   const inWindow = windowFilter(dates);
   const skills = skillsByAgent(index, inWindow);
   const costs = costIndex(index, inWindow);
@@ -323,12 +377,12 @@ export function usageForSkill(index, name, { days = 90, now = Date.now() } = {})
       });
     }
   }
-  return { name: String(name || ""), windowDays: days, index: indexStatus(index), agents };
+  return { name: String(name || ""), windowDays: days, windowLabel: windowLabel(days), index: indexStatus(index), agents };
 }
 
 /** GET /api/usage/agent */
 export function usageForAgent(index, agentId, { days = 90, now = Date.now() } = {}) {
-  const dates = windowDays(days, now);
+  const dates = windowDays(days, now, index);
   const inWindow = windowFilter(dates);
   const { daily, windowSessions } = dailyByAgent(index, inWindow);
   const byDay = daily.get(agentId) || new Map();
@@ -352,6 +406,7 @@ export function usageForAgent(index, agentId, { days = 90, now = Date.now() } = 
   return {
     agentId,
     windowDays: days,
+    windowLabel: windowLabel(days),
     index: indexStatus(index),
     totals,
     byModel: priced.byModel,

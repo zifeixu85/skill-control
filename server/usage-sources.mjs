@@ -3,6 +3,7 @@ import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { hermesHomeFor } from "./hermes.mjs";
 import { object, readBoundedJson } from "./fs-safe.mjs";
+import { raccoonAppDataDir } from "./office-raccoon.mjs";
 import { openClawAgents, resolveOpenClawInstall } from "./openclaw.mjs";
 import { bucketFor, isIgnoredModel, modelKey } from "./pricing.mjs";
 
@@ -456,6 +457,88 @@ async function openClawSessions(kind, homeDirectory) {
   return found ? records : null;
 }
 
+const RACCOON_PAYLOAD_LIMIT = 2_000_000;
+const RACCOON_MESSAGE_LIMIT = 200_000;
+
+/**
+ * 办公小浣熊 local-chat.sqlite3: per session its workspace folder and days; per assistant
+ * turn `usage_metadata.token_usage` (prompt / completion tokens, calls) and the skills it
+ * invoked. Only those numbers and skill codes are read from each payload; no model is
+ * recorded, so its tokens stay unpriced.
+ */
+async function raccoonSessions(homeDirectory, warnings) {
+  const database = await openDatabase(path.join(raccoonAppDataDir(homeDirectory), "local-chat.sqlite3"));
+  if (!database) return null;
+  try {
+    const sessionColumns = columnsOf(database, "sessions");
+    const messageColumns = columnsOf(database, "messages");
+    if (!sessionColumns.has("id") || !messageColumns.has("payload_json") || !messageColumns.has("session_id")) return null;
+    const pick = (columns, name) => (columns.has(name) ? `"${name}"` : "NULL");
+    const sessions = new Map();
+    for (const row of database
+      .prepare(`SELECT id, ${pick(sessionColumns, "created_at_ms")} AS created, ${pick(sessionColumns, "last_chatted_at_ms")} AS chatted, ${pick(sessionColumns, "updated_at_ms")} AS updated, ${pick(sessionColumns, "workspace_dir")} AS cwd FROM sessions LIMIT 50000`)
+      .all()) {
+      sessions.set(String(row.id), { row, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }, requests: 0 });
+    }
+    const skills = new Map();
+    const statement = database.prepare(
+      `SELECT session_id AS session, ${pick(messageColumns, "created_at_ms")} AS created, payload_json AS payload FROM messages WHERE payload_json LIKE '%usage_metadata%' LIMIT ${RACCOON_MESSAGE_LIMIT}`,
+    );
+    for (const message of statement.iterate()) {
+      if (typeof message.payload !== "string" || message.payload.length > RACCOON_PAYLOAD_LIMIT) continue;
+      let usage;
+      try {
+        usage = object(object(JSON.parse(message.payload)).usage_metadata);
+      } catch {
+        continue;
+      }
+      const session = sessions.get(String(message.session));
+      const tokens = object(usage.token_usage);
+      if (session) {
+        const input = count(tokens.promptTokens);
+        const output = count(tokens.completionTokens);
+        session.tokens.input += input;
+        session.tokens.output += output;
+        session.tokens.total += count(tokens.totalTokens) || input + output;
+        session.requests += count(tokens.calls);
+      }
+      const day = dayKey(Number(message.created));
+      if (!day) continue;
+      const codes = new Set([
+        ...(Array.isArray(usage.used_skill_codes) ? usage.used_skill_codes : []),
+        ...(Array.isArray(usage.skill_invocations) ? usage.skill_invocations.map((item) => object(item).skill_code) : []),
+      ].map(skillName).filter(Boolean));
+      for (const code of codes) {
+        const entry = skills.get(code) || { days: {}, lastUsedAt: null };
+        entry.days[day] = (entry.days[day] || 0) + 1;
+        if (!entry.lastUsedAt || day > entry.lastUsedAt) entry.lastUsedAt = day;
+        skills.set(code, entry);
+      }
+    }
+    const records = [...sessions.entries()].map(([id, session]) => {
+      const startDay = dayKey(Number(session.row.created));
+      const lastDay = dayKey(Number(session.row.chatted || session.row.updated));
+      return {
+        key: hashKey(`office-raccoon:${id}`),
+        day: startDay,
+        endDay: lastDay,
+        at: timeMs(Number(session.row.created)),
+        model: null,
+        requests: session.requests,
+        tokens: session.tokens,
+        costUsd: 0,
+        project: projectName(session.row.cwd),
+      };
+    });
+    return { records, skills: [...skills.entries()].slice(0, 5_000).map(([name, entry]) => ({ name, ...entry })) };
+  } catch {
+    warnings.push("办公小浣熊的对话数据库结构无法识别，已跳过用量统计。");
+    return null;
+  } finally {
+    database.close();
+  }
+}
+
 /** Skill usage the products record themselves (counts and dates only). */
 async function reportedSkills(homeDirectory) {
   const hermes = await readBoundedJson(path.join(hermesHomeFor(homeDirectory), "skills", ".usage.json"), 4_000_000);
@@ -484,12 +567,18 @@ async function reportedSkills(homeDirectory) {
 
 export async function readSnapshots(homeDirectory) {
   const warnings = [];
-  const [hermes, workbuddyCredits, openclaw, qclaw, reported] = await Promise.all([
+  const [hermes, workbuddyCredits, openclaw, qclaw, reported, raccoon] = await Promise.all([
     hermesSessions(homeDirectory, warnings),
     workBuddyCredits(homeDirectory, warnings),
     openClawSessions("openclaw", homeDirectory),
     openClawSessions("qclaw", homeDirectory),
     reportedSkills(homeDirectory),
+    raccoonSessions(homeDirectory, warnings),
   ]);
-  return { sessions: { hermes, openclaw, qclaw }, workbuddyCredits, reported, warnings };
+  return {
+    sessions: { hermes, openclaw, qclaw, "office-raccoon": raccoon?.records || null },
+    workbuddyCredits,
+    reported: { ...reported, "office-raccoon": raccoon?.skills || null },
+    warnings,
+  };
 }

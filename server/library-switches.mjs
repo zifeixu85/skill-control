@@ -3,6 +3,7 @@ import path from "node:path";
 import { parse as parseToml } from "smol-toml";
 import { classifyPath } from "./fs-links.mjs";
 import { object } from "./fs-safe.mjs";
+import { resolveRaccoonInstall } from "./office-raccoon.mjs";
 import { resolveOpenClawInstall } from "./openclaw.mjs";
 
 /**
@@ -89,6 +90,20 @@ export async function disableOps(agent, skill, context) {
       // JSON5 with comments cannot be rewritten without losing them.
       if (!op) return instructions(agent, skill, `配置文件含注释，未自动修改；请把 skills.entries.${skill}.enabled 设为 false。`);
       return op.noop ? null : item([op], `在 openclaw.json 中停用 ${skill}`);
+    }
+    case "office-raccoon": {
+      // The app keeps its switches in config/skill-settings.json { disabledSkillNames }.
+      if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(skill)) return instructions(agent, skill, "技能名称不符合办公小浣熊的命名规则，请在应用里停用。");
+      const install = await resolveRaccoonInstall(context.homeDirectory);
+      const file = path.join(install.configDir, "skill-settings.json");
+      const op = jsonEdit(file, await readText(file), (value) => {
+        const list = Array.isArray(value.disabledSkillNames) ? value.disabledSkillNames : [];
+        if (list.includes(skill)) return null;
+        value.disabledSkillNames = [...list, skill].sort((left, right) => left.localeCompare(right));
+        return `disabledSkillNames: "${skill}"`;
+      }, group, "office-raccoon-skill-settings.json");
+      if (!op) return instructions(agent, skill, "skill-settings.json 无法解析，请在应用的技能设置里停用。");
+      return op.noop ? null : item([op], `在 skill-settings.json 中停用 ${skill}`);
     }
     case "hermes": {
       const hermes = await context.findCommand("hermes");

@@ -33,6 +33,7 @@ export const AGENT_APPS = {
   smartorder: { names: ["订单来了.app"], bundleIds: ["com.ddll.ddlldesk"] },
   kiro: { names: ["Kiro.app"], bundleIds: [] },
   windsurf: { names: ["Windsurf.app"], bundleIds: ["com.exafunction.windsurf"] },
+  "office-raccoon": { names: ["办公小浣熊.app"], bundleIds: ["com.sensetime.desktop.raccoon"] },
 };
 
 export const defaultApplicationDirectories = (homeDirectory = homedir()) => ["/Applications", path.join(homeDirectory, "Applications")];

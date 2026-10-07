@@ -6,6 +6,7 @@ import { createCachedLoader } from "./cached-loader.mjs";
 import { buildHealthReport } from "./health-report.mjs";
 import { readMcpSources } from "./mcp-inventory.mjs";
 import { createUpdateService } from "./update-service.mjs";
+import { createAgentVersionService } from "./agent-versions.mjs";
 import { createUsageService } from "./usage-service.mjs";
 import { publicPriceTable } from "./pricing.mjs";
 import { clampDays, usageForAgent, usageForSkill, usageModels, usageProjects, usageSummary } from "./usage-query.mjs";
@@ -26,6 +27,8 @@ export const INSIGHT_ROUTES = [
   "/api/usage/projects",
   "/api/usage/pricing",
   "/api/usage/status",
+  "/api/agent-versions",
+  "/api/agent-versions/check",
   "/api/health-report",
   "/api/agent-icon",
   "/api/updates",
@@ -74,6 +77,15 @@ const optionalName = (value) => {
  *   json(response, status, body, origin), image(response, asset, origin) }
  */
 export function createInsightRoutes(context) {
+  const versions = createAgentVersionService({
+    homeDirectory: context.homeDirectory,
+    homes: context.homes,
+    stateDirectory: context.stateDirectory,
+    ...(context.applicationDirectories ? { applicationDirectories: context.applicationDirectories } : {}),
+    ...(context.commandDirectories ? { searchDirectories: context.commandDirectories } : {}),
+    offline: Boolean(context.updatesOffline),
+    ...(context.updatesOffline ? { fetchImpl: offlineFetch } : {}),
+  });
   const usage = createUsageService({
     homeDirectory: context.homeDirectory,
     indexPath: path.join(context.stateDirectory, "usage-index.json"),
@@ -162,6 +174,9 @@ export function createInsightRoutes(context) {
     async "/api/usage/pricing"() {
       return publicPriceTable();
     },
+    async "/api/agent-versions"() {
+      return versions.view();
+    },
     async "/api/usage/status"() {
       usage.ensureFresh();
       return usage.status();
@@ -191,6 +206,10 @@ export function createInsightRoutes(context) {
       if (typeof body.unitKey !== "string" || !body.unitKey) throw new RouteError(400, "缺少更新单元。");
       const choice = ["keep-local", "overwrite", "save-as"].includes(body.choice) ? body.choice : null;
       return updates.plan({ unitKey: body.unitKey, choice });
+    },
+    // Read-only network (official registries and feeds): a plain POST with the origin checks.
+    async "/api/agent-versions/check"() {
+      return versions.check();
     },
     async "/api/updates/apply"(body, request) {
       // Same confirmation model as sync: header + explicit confirm, plan id from this process.
@@ -227,5 +246,5 @@ export function createInsightRoutes(context) {
     return true;
   }
 
-  return { handle, usage, updates };
+  return { handle, usage, updates, versions };
 }

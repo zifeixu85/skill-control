@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { compileTable } from "../server/pricing.mjs";
 import { priceRows } from "../server/usage-cost.mjs";
-import { loadUsageIndex, runUsageIndex } from "../server/usage-index.mjs";
+import { loadUsageIndex, runUsageIndex, USAGE_INDEX_VERSION } from "../server/usage-index.mjs";
 import { costIndex } from "../server/usage-cost.mjs";
 import { agentProjects, costProjects } from "../server/usage-projects.mjs";
 import { usageForAgent, usageForSkill, usageModels, usageProjects, usageSummary } from "../server/usage-query.mjs";
@@ -105,7 +105,7 @@ const buckets = (entry, model) => Object.values(entry.m[model]).flatMap((byBucke
 
 test("the index keeps tokens per model, day and price bucket", async (context) => {
   const { index } = await setup(context);
-  assert.equal(index.version, 2);
+  assert.equal(index.version, USAGE_INDEX_VERSION);
   const claude = fileOf(index, "claude");
   assert.deepEqual(buckets(claude, "claude-opus-5-5"), [["s:fast", [1_000, 2_000, 10_000, 1_000, 2_000, 1]]]);
   assert.deepEqual(buckets(claude, "claude-sonnet-5-5"), [["l272", [100, 100, 298_900, 1_000, 0, 1]]]);
@@ -181,7 +181,7 @@ test("costs: official prices per rule, agent averages, families, reported figure
 test("GET /api/usage/models shape: one row per model and basis, with the agents that used it", async (context) => {
   const { index } = await setup(context);
   const result = usageModels(index, { days: 30 });
-  assert.deepEqual(Object.keys(result).sort(), ["generatedAt", "index", "models", "pricingStale", "pricingTable", "totals", "unpriced", "windowDays"]);
+  assert.deepEqual(Object.keys(result).sort(), ["generatedAt", "index", "models", "pricingStale", "pricingTable", "totals", "unpriced", "windowDays", "windowLabel"]);
   assert.deepEqual(Object.keys(result.pricingTable).sort(), ["ageDays", "checkedAt", "reviewAfterDays", "stale"]);
   assert.deepEqual(result.unpriced, ["mystery-model"]);
   const deepseek = result.models.find((row) => row.model === "deepseek-v4-pro");
@@ -207,7 +207,7 @@ test("project costs: priced like the agent totals, unnamed sessions included, to
   assert.deepEqual(claude.topModels.map((model) => model.model), ["claude-opus-5-5", "claude-sonnet-5-5"]);
 
   const result = usageProjects(index, { days: 30 });
-  assert.deepEqual(Object.keys(result).sort(), ["generatedAt", "index", "other", "projects", "totals", "windowDays"]);
+  assert.deepEqual(Object.keys(result).sort(), ["generatedAt", "index", "other", "projects", "totals", "windowDays", "windowLabel"]);
   // WorkBuddy's DeepSeek and "auto" tokens make the unnamed project the most expensive one.
   assert.deepEqual(result.projects.map((project) => project.name), [null, "priced"]);
   const priced = result.projects[1];

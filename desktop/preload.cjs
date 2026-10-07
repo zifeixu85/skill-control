@@ -26,6 +26,11 @@ const desktopApi = Object.freeze({
   apiBase,
   getRuntimeInfo: () => ipcRenderer.invoke("desktop:get-runtime-info"),
   openExternal: (url) => ipcRenderer.invoke("desktop:open-external", url),
+  // Resolves true when the text was copied (packaged apps cannot use navigator.clipboard).
+  copyText: (text) =>
+    typeof text === "string"
+      ? ipcRenderer.invoke("desktop:copy-text", text).then(Boolean, () => false)
+      : Promise.resolve(false),
 });
 
 contextBridge.exposeInMainWorld("skillManagerDesktop", desktopApi);

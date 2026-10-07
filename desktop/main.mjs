@@ -1,8 +1,10 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { copyTextAllowed } from "./copy-text.mjs";
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -248,6 +250,15 @@ function installIpcHandlers() {
     const url = new URL(rawUrl);
     if (url.protocol !== "https:") return false;
     await shell.openExternal(url.toString());
+    return true;
+  });
+
+  // Packaged apps deny navigator.clipboard (the permission check handler returns false),
+  // so copying goes through the main process: plain text only, at most 1 MB, and only
+  // from the top frame of our own window.
+  ipcMain.handle("desktop:copy-text", (event, text) => {
+    if (!copyTextAllowed(event, mainWindow, text)) return false;
+    clipboard.writeText(text);
     return true;
   });
 }
