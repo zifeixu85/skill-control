@@ -13,6 +13,8 @@ import { AgentAvatar, ExpertAvatar } from "../ui/Avatar";
 import { Loading, SectionHeading, TopBar } from "../ui/basics";
 import { AgentCard } from "./home/AgentCard";
 import { AgentUpdatesHint } from "./home/AgentUpdatesHint";
+import { NewAgentsNotice } from "./home/NewAgentsNotice";
+import { TotalsStrip } from "./usage/TotalsStrip";
 import { HomeNotes } from "./home/HomeNotes";
 
 export function RescanButton() {
@@ -145,6 +147,8 @@ export function HomePage() {
           </div>
         ) : (
           <>
+            <TotalsStrip />
+            <NewAgentsNotice />
             <div className="agents-grid">
               {primary.map((id) => (
                 <AgentCard key={id} agentId={id} />

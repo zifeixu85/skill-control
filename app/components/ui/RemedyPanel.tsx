@@ -3,7 +3,7 @@
 import { usePersistent } from "../../hooks/usePersistent";
 import { COPIED_FOR_AI, COPY_FAILED, copyText } from "../../lib/clipboard";
 import { remedyModes, remedyModeStore, REMEDY_MODE_LABELS, remedyText, resolveMode, type Remedy, type RemedyMode } from "../../lib/remedy";
-import { CopiesIcon, SparkIcon } from "../icons";
+import { ChevronIcon, CopiesIcon, SparkIcon } from "../icons";
 import { useToast } from "../providers/ToastProvider";
 import { Segmented } from "./basics";
 import { CodeView } from "./CodeView";
@@ -34,23 +34,58 @@ export function RemedyPanel({ remedy, label, id }: { remedy: Remedy; label: stri
         )}
         <button type="button" className="btn sm primary" onClick={() => void copy(text, mode)}>
           <CopiesIcon />
-          {mode === "ai" ? "复制给 AI" : "复制命令"}
+          {mode === "ai" ? "复制 AI 指令" : "复制命令"}
         </button>
       </div>
       <p className="muted small">
-        {mode === "ai" ? "复制后粘贴给你常用的 AI（如 Codex、Claude Code），它会按说明检查并修好。" : "在终端里运行下面的命令。"}
+        {mode === "ai" ? "只复制，不改任何东西：粘贴给你常用的 AI（如 Codex、Claude Code），它会按说明检查并修好。" : "只复制，不会替你运行：在终端里运行下面的命令。"}
       </p>
       <CodeView text={text} language="text" wrap label={mode === "ai" ? "AI 指令" : "终端命令"} />
     </div>
   );
 }
 
-/** "让 AI 修复": opens the row's 修复方式 below it (the row keeps the open state). */
+/** Shown next to fix buttons so nobody has to guess what a click does. */
+export const ACTION_NOTES = {
+  copy: "只复制给 AI，不改任何东西",
+  preview: "先列出要改的文件和内容，确认后才执行，可以从历史撤销",
+} as const;
+
+/**
+ * Row-level fix entries: "复制 AI 指令" copies at once (nothing changes); "查看指令" opens the
+ * 修复方式 panel below the row (AI / terminal tabs). One caption says what the copy does.
+ */
+export function RemedyActions({ remedy, open, onToggle, controls }: { remedy: Remedy; open: boolean; onToggle: () => void; controls: string }) {
+  const copy = useCopyRemedy();
+  return (
+    <>
+      {remedy.prompt ? (
+        <button type="button" className="btn sm" title={ACTION_NOTES.copy} onClick={() => void copy(remedy.prompt, "ai")}>
+          <SparkIcon />
+          复制 AI 指令
+        </button>
+      ) : null}
+      <button
+        type="button"
+        className={`btn sm ghost ${open ? "on" : ""}`}
+        aria-expanded={open}
+        aria-controls={controls}
+        title={remedy.commands.length ? "查看 AI 指令和终端命令" : "查看 AI 指令"}
+        onClick={onToggle}
+      >
+        {open ? "收起" : "查看"}
+        <ChevronIcon className={`chev ${open ? "open" : ""}`} aria-hidden="true" />
+      </button>
+    </>
+  );
+}
+
+/** Kept for rows that only toggle the panel. */
 export function RemedyButton({ open, onToggle, controls }: { open: boolean; onToggle: () => void; controls: string }) {
   return (
     <button type="button" className={`btn sm ${open ? "on" : ""}`} aria-expanded={open} aria-controls={controls} onClick={onToggle}>
       <SparkIcon />
-      {open ? "收起" : "让 AI 修复"}
+      {open ? "收起指令" : "查看 AI 指令"}
     </button>
   );
 }

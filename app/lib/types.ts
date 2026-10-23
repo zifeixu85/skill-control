@@ -34,6 +34,8 @@ export interface ScanAgent {
   productVersion?: string | null;
   /** Newer services: only request /api/agent-icon when true. */
   iconAvailable?: boolean;
+  /** Detected but not yet in knownAgentIds (v0.2). */
+  isNew?: boolean;
 }
 
 export interface InstanceUsage {
@@ -116,6 +118,12 @@ export interface Skill {
   behind?: string[];
   diverged?: boolean;
   instances: SkillInstance[];
+  /** Sort fields (v0.2): earliest copy, latest change, last use by any Agent, uses. */
+  installedAt?: string | null;
+  updatedAt?: string | null;
+  lastUsedAt?: string | null;
+  uses30d?: number | null;
+  usesAll?: number | null;
 }
 
 export interface ActivityAgent {
@@ -207,6 +215,10 @@ export interface ManagerConfig {
   dismissedAgentIds: string[];
   /** False until the user first changes which Agents are visible (all detected ones show). */
   visibleCustomized?: boolean;
+  /** Agents the user has seen; others are marked isNew (v0.2). */
+  knownAgentIds?: string[];
+  /** Discovery candidates the user chose to ignore (ids or paths). */
+  ignoredDiscoveries?: string[];
 }
 
 export interface PluginApp {
@@ -253,6 +265,9 @@ export interface Plugin {
   composerIcon: string | null;
   installedAt?: string;
   lastUpdated?: string;
+  updatedAt?: string | null;
+  lastUsedAt?: string | null;
+  uses?: number | null;
 }
 
 export interface Connector {
@@ -265,6 +280,14 @@ export interface Connector {
   providedByPlugins: string[];
   source?: string;
   cachedAt?: string;
+  /** Newer services: whether the account link is authorized. */
+  authStatus?: string | null;
+  authorized?: boolean | null;
+  /** v0.2: providing plugins, icon, auth status and tools with descriptions. */
+  providers?: { id: string; name: string }[];
+  iconAssetId?: string | null;
+  auth?: { status: string; basis?: string | null } | null;
+  tools?: { name: string; description?: string | null; readOnly?: boolean | null }[];
 }
 
 export interface McpServer {
@@ -279,6 +302,8 @@ export interface McpServer {
   secretFields: string[];
   likelySecretFields: string[];
   source: string;
+  /** Config file modification time (v0.2). */
+  updatedAt?: string | null;
 }
 
 export interface McpMatrixRow {
@@ -365,6 +390,9 @@ export interface Capability {
   maxTurns?: number | null;
   cronJobs?: number;
   plugins?: string[];
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  lastUsedAt?: string | null;
 }
 
 export interface CapabilityProduct {

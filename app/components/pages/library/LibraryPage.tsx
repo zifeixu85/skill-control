@@ -4,7 +4,9 @@ import { isUnsupported, useResource } from "../../../hooks/useResource";
 import { usePageMemory, useReturnHighlight } from "../../../hooks/usePageMemory";
 import { useScrollMemory } from "../../../hooks/useScrollMemory";
 import { api, errorMessage } from "../../../lib/api";
-import type { LibraryIssue } from "../../../lib/library";
+import type { LibraryEntry, LibraryIssue } from "../../../lib/library";
+import type { SortFields, SortKey } from "../../../lib/sort";
+import { SortControl, useSortedList } from "../../ui/SortControl";
 import { scopeForIssue } from "../../../lib/library-review";
 import { CheckIcon, WarnIcon } from "../../icons";
 import { EmptyState, Loading, SectionHeading, TopBar } from "../../ui/basics";
@@ -17,6 +19,9 @@ import type { PlanRequest } from "./PlanReview";
 export const LIBRARY_KEY = "library";
 
 const BATCH: PlanRequest = { action: "batch", title: "一键整理技能库" };
+const entryFields = (entry: LibraryEntry): SortFields => ({ name: entry.name, installedAt: entry.installedAt });
+const ENTRY_SORTS: SortKey[] = ["installed", "name"];
+const NO_ENTRIES: LibraryEntry[] = [];
 
 export function LibraryPage() {
   const library = useResource(LIBRARY_KEY, () => api.library());
@@ -32,6 +37,7 @@ export function LibraryPage() {
   const [allAgents, setAllAgents] = usePageMemory<boolean>("library:all-agents", false);
   const data = library.data;
   useReturnHighlight("library", Boolean(data));
+  const { sorted: entries, key: sortKey, options: sortOptions, setKey: setSortKey } = useSortedList("library", data?.entries || NO_ENTRIES, entryFields, ENTRY_SORTS);
   const shownAgents = data ? data.agents.filter((agent) => allAgents || !agent.collapsed) : [];
   const hiddenAgents = data ? data.agents.filter((agent) => agent.collapsed).length : 0;
 
@@ -101,8 +107,12 @@ export function LibraryPage() {
             ) : (
               <p className="muted small">每个常用 Agent 都能看到技能库里的技能。</p>
             )}
-            <SectionHeading title="库里的技能" note="圆点 = 这个 Agent 能否看到；把鼠标放上去看原因" />
-            {data.entries.length ? <EntriesTable entries={data.entries} agents={shownAgents} /> : <p className="muted small">技能库里还没有技能。</p>}
+            <SectionHeading
+              title="库里的技能"
+              note="圆点 = 这个 Agent 能否看到；把鼠标放上去看原因"
+              action={<SortControl value={sortKey} options={sortOptions} onChange={setSortKey} />}
+            />
+            {entries.length ? <EntriesTable entries={entries} agents={shownAgents} /> : <p className="muted small">技能库里还没有技能。</p>}
             <div className="legend lib-legend">
               <span><i className="vis visible" />可见</span>
               <span><i className="vis hidden" />被产品隐藏</span>

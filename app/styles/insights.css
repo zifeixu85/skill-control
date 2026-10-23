@@ -2,7 +2,7 @@
 
 .ugrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(380px, 100%), 1fr));
+  /* columns: layout.css (one rule for every card grid) */
   gap: 14px;
 }
 .ucard {
@@ -109,7 +109,7 @@
 }
 .usage-columns {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
+  /* columns: layout.css (one rule for every card grid) */
   gap: 22px;
   margin-top: 18px;
 }
@@ -456,7 +456,8 @@
   margin-bottom: 12px;
 }
 
-@media (max-width: 880px) {
+/* Content width, not the window: the page is the container (layout-rules.md). */
+@container page (max-width: 640px) {
   .ugrid {
     grid-template-columns: 1fr;
   }

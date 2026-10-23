@@ -5,12 +5,14 @@ import { useScrollMemory } from "../../../hooks/useScrollMemory";
 import { MAX_PRIMARY_AGENTS } from "../../../lib/agents";
 import { errorMessage } from "../../../lib/api";
 import { joinNames } from "../../../lib/format";
+import type { ScanAgent } from "../../../lib/types";
 import { useData } from "../../providers/DataProvider";
 import { useNav } from "../../providers/NavProvider";
 import { useToast } from "../../providers/ToastProvider";
 import { AgentAvatar } from "../../ui/Avatar";
 import { EmptyState, Loading, Tabs, TopBar } from "../../ui/basics";
 import { activityLine } from "../home/AgentCard";
+import { useAcknowledge } from "../home/NewAgentsNotice";
 import { AgentFiles } from "./AgentFiles";
 import { AgentOverview } from "./AgentOverview";
 import { AgentTools } from "./AgentTools";
@@ -115,6 +117,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
           <>
             <span id="page-title">{agent.name}</span>
             {isPrimary ? <span className="tag">常用</span> : <span className="tag mute">非常用</span>}
+            {agent.isNew ? <span className="tag info">新发现</span> : null}
             {agent.refuseInstall ? <span className="tag info">只读</span> : null}
           </>
         }
@@ -128,6 +131,7 @@ export function AgentPage({ agentId }: { agentId: string }) {
         </button>
       </TopBar>
       <div className="scroll" ref={scrollRef}>
+        {agent.isNew ? <NewAgentBanner agent={agent} /> : null}
         {AGENT_NOTES[agent.id] || agent.refuseInstall ? (
           <p className="safe-note info">{agent.refuseInstall || AGENT_NOTES[agent.id]}</p>
         ) : null}
@@ -140,5 +144,52 @@ export function AgentPage({ agentId }: { agentId: string }) {
         </div>
       </div>
     </section>
+  );
+}
+
+/** A newly detected Agent: make it 常用, or just mark it as seen. */
+function NewAgentBanner({ agent }: { agent: ScanAgent }) {
+  const { primary, updateConfig } = useData();
+  const acknowledge = useAcknowledge();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const run = async (label: string, task: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await task();
+      toast.show(label);
+    } catch (error) {
+      toast.show(errorMessage(error, "保存失败。"), { tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const full = primary.length >= MAX_PRIMARY_AGENTS;
+  return (
+    <div className="notice-card inline" role="status">
+      <div>
+        <b>新发现的 Agent</b>
+        <span>Skill Control 第一次检测到 {agent.name}。设为常用后会按它检查差异和多份副本；只想看看就标为已知，以后不再提示。</span>
+      </div>
+      <div className="it-acts">
+        <button
+          type="button"
+          className="btn sm primary"
+          disabled={busy || full}
+          title={full ? `最多 ${MAX_PRIMARY_AGENTS} 个常用 Agent，先在设置里取消一个` : undefined}
+          onClick={() =>
+            void run(`已把 ${agent.name} 设为常用`, async () => {
+              await updateConfig({ primaryAgentIds: [...primary, agent.id] });
+              await acknowledge([agent.id]);
+            })
+          }
+        >
+          设为常用
+        </button>
+        <button type="button" className="btn sm" disabled={busy} onClick={() => void run(`已把 ${agent.name} 标为已知`, () => acknowledge([agent.id]))}>
+          标为已知
+        </button>
+      </div>
+    </div>
   );
 }

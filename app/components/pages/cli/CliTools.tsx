@@ -1,159 +1,152 @@
 "use client";
 
+import { useMemo, useState } from "react";
+import { usePersistent } from "../../../hooks/usePersistent";
 import { isUnsupported, useResource } from "../../../hooks/useResource";
 import { api, errorMessage } from "../../../lib/api";
-import { agentChecks, BINARY_KIND_LABELS, CHECK_COLUMNS, type CliTool } from "../../../lib/cli-tools";
+import { OWNER_LABELS, type CliTool } from "../../../lib/cli-tools";
+import type { SortFields, SortKey } from "../../../lib/sort";
+import { persistentStore } from "../../../lib/storage";
+import { SearchIcon } from "../../icons";
 import { useData } from "../../providers/DataProvider";
+import { useNav } from "../../providers/NavProvider";
 import { AgentAvatar } from "../../ui/Avatar";
-import { EmptyState, Loading } from "../../ui/basics";
-import { ItemText } from "../../ui/Item";
-import { CliFixCard } from "./CliFixCard";
+import { EmptyState, Loading, Segmented } from "../../ui/basics";
+import { SortControl, useSortedList } from "../../ui/SortControl";
 
-function Why() {
-  return (
-    <div className="why">
-      <b>为什么“装一次就能用”有时不灵？</b>
-      <ul>
-        <li>
-          <b>找不到命令</b>：从程序坞打开的 Agent 不读你的终端配置（.zshrc、nvm），PATH 和终端里不一样。
-        </li>
-        <li>
-          <b>工作区是分开的</b>：Hermes、OpenClaw 用自己的 lark-cli 配置，在终端里登录过不代表它们也登录了。
-        </li>
-        <li>
-          <b>沙箱</b>：Codex 默认在沙箱里运行，读不到钥匙串里的凭据，也不能随便联网。
-        </li>
-        <li>
-          <b>规则</b>：没有放行规则时，Agent 每次运行命令都要先问你。
-        </li>
-      </ul>
-    </div>
-  );
+export const CLI_KEY = "cli-tools";
+export const loadCliTools = () => api.cliTools();
+
+type Scope = "ai" | "all";
+const scopeStore = persistentStore<Scope>("cli-scope", "ai", (value) => value === "ai" || value === "all");
+const cliFields = (tool: CliTool): SortFields => ({ name: tool.name, uses: tool.referencedCount, installedAt: tool.mtime });
+const CLI_SORTS: SortKey[] = ["uses", "installed", "name"];
+const CLI_SORT_LABELS: Partial<Record<SortKey, string>> = { uses: "被技能引用最多", installed: "最近安装" };
+const NO_TOOLS: CliTool[] = [];
+
+/** "npm 全局包 · @larksuite/cli 1.0.97" */
+export function ownerText(tool: CliTool): string | null {
+  if (!tool.owner) return tool.binaries[0]?.version ? `版本 ${tool.binaries[0].version}` : null;
+  const name = [tool.owner.name, tool.owner.version].filter(Boolean).join(" ");
+  return [OWNER_LABELS[tool.owner.type], name].filter(Boolean).join(" · ");
 }
 
-/** One row per Agent, one aligned column per check; the full sentence is in each cell's tooltip. */
-function AgentChecksTable({ tool }: { tool: CliTool }) {
+function matches(tool: CliTool, query: string): boolean {
+  if (!query) return true;
+  const text = [tool.name, tool.description, tool.path, tool.owner?.name, ...tool.referencedBySkills].filter(Boolean).join(" ").toLowerCase();
+  return query
+    .toLowerCase()
+    .split(/\s+/u)
+    .filter(Boolean)
+    .every((word) => text.includes(word));
+}
+
+/** Per-Agent availability as small avatars with a status dot. */
+export function Availability({ tool }: { tool: CliTool }) {
   const { agentName } = useData();
-  const rows = tool.agents.map((row) => ({ row, checks: agentChecks(row, tool.latest) }));
-  const columns = CHECK_COLUMNS.filter((column) => rows.some((item) => item.checks.some((check) => check.key === column.key)));
-  const name = (row: CliTool["agents"][number]) => (agentName(row.agentId) === row.agentId && row.agentName ? row.agentName : agentName(row.agentId));
+  if (!tool.availability.length) return null;
   return (
-    <div className="matrix checks-table">
-      <table>
-        <caption className="sr-only">{tool.name} 在各 Agent 里的情况</caption>
-        <thead>
-          <tr>
-            <th scope="col">Agent</th>
-            {columns.map((column) => (
-              <th scope="col" key={column.key}>
-                {column.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(({ row, checks }) => {
-            const command = checks.find((check) => check.key === "command");
-            return (
-              <tr key={row.agentId}>
-                <th scope="row" className="cell-main">
-                  <span className="cell-lead">
-                    <AgentAvatar id={row.agentId} size="sm" />
-                    <ItemText
-                      title={name(row)}
-                      meta={row.resolves ? row.resolves.path : `PATH 来自 ${row.pathSource || "未知来源"}`}
-                      titleText={name(row)}
-                      mono={Boolean(row.resolves)}
-                    />
-                  </span>
-                </th>
-                {columns.map((column) => {
-                  const check = column.key === "command" ? command : checks.find((item) => item.key === column.key);
-                  return (
-                    <td key={column.key}>
-                      {check ? (
-                        <span className={`cstate ${check.state}`} title={`${check.label}：${check.detail}`}>
-                          <i aria-hidden="true" />
-                          {check.short}
-                        </span>
-                      ) : (
-                        <span className="none">—</span>
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+    <span className="avail-row" aria-label={tool.availability.map((entry) => `${agentName(entry.agentId)}${entry.available === true ? "能用" : entry.available === false ? "找不到" : "未知"}`).join("，")}>
+      {tool.availability.map((entry) => (
+        <span
+          key={entry.agentId}
+          className={`avail ${entry.available === true ? "ok" : entry.available === false ? "bad" : "na"}`}
+          title={`${agentName(entry.agentId)}：${entry.available === true ? "能用" : entry.available === false ? "找不到这个命令" : "不确定"}${entry.allowed === false ? "，没有放行规则（每次运行都要先问你）" : entry.allowed === true ? "，已放行" : ""}${entry.detail ? `（${entry.detail}）` : ""}`}
+        >
+          <AgentAvatar id={entry.agentId} size="xs" />
+          <i aria-hidden="true" />
+        </span>
+      ))}
+    </span>
   );
 }
 
-function ToolCard({ tool }: { tool: CliTool }) {
-  const skewed = tool.binaries.filter((binary) => tool.latest && binary.version && binary.version !== tool.latest);
+function ToolRow({ tool }: { tool: CliTool }) {
+  const { openDrawer } = useNav();
+  const owner = ownerText(tool);
+  const second = [tool.description, tool.path].filter(Boolean);
   return (
-    <article className="tool-card">
-      <header>
-        <h3>{tool.name}</h3>
-        {tool.latest ? <span className="tag mute">最新 {tool.latest}</span> : null}
-        {tool.versionSkew || skewed.length ? (
-          <span className="tag warn">
-            版本不一致{skewed.length ? `：${skewed.map((binary) => `${BINARY_KIND_LABELS[binary.kind] || binary.kind} ${binary.version}`).join("、")}` : ""}
+    <button type="button" className="cli-row" data-detail-trigger="" data-memory-id={tool.id} onClick={() => openDrawer({ kind: "cli", id: tool.id })}>
+      <span className="cli-main">
+        <span className="cli-line1">
+          <b className="mono clamp-1">{tool.name}</b>
+          {owner ? <span className="cli-owner clamp-1">{owner}</span> : null}
+          {tool.deep ? <span className="tag info">逐个 Agent 检查</span> : null}
+        </span>
+        {second.length ? (
+          <span className="cli-line2 clamp-1" title={second.join(" · ")}>
+            {tool.description ? <span>{tool.description}</span> : null}
+            {tool.description && tool.path ? <span className="sep">·</span> : null}
+            {tool.path ? <code>{tool.path}</code> : null}
           </span>
         ) : null}
-      </header>
-      {tool.binaries.length ? (
-        <section>
-          <h4 className="mini-h">本机上的程序</h4>
-          <div className="copies">
-            {tool.binaries.map((binary) => (
-              <div key={binary.path}>
-                <code title={binary.target || binary.path}>{binary.path}</code>
-                <em>{BINARY_KIND_LABELS[binary.kind] || binary.kind}{binary.via === "nvm" ? " · nvm" : ""}</em>
-                <em>{binary.version || "版本未知"}</em>
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : (
-        <p className="muted small">没有在常见位置找到这个程序。</p>
-      )}
-      {tool.agents.length ? (
-        <section>
-          <h4 className="mini-h">各 Agent 用起来怎么样</h4>
-          <AgentChecksTable tool={tool} />
-        </section>
-      ) : null}
-      {tool.fixes.length ? (
-        <section>
-          <h4 className="mini-h">可以这样修</h4>
-          <div className="fix-grid">
-            {tool.fixes.map((fix) => (
-              <CliFixCard key={fix.id} toolId={tool.id} fix={fix} agentIds={tool.agents.map((row) => row.agentId)} />
-            ))}
-          </div>
-        </section>
-      ) : null}
-    </article>
+      </span>
+      <span className="cli-side">
+        {tool.referencedCount ? <span className="tag">被 {tool.referencedCount} 个技能使用</span> : null}
+        <Availability tool={tool} />
+      </span>
+    </button>
   );
 }
 
+/** 命令行工具: every tool detected on this Mac, AI-related ones first; a row opens its detail. */
 export function CliTools() {
-  const tools = useResource("cli-tools", () => api.cliTools());
+  const tools = useResource(CLI_KEY, loadCliTools);
+  const [scope, setScope] = usePersistent(scopeStore);
+  const [query, setQuery] = useState("");
+  const all = tools.data?.tools || NO_TOOLS;
+  const scoped = useMemo(() => (scope === "ai" ? all.filter((tool) => tool.aiRelated) : all), [all, scope]);
+  const filtered = useMemo(() => scoped.filter((tool) => matches(tool, query.trim())), [scoped, query]);
+  const { sorted, key, options, setKey } = useSortedList("cli-tools", filtered, cliFields, CLI_SORTS);
   if (isUnsupported(tools.error)) {
-    return <EmptyState title="本地服务还没有提供命令行工具检查">更新 Skill Control 后可以看到 lark-cli 等工具在各 Agent 里能不能用。</EmptyState>;
+    return <EmptyState title="本地服务还没有提供命令行工具检查">更新 Skill Control 后可以看到本机的命令行工具在各 Agent 里能不能用。</EmptyState>;
   }
   if (tools.status === "error" && !tools.data) return <EmptyState tone="error" title="检查失败">{errorMessage(tools.error)}</EmptyState>;
   if (!tools.data) return <Loading label="正在检查命令行工具…" rows={5} />;
+  const aiCount = tools.data.summary.aiRelated;
   return (
     <div className="stack">
-      <Why />
-      {tools.data.map((tool) => (
-        <ToolCard key={tool.id} tool={tool} />
-      ))}
-      <p className="footnote">只读取版本号和配置文件是否存在，不运行这些命令，也不读取任何密钥。</p>
+      <div className="list-tools" role="toolbar" aria-label="筛选命令行工具">
+        <label className="search">
+          <SearchIcon />
+          <input type="search" placeholder="搜索名称、介绍或路径" aria-label="搜索命令行工具" value={query} onChange={(event) => setQuery(event.target.value)} />
+        </label>
+        <Segmented
+          label="范围"
+          value={scope}
+          onChange={setScope}
+          items={[
+            { id: "ai", label: "AI 相关", count: aiCount },
+            { id: "all", label: "全部", count: tools.data.summary.total },
+          ]}
+        />
+        <SortControl value={key} options={options} onChange={setKey} labels={CLI_SORT_LABELS} />
+      </div>
+      {!all.length ? (
+        <EmptyState title="没有找到命令行工具">在 ~/.local/bin、npm 全局目录、uv 工具目录和应用里都没有找到。</EmptyState>
+      ) : !sorted.length ? (
+        <EmptyState
+          title={query ? `没有匹配“${query}”的工具` : "没有 AI 相关的命令行工具"}
+          action={
+            query ? (
+              <button type="button" className="btn" onClick={() => setQuery("")}>
+                清空搜索
+              </button>
+            ) : scope === "ai" ? (
+              <button type="button" className="btn" onClick={() => setScope("all")}>
+                显示全部 {all.length} 个
+              </button>
+            ) : null
+          }
+        />
+      ) : (
+        <div className="cli-list">
+          {sorted.map((tool) => (
+            <ToolRow key={tool.id} tool={tool} />
+          ))}
+        </div>
+      )}
+      <p className="footnote">只读取文件信息、版本号和配置是否存在，不运行这些命令，也不读取任何密钥。点开一行查看各 Agent 能不能用，以及可以怎么修。</p>
     </div>
   );
 }

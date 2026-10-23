@@ -1,3 +1,4 @@
+import type { SortFields } from "./sort";
 import { agentMeta } from "./agents";
 import { baseName } from "./format";
 import type { Plugin, ScanAgent, Skill, SkillInstance } from "./types";
@@ -235,6 +236,23 @@ export function filterChips(views: SkillView[], primary: string[], names: Record
   chips.push({ id: "multi", label: "存了多份", count: count("multi") });
   chips.push({ id: "differs", label: "版本不同", count: count("differs") });
   return chips;
+}
+
+/** §3 sort fields; service fields first, local fallbacks where they are honest. */
+export function skillSortFields(view: SkillView): SortFields {
+  const skill = view.skill;
+  const lastUse = skill.instances
+    .map((instance) => instance.usage?.lastUsedAt || "")
+    .filter(Boolean)
+    .sort()
+    .pop();
+  return {
+    name: view.title,
+    uses: skill.uses30d ?? view.usageTotal,
+    lastUsedAt: skill.lastUsedAt || lastUse || null,
+    installedAt: skill.installedAt || null,
+    updatedAt: skill.updatedAt || skill.modifiedAt || null,
+  };
 }
 
 export function sortViews(views: SkillView[]): SkillView[] {

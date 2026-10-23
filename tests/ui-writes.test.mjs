@@ -17,6 +17,7 @@ const WRITE_ARGS = {
   applyUninstall: ["plan-1"],
   restoreTrash: ["trash-1"],
   cliApply: ["plan-1"],
+  applyAgentUpdate: ["plan-1"],
 };
 const PLAN_ARGS = {
   planSync: [{ sourceInstanceId: "s", targetAgentIds: ["codex"], mode: "copy" }],
@@ -26,6 +27,7 @@ const PLAN_ARGS = {
   planRestore: ["h1", ["u1"]],
   planUninstall: ["skill", "codex"],
   cliPlan: ["lark-cli", "wrapper"],
+  planAgentUpdate: ["codex"],
 };
 const isWrite = (name) => /^(execute|apply|restore)|Apply$/.test(name);
 const isPlan = (name) => /^plan|Plan$/.test(name);

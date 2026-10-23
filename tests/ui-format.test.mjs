@@ -28,7 +28,7 @@ test("formatting: compact Chinese numbers, bytes, money and dates", () => {
   assert.equal(format.formatRelative("2026-10-01T12:00:00Z", now), "3 天前");
   assert.equal(format.formatRelative(null, now), "未知");
   assert.match(format.formatMonthDay("2025-03-05T12:00:00Z", now), /^2025年3月\d+日$/);
-  assert.equal(format.shortTitle("ameng-ppt-design — 有设计主见的 HTML 演示生成器"), "ameng-ppt-design");
+  assert.equal(format.shortTitle("demo-slide-maker — 有设计主见的 HTML 演示生成器"), "demo-slide-maker");
   assert.equal(format.baseName("~/.claude/skills/demo/"), "demo");
 });
 

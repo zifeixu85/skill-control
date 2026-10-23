@@ -15,6 +15,8 @@ import "./styles/updates.css";
 import "./styles/library.css";
 import "./styles/content.css";
 import "./styles/assist.css";
+import "./styles/features.css";
+import "./styles/layout.css";
 
 export const metadata: Metadata = {
   title: "Skill Control — 本地技能管理器",

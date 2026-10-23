@@ -1,0 +1,99 @@
+/*
+ * Responsive rules (see layout-rules.md). Every card grid uses
+ * repeat(auto-fill, minmax(min(W, 100%), 1fr)) with W set per card type below, so cards keep
+ * one size per type and never overflow a narrow column.
+ */
+
+:root {
+  --w-tile: 180px; /* small tiles: connector tiles, Agent checkboxes, summary cards */
+  --w-option: 220px; /* radio / option cards */
+  --w-pick: 250px; /* 常用 Agent picker cards */
+  --w-card: 260px; /* plugin, expert, library Agent and fix cards */
+  --w-agent: 300px; /* 首页 Agent cards */
+  --w-panel: 320px; /* paired panels: 我做的专家, usage columns */
+  --w-wide: 380px; /* 数据 Agent cards with charts */
+}
+
+.check-grid,
+.summary-cards,
+.connector-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--w-tile), 100%), 1fr));
+}
+.radio-row,
+.radio-row.three {
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--w-option), 100%), 1fr));
+}
+.pick {
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--w-pick), 100%), 1fr));
+}
+.card-grid,
+.pgrid,
+.lib-agents,
+.fix-grid,
+.secret-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--w-card), 100%), 1fr));
+}
+.agents-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--w-agent), 100%), 1fr));
+}
+.mine,
+.usage-columns {
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--w-panel), 100%), 1fr));
+}
+.ugrid {
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--w-wide), 100%), 1fr));
+}
+
+/* Text inside cards: titles one line, descriptions 1–2 lines, numbers never wrap. */
+.card .it-title,
+.pcard .it-title,
+.tile-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.metric b,
+.stat b,
+.ustats b,
+.hs b,
+.totals b,
+.num {
+  white-space: nowrap;
+}
+.nowrap {
+  white-space: nowrap;
+}
+.clamp-1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.clamp-2 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+/* Dialogs: never taller than the window; the body scrolls. */
+.sheet {
+  max-height: calc(100dvh - 48px);
+}
+.scrim {
+  padding: 24px 16px;
+}
+
+/* Header search: a fixed basis so it never forces the header actions onto two lines. */
+.top-actions .search {
+  flex: 0 1 280px;
+  width: auto;
+  min-width: 180px;
+}
+.top-actions {
+  flex-wrap: nowrap;
+}
+@container page (max-width: 640px) {
+  .top-actions {
+    flex-wrap: wrap;
+  }
+}

@@ -1,7 +1,10 @@
 import { normalizeAgentFile, normalizeAgentFiles, normalizeAgentTools } from "./agent-extras";
-import { normalizeAgentVersions } from "./agent-versions";
+import { normalizeAgentVersions, normalizeUpdatePlan, normalizeUpdateResult } from "./agent-versions";
+import { normalizeDiscovery } from "./discovery";
+import { normalizeSecrets } from "./secrets";
+import { normalizeTotals } from "./totals";
 import { resolveApiBase } from "./api-base";
-import { normalizeCliApply, normalizeCliPlan, normalizeCliTools } from "./cli-tools";
+import { normalizeCliApply, normalizeCliInventory, normalizeCliPlan } from "./cli-tools";
 import { normalizeModelsReport } from "./cost";
 import { normalizeHealthReport } from "./health";
 import { normalizePricing } from "./pricing";
@@ -104,6 +107,8 @@ export const TIMEOUTS = {
   updatePlan: 90_000,
   apply: 120_000,
   updateApply: 360_000,
+  /** Several steps of up to 5 minutes each. */
+  agentUpdate: 900_000,
 } as const;
 
 const ROUTE_MISSING = "接口不存在。";
@@ -332,7 +337,7 @@ export const api = {
   trash: async () => normalizeTrash(await getJson<unknown>("/api/trash")),
   restoreTrash: (trashId: string) =>
     sendJson<{ trashId: string; name: string; path: string }>("POST", "/api/trash/restore", { trashId, confirm: true }, WRITE),
-  cliTools: async () => normalizeCliTools(await getJson<unknown>("/api/cli-tools")),
+  cliTools: async () => normalizeCliInventory(await getJson<unknown>("/api/cli-tools")),
   cliPlan: async (toolId: string, fixId: string, agents?: string[]) =>
     normalizeCliPlan(
       await sendJson<unknown>("POST", "/api/cli-tools/plan", agents?.length ? { toolId, fixId, agents } : { toolId, fixId }, PLAN),
@@ -347,6 +352,19 @@ export const api = {
     const raw = await sendJson<unknown>("POST", "/api/agent-versions/check", {}, { timeout: TIMEOUTS.updatePlan });
     return Array.isArray((raw as { agents?: unknown } | null)?.agents) ? normalizeAgentVersions(raw) : null;
   },
+  /** 一键更新: the plan first (what runs, what changes), nothing runs until apply. */
+  /** null when the service answered without a plan id (never confirmable). */
+  planAgentUpdate: async (id: string) => normalizeUpdatePlan(await sendJson<unknown>("POST", "/api/agent-versions/plan", { id }, PLAN)),
+  applyAgentUpdate: async (planId: string) =>
+    normalizeUpdateResult(
+      await sendJson<unknown>("POST", "/api/agent-versions/apply", { planId, confirm: true }, { confirm: true, timeout: TIMEOUTS.agentUpdate }),
+    ),
+  /** Opens a desktop app (open -b) so it checks for its own updates; changes no files. */
+  openAgentApp: (id: string) => sendJson<{ opened?: boolean }>("POST", "/api/agent-versions/open", { id }),
+  usageTotals: async () => normalizeTotals(await getJson<unknown>("/api/usage/totals")),
+  secrets: async () => normalizeSecrets(await getJson<unknown>("/api/secrets")),
+  discoverAgents: async () => normalizeDiscovery(await getJson<unknown>("/api/agents/discover")),
+  acknowledgeAgents: (ids: string[]) => sendJson<unknown>("POST", "/api/agents/acknowledge", { ids }),
 };
 
 export const assetUrl = {

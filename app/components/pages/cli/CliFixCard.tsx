@@ -6,6 +6,7 @@ import { CopyPathButton } from "../../files/ConfigDetailView";
 import { useData } from "../../providers/DataProvider";
 import { AgentAvatar } from "../../ui/Avatar";
 import { CliFixReview } from "./CliFixReview";
+import { ACTION_NOTES } from "../../ui/RemedyPanel";
 
 /** Guide text: prose stays prose, lines that are shell commands get a copy button. */
 function Commands({ text }: { text: string }) {
@@ -61,10 +62,11 @@ export function CliFixCard({ toolId, fix, agentIds }: { toolId: string; fix: Cli
   ) : fix.kind === "guide" ? (
     fix.instructions ? <Commands text={fix.instructions} /> : null
   ) : fix.applicable ? (
-    <div>
+    <div className="fix-act">
       <button type="button" className="btn sm" onClick={() => setReviewing(true)}>
-        查看要改什么
+        预览修复
       </button>
+      <small className="act-note">{ACTION_NOTES.preview}</small>
     </div>
   ) : null;
 

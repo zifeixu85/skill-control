@@ -2,13 +2,13 @@
 
 .pgrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+  /* columns: layout.css (one rule for every card grid) */
   gap: 12px;
   align-items: stretch;
 }
 .mine {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
+  /* columns: layout.css (one rule for every card grid) */
   gap: 12px;
   align-items: stretch;
 }
@@ -261,15 +261,15 @@
 }
 .radio-row {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  /* columns: layout.css (one rule for every card grid) */
   gap: 8px;
 }
 .radio-row.three {
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  /* columns: layout.css (one rule for every card grid) */
 }
 .check-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  /* columns: layout.css (one rule for every card grid) */
   gap: 6px;
 }
 .check-grid label {
@@ -300,7 +300,7 @@
 /* Agent 概览: data cards above the configuration. */
 .summary-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(168px, 100%), 1fr));
+  /* columns: layout.css (one rule for every card grid) */
   gap: 12px;
 }
 .summary-cards.pending {
@@ -498,7 +498,8 @@
   font-size: 13px;
 }
 
-@media (max-width: 880px) {
+/* Content width, not the window: the page is the container (layout-rules.md). */
+@container page (max-width: 640px) {
   .crow {
     grid-template-columns: 38px minmax(0, 1fr);
   }

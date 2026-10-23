@@ -12,6 +12,17 @@ import type { ChipSpec } from "../../lib/chips";
 import { AgentAvatar, PluginLogo } from "../ui/Avatar";
 import { ChipRow, ItemText } from "../ui/Item";
 import { EmptyState, Loading, SectionHeading, Segmented, TopBar } from "../ui/basics";
+import { SortControl, useSortedList } from "../ui/SortControl";
+import { sortItems, type SortFields, type SortKey } from "../../lib/sort";
+
+const pluginFields = (plugin: PluginView): SortFields => ({
+  name: plugin.displayName || plugin.name,
+  uses: plugin.uses ?? null,
+  lastUsedAt: plugin.lastUsedAt || null,
+  installedAt: plugin.installedAt || null,
+  updatedAt: plugin.updatedAt || plugin.lastUpdated || null,
+});
+const PLUGIN_SORTS: SortKey[] = ["uses", "used", "installed", "name"];
 
 export const pluginAgentStore = persistentStore<string>("plugins-agent", "codex", (value) => /^[a-z0-9._-]{1,64}$/i.test(value));
 
@@ -53,8 +64,9 @@ export function PluginsPage() {
   );
   const agentId = agentIds.includes(agentChoice) ? agentChoice : agentIds[0] || agentChoice;
   const list = all.filter((plugin) => plugin.agentId === agentId);
-  const enabled = list.filter((plugin) => plugin.enabled === true);
-  const rest = list.filter((plugin) => plugin.enabled !== true);
+  const { key, options, setKey } = useSortedList("plugins", all, pluginFields, PLUGIN_SORTS);
+  const enabled = sortItems(list.filter((plugin) => plugin.enabled === true), key, pluginFields);
+  const rest = sortItems(list.filter((plugin) => plugin.enabled !== true), key, pluginFields);
 
   return (
     <section className="page" aria-labelledby="page-title">
@@ -88,7 +100,7 @@ export function PluginsPage() {
           <EmptyState title="没有找到插件">本机的 Agent 里还没有安装插件。</EmptyState>
         ) : (
           <>
-            <SectionHeading title="已启用" note={`${enabled.length} 个`} />
+            <SectionHeading title="已启用" note={`${enabled.length} 个`} action={<SortControl value={key} options={options} onChange={setKey} />} />
             {enabled.length ? (
               <div className="pgrid">
                 {enabled.map((plugin) => (

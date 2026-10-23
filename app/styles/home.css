@@ -2,7 +2,7 @@
 
 .agents-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
+  /* columns: layout.css (one rule for every card grid) */
   gap: 16px;
 }
 
@@ -342,7 +342,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-@media (max-width: 880px) {
+/* Content width, not the window: the page is the container (layout-rules.md). */
+@container page (max-width: 640px) {
   .stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

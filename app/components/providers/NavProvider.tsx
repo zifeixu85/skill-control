@@ -23,6 +23,8 @@ export interface GoOptions {
   skillId?: string | null;
   /** 模型价格表: a row to scroll to and highlight, e.g. "models:gpt-5.5" or "rules". */
   priceRow?: string;
+  /** 设置: the section to open, e.g. "about". */
+  section?: string;
 }
 
 export interface Nav {
@@ -74,6 +76,14 @@ export function takePriceTarget(): string | null {
   return target;
 }
 
+/** A 设置 section to scroll to once the page mounts (go("settings", { section })). */
+let sectionTarget: string | null = null;
+export function takeSectionTarget(): string | null {
+  const target = sectionTarget;
+  sectionTarget = null;
+  return target;
+}
+
 export function NavProvider({ children }: { children: ReactNode }) {
   const [routeText, setRouteText] = usePersistent(routeStore);
   const [skillFilter, setSkillFilter] = usePersistent(filterStore);
@@ -90,6 +100,12 @@ export function NavProvider({ children }: { children: ReactNode }) {
       setDrawer(null);
       if (options.filter !== undefined) setSkillFilter(options.filter);
       priceTarget = page === "pricing" ? options.priceRow || null : null;
+      sectionTarget = page === "settings" ? options.section || null : null;
+      // Already on 设置: the page is mounted, so tell it directly.
+      if (sectionTarget && typeof window !== "undefined") {
+        const section = sectionTarget;
+        window.setTimeout(() => window.dispatchEvent(new CustomEvent("skill-control:section", { detail: section })), 0);
+      }
       if (options.skillId !== undefined) setSelectedSkillId(options.skillId);
       if (options.skillId) {
         // Opening a specific skill: clear filters that could hide it and scroll to it.

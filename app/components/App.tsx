@@ -16,6 +16,7 @@ import { SkillsPage } from "./pages/skills/SkillsPage";
 import { UpdatesPage } from "./pages/updates/UpdatesPage";
 import { UsagePage } from "./pages/usage/UsagePage";
 import { PricingPage } from "./pages/pricing/PricingPage";
+import { SecretsPage } from "./pages/SecretsPage";
 import { DataProvider, useData } from "./providers/DataProvider";
 import { NavProvider, useNav } from "./providers/NavProvider";
 import { ToastProvider } from "./providers/ToastProvider";
@@ -52,6 +53,8 @@ function CurrentPage() {
       return <ExpertsPage />;
     case "connectors":
       return <ConnectorsPage />;
+    case "secrets":
+      return <SecretsPage />;
     case "updates":
       return <UpdatesPage />;
     case "usage":

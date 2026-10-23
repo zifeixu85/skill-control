@@ -2,6 +2,7 @@
 
 import { useOpenedItem, useReturnHighlight } from "../../../hooks/usePageMemory";
 import { markOpened } from "../../../lib/page-memory";
+import { TotalsCard } from "./TotalsStrip";
 import { useNow } from "../../../hooks/useNow";
 import { usePolling } from "../../../hooks/usePolling";
 import { isUnsupported, useResource } from "../../../hooks/useResource";
@@ -170,6 +171,7 @@ function SummaryView({ summary, window }: { summary: UsageSummary; window: Usage
   const skillAgents = [...new Set(summary.topSkills.flatMap((skill) => Object.keys(skill.byAgent)))];
   return (
     <>
+      <TotalsCard window={window} />
       {agents.length ? (
         <div className="ugrid">
           {agents.map((agent) => (

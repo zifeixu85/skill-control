@@ -106,7 +106,8 @@ export function UsageAgentCard({ usage, days, endDate }: { usage: UsageAgent; da
           <b>{tokens ? formatCompact(tokens.total) : "—"}</b>
           <span>Tokens</span>
         </div>
-        {usage.credits !== null ? (
+        {/* Credits only when the product counts them; a zero never hides the cost estimate. */}
+        {usage.credits ? (
           <div>
             <b>{formatCompact(usage.credits)}</b>
             <span>额度</span>

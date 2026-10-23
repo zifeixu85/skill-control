@@ -9,8 +9,17 @@ import { normalizeRemedy, type Remedy } from "./remedy";
 export type AgentVersionStatus = "up-to-date" | "update-available" | "unknown" | "error";
 
 export interface AgentVersion {
+  /** Row id, e.g. "codex-cli" / "codex-app" (one Agent can have several). */
+  id: string;
   agentId: string;
   name: string;
+  /** The copy that runs (first on PATH) when several are installed. */
+  active: boolean;
+  /** Why there is no comparison, from the service. */
+  reason: string | null;
+  /** A desktop app the service can open (open -b) so it checks for updates itself. */
+  openApp: boolean;
+  downloadUrl: string | null;
   installed: { version: string; source: string | null; path: string | null } | null;
   latest: { version: string; source: string | null; url: string | null; releasedAt: string | null; notesUrl: string | null } | null;
   status: AgentVersionStatus;
@@ -77,8 +86,13 @@ function normalizeAgent(value: unknown): AgentVersion | null {
   const latest = asRecord(record.latest);
   const status = asString(record.status) as AgentVersionStatus;
   return {
+    id: asString(record.id) || agentId,
     agentId,
     name: asString(record.name, agentId),
+    active: record.active !== false,
+    reason: asOptionalString(record.reason),
+    openApp: Boolean(asRecord(record.openApp).bundleId) || record.openApp === true,
+    downloadUrl: asOptionalString(record.downloadUrl),
     installed: asString(installed.version)
       ? { version: asString(installed.version), source: asOptionalString(installed.source), path: asOptionalString(installed.path) }
       : null,
@@ -119,3 +133,58 @@ export function agentsWithUpdates(report: AgentVersionsReport | undefined | null
 
 /** Apps without commands update themselves: "在 Codex 里检查更新". */
 export const inAppHint = (name: string) => `在 ${name} 里检查更新`;
+
+/** One-click update (POST /api/agent-versions/plan → apply). Programs and args stay server-side. */
+export interface AgentUpdatePlan {
+  planId: string;
+  expiresAt: string | null;
+  title: string;
+  steps: { display: string }[];
+  effects: string[];
+  afterCheck: string | null;
+}
+
+export interface AgentUpdateResult {
+  ok: boolean;
+  steps: { display: string; exitCode: number | null; output: string }[];
+  version: { before: string | null; after: string | null };
+  historyId: string | null;
+}
+
+export function normalizeUpdatePlan(raw: unknown): AgentUpdatePlan | null {
+  const record = asRecord(raw);
+  const planId = asString(record.planId);
+  if (!planId) return null;
+  const afterCheck = record.afterCheck;
+  return {
+    planId,
+    expiresAt: asOptionalString(record.expiresAt),
+    title: asString(record.title, "更新"),
+    steps: asArray(record.steps)
+      .map((item) => ({ display: asString(asRecord(item).display) }))
+      .filter((step) => step.display),
+    effects: asArray(record.effects).map((item) => asString(item)).filter(Boolean),
+    afterCheck: typeof afterCheck === "string" ? afterCheck || null : afterCheck ? asString(asRecord(afterCheck).display) || "完成后重新检查版本" : null,
+  };
+}
+
+export function normalizeUpdateResult(raw: unknown): AgentUpdateResult {
+  const record = asRecord(raw);
+  const version = asRecord(record.version);
+  return {
+    ok: record.ok === true,
+    steps: asArray(record.steps).map((item) => {
+      const step = asRecord(item);
+      return {
+        display: asString(step.display),
+        exitCode: typeof step.exitCode === "number" ? step.exitCode : null,
+        output: asString(step.output),
+      };
+    }),
+    version: { before: asOptionalString(version.before), after: asOptionalString(version.after) },
+    historyId: asOptionalString(record.historyId),
+  };
+}
+
+/** The agent-update action on a version's remedy, if the service offers one. */
+export const oneClickUpdate = (agent: AgentVersion) => (agent.remedy?.action?.kind === "agent-update" ? agent.remedy.action.id || agent.id : null);

@@ -308,7 +308,7 @@
   white-space: normal;
 }
 
-@media (max-width: 880px) {
+@media (max-width: 899px) {
   .inspector-resizer {
     display: none;
   }

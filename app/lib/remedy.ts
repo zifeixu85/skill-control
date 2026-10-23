@@ -11,9 +11,16 @@ export interface RemedyCommand {
   command: string;
 }
 
+/** Something the app can do itself, e.g. { kind: "agent-update", id: "codex" } → 一键更新. */
+export interface RemedyAction {
+  kind: string;
+  id: string;
+}
+
 export interface Remedy {
   prompt: string;
   commands: RemedyCommand[];
+  action: RemedyAction | null;
 }
 
 export type RemedyMode = "ai" | "terminal";
@@ -32,7 +39,9 @@ export function normalizeRemedy(value: unknown): Remedy | null {
       return { label: asOptionalString(entry.label), command: asString(entry.command).trim() };
     })
     .filter((entry) => entry.command);
-  return prompt || commands.length ? { prompt, commands } : null;
+  const rawAction = asRecord(record.action);
+  const action = asString(rawAction.kind) && asString(rawAction.id) ? { kind: asString(rawAction.kind), id: asString(rawAction.id) } : null;
+  return prompt || commands.length || action ? { prompt, commands, action } : null;
 }
 
 /** Tabs to offer: AI when there is a prompt, terminal only when there are commands. */

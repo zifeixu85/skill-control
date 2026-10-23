@@ -226,9 +226,4 @@
   line-height: 1.6;
 }
 
-@media (max-width: 880px) {
-  .nav .count.badge {
-    display: inline-block;
-    margin-left: 4px;
-  }
-}
+

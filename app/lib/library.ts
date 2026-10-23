@@ -22,6 +22,8 @@ export interface LibraryEntry {
   externalManaged: string | null;
   source: string | null;
   fanout: Record<string, Fanout>;
+  /** When the skill came into the library (v0.2). */
+  installedAt: string | null;
 }
 
 export interface LibraryAgent {
@@ -218,6 +220,7 @@ export function normalizeLibrary(raw: unknown): LibraryData {
           externalManaged: asOptionalString(entry.externalManaged),
           source: asOptionalString(locks.source),
           fanout: fanoutMap(entry.fanout),
+          installedAt: asOptionalString(entry.installedAt),
         };
       })
       .filter((entry) => entry.name),

@@ -72,4 +72,14 @@ export function activityReason(activity: ActivityAgent | undefined, suggested: b
   return parts.join(" · ");
 }
 
+/** "近 30 天 408 个会话 · 50 天在用" — activity only; 推荐 is shown separately as a chip. */
+export function activitySummary(activity: ActivityAgent | undefined): string {
+  if (!activity || activity.status === "unknown" || (!activity.files30d && !activity.tokens30d)) return "近 30 天没有记录";
+  const parts: string[] = [];
+  if (activity.basis === "tokens" && activity.tokens30d) parts.push(`近 30 天 ${formatCompact(activity.tokens30d)} tokens`);
+  else parts.push(`近 30 天 ${activity.files30d} 个会话`);
+  if (activity.activeDays30d) parts.push(`${activity.activeDays30d} 天在用`);
+  return parts.join(" · ");
+}
+
 export const MAX_PRIMARY_AGENTS = 4;

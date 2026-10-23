@@ -18,7 +18,7 @@
   font-weight: 600;
 }
 .lib-agents {
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  /* columns: layout.css (one rule for every card grid) */
   gap: 10px;
   margin-bottom: 8px;
 }
@@ -264,7 +264,7 @@
 }
 .fix-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  /* columns: layout.css (one rule for every card grid) */
   gap: 10px;
 }
 .fix-card {
@@ -299,7 +299,8 @@
   gap: 4px;
 }
 
-@media (max-width: 880px) {
+/* Content width, not the window: the page is the container (layout-rules.md). */
+@container page (max-width: 640px) {
   .recheck-row {
     grid-template-columns: 1fr;
   }

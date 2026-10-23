@@ -1,4 +1,8 @@
-/* App frame: source-list sidebar + content area. Collapses to a top bar under 880px. */
+/*
+ * App frame: source-list sidebar + content area (rules in layout-rules.md).
+ * Sidebar: brand + main nav fixed on top, Agent lists the only scrolling part, 设置 + scan
+ * status fixed at the bottom. < 900 wide: icon rail. < 640 wide: top menu.
+ */
 
 .app-shell {
   display: grid;
@@ -15,9 +19,106 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
   padding: 18px 10px 12px;
   gap: 4px;
+  overflow: hidden;
+}
+.side-top {
+  flex: none;
+  display: grid;
+  gap: 2px;
+}
+.side-mid {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: 0 -10px;
+  padding: 0 10px 8px;
+  /* A soft fade where the list runs under the fixed parts. */
+  mask-image: linear-gradient(to bottom, transparent 0, #000 10px, #000 calc(100% - 14px), transparent 100%);
+}
+.side-mid.folded {
+  flex: 0 1 auto;
+  padding-top: 6px;
+}
+.side-mid.folded.open {
+  flex: 1 1 auto;
+}
+.side-disclosure {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 6px 10px;
+  border-radius: var(--r-row);
+  color: var(--ink-3);
+  font-size: 12px;
+  text-align: left;
+}
+.side-disclosure:hover {
+  background: var(--hover);
+  color: var(--ink);
+}
+.side-disclosure .chev {
+  width: 13px;
+  height: 13px;
+  transition: transform 0.15s var(--ease);
+}
+.side-disclosure[aria-expanded="true"] .chev {
+  transform: rotate(90deg);
+}
+.new-mark {
+  margin-left: auto;
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1.5;
+  padding: 0 6px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: var(--accent-wash);
+}
+.nav button.sub {
+  padding-left: 30px;
+  font-size: 13px;
+}
+.nav button.sub svg {
+  width: 15px;
+  height: 15px;
+}
+.nav button > span:not(.count),
+.app-update-hint > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-update-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 5px 10px;
+  border-radius: var(--r-row);
+  font-size: 12px;
+  color: var(--info);
+  text-align: left;
+}
+.app-update-hint:hover {
+  background: var(--hover);
+}
+.app-update-hint i {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--info);
 }
 
 .brand {
@@ -162,15 +263,13 @@
 }
 
 .side-foot {
+  flex: none;
   margin-top: auto;
   display: grid;
   gap: 2px;
-  padding-top: 10px;
+  padding-top: 8px;
   border-top: 1px solid var(--line-2);
-  position: sticky;
-  bottom: -12px;
   background: var(--side);
-  padding-bottom: 4px;
 }
 
 .scan-state {
@@ -214,6 +313,11 @@
 }
 
 .page {
+  /* Content is at most --page-max wide and centred; the scrollbar stays at the window edge. */
+  --gutter: 28px;
+  --page-max: 1440px;
+  --inline-pad: max(var(--gutter), calc((100% - var(--page-max)) / 2));
+  container: page / inline-size;
   min-height: 0;
   min-width: 0;
   display: grid;
@@ -226,11 +330,13 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 22px 28px 14px;
+  padding: 22px var(--inline-pad) 14px;
   flex-wrap: wrap;
 }
 
+/* The title block gives way first (its subtitle wraps), so the actions stay beside it. */
 .top-title {
+  flex: 1 1 240px;
   min-width: 0;
 }
 
@@ -258,6 +364,9 @@
   gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
+  /* Keep the actions on one line while they fit; the header wraps them below the title instead. */
+  flex-shrink: 0;
+  max-width: 100%;
   min-width: 0;
 }
 .top h1 {
@@ -276,7 +385,7 @@
   overflow: auto;
   min-height: 0;
   min-width: 0;
-  padding: 0 28px 32px;
+  padding: 0 var(--inline-pad) 32px;
   overscroll-behavior: contain;
 }
 
@@ -297,7 +406,109 @@
   padding: 40px 28px;
 }
 
-@media (max-width: 880px) {
+/* Short windows: tighter nav rows so brand, nav and 设置 all stay on screen. */
+@media (max-height: 700px) {
+  .side {
+    padding-top: 12px;
+  }
+  .brand {
+    padding-bottom: 8px;
+  }
+  .nav button {
+    padding-block: 5px;
+  }
+  .nav-sep {
+    margin-block: 4px;
+  }
+}
+@media (max-height: 560px) {
+  .nav button {
+    padding-block: 3px;
+    font-size: 13px;
+  }
+  .scan-state {
+    padding-block: 3px;
+  }
+}
+
+/* < 900 wide: icon rail. Labels become tooltips (title); counts become small dots. */
+@media (max-width: 899px) {
+  :root {
+    --side-width: 60px;
+  }
+  .side {
+    padding: 14px 8px 10px;
+    align-items: stretch;
+  }
+  .brand {
+    justify-content: center;
+    padding: 0 0 12px;
+  }
+  .brand b,
+  .nav button > span:not(.count),
+  .app-update-hint > span,
+  .side-label,
+  .agent-item .nm,
+  .agent-item .n,
+  .scan-state span,
+  .side-disclosure span {
+    display: none;
+  }
+  .nav button,
+  .agent-item,
+  .side-disclosure,
+  .app-update-hint {
+    justify-content: center;
+    padding-inline: 0;
+    position: relative;
+  }
+  .nav button.sub {
+    padding-left: 0;
+  }
+  .side .nav .count {
+    position: absolute;
+    top: 3px;
+    right: 6px;
+    font-size: 0;
+    width: 8px;
+    height: 8px;
+    padding: 0;
+    border-radius: 50%;
+    background: var(--ink-3);
+  }
+  .side .nav .count:not(.badge) {
+    display: none;
+  }
+  .side .nav .count.badge {
+    background: var(--info);
+    padding: 0;
+  }
+  .agent-item .new-mark {
+    position: absolute;
+    top: 0;
+    right: 2px;
+    font-size: 0;
+    width: 7px;
+    height: 7px;
+    padding: 0;
+    background: var(--accent);
+  }
+  .side-mid {
+    margin: 0 -8px;
+    padding: 0 8px 8px;
+  }
+  .side-mid .agent-list {
+    padding-top: 8px;
+    border-top: 1px solid var(--line-2);
+    margin-top: 8px;
+  }
+  .scan-state {
+    justify-content: center;
+  }
+}
+
+/* < 640 wide: a top menu bar. */
+@media (max-width: 639px) {
   .app-shell {
     grid-template-columns: 1fr;
     grid-template-rows: auto minmax(0, 1fr);
@@ -309,20 +520,22 @@
     align-items: center;
     border-right: 0;
     border-bottom: 1px solid var(--line-2);
-    padding: 10px 12px;
-    gap: 6px;
-    overflow: visible;
+    padding: 8px 10px;
+    gap: 4px;
   }
 
-  .side-label,
-  .agent-list,
-  .side-foot .scan-state,
-  .nav-sep {
-    display: none;
+  .side-top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px;
   }
 
+  .side-mid,
+  .scan-state,
+  .nav-sep,
   .brand {
-    padding: 0 6px 0 0;
+    display: none;
   }
 
   .nav {
@@ -333,52 +546,42 @@
 
   .nav button {
     width: auto;
-    padding: 6px 9px;
-    font-size: 13px;
+    padding: 6px 8px;
   }
 
-  .nav .count {
-    display: none;
+  .nav button[aria-current="page"] > span:not(.count) {
+    display: inline;
   }
 
   .side-foot {
-    margin: 0;
+    margin: 0 0 0 auto;
     padding: 0;
     border: 0;
-    position: static;
+    display: flex;
+  }
+
+  .page {
+    --gutter: 14px;
   }
 
   .top {
-    padding: 16px 16px 12px;
+    padding-top: 14px;
+    padding-bottom: 10px;
   }
 
   .top h1 {
     font-size: 21px;
   }
-
-  .top-actions {
-    flex-wrap: wrap;
-  }
-
-  .scroll {
-    padding: 0 16px 24px;
+}
+@media (max-width: 899px) and (min-width: 640px) {
+  .page {
+    --gutter: 20px;
   }
 }
-
-@media (max-width: 520px) {
-  .nav button span:not(.count) {
-    display: none;
-  }
-
-  .nav button[aria-current="page"] span:not(.count) {
-    display: inline;
-  }
-
-  .brand {
-    display: none;
-  }
-
-  .nav button {
-    padding: 6px 8px;
+/* Short windows: the page header gives back some height. */
+@media (max-height: 640px) {
+  .top {
+    padding-top: 14px;
+    padding-bottom: 10px;
   }
 }

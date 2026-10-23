@@ -11,19 +11,21 @@ import { EmptyState, KvTable, Loading } from "../ui/basics";
 
 export { copyText };
 
-export function CopyPathButton({ path, label = "复制路径" }: { path: string; label?: string }) {
+export function CopyPathButton({ path, label = "复制路径", compact }: { path: string; label?: string; compact?: boolean }) {
   const toast = useToast();
   return (
     <button
       type="button"
-      className="btn sm"
+      className={`btn sm ${compact ? "icon-only" : ""}`}
+      title={compact ? `${label}：${path}` : undefined}
+      aria-label={compact ? label : undefined}
       onClick={async () => {
         const copied = await copyText(path);
         toast.show(copied ? `已${label}` : COPY_FAILED, copied ? {} : { tone: "error" });
       }}
     >
       <CopiesIcon />
-      {label}
+      {compact ? null : label}
     </button>
   );
 }

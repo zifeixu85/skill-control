@@ -17,7 +17,7 @@ import { useToast } from "../providers/ToastProvider";
 import { connectorsTabStore } from "./ConnectorsPage";
 import { AgentAvatar } from "../ui/Avatar";
 import { EmptyState, Loading, SectionHeading, TopBar } from "../ui/basics";
-import { RemedyAllBar, RemedyButton, RemedyPanel } from "../ui/RemedyPanel";
+import { ACTION_NOTES, RemedyActions, RemedyAllBar, RemedyPanel } from "../ui/RemedyPanel";
 
 const TONE: Record<SeverityLevel, string> = { high: "danger", medium: "warn", low: "info", info: "mute" };
 
@@ -109,8 +109,9 @@ function FindingRow({ finding, opened }: { finding: HealthFinding; opened: boole
             {action.label}
           </button>
         ) : null}
-        {finding.remedy ? <RemedyButton open={fixOpen} onToggle={() => setFixOpen((value) => !value)} controls={remedyId} /> : null}
-        {finding.path ? <CopyPathButton path={finding.path} /> : null}
+        {finding.remedy ? <RemedyActions remedy={finding.remedy} open={fixOpen} onToggle={() => setFixOpen((value) => !value)} controls={remedyId} /> : null}
+        {finding.path ? <CopyPathButton path={finding.path} compact /> : null}
+        {finding.remedy?.prompt ? <small className="act-note">{ACTION_NOTES.copy}</small> : null}
       </div>
       {finding.remedy && fixOpen ? (
         <div className="remedy-slot">

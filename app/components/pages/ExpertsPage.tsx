@@ -1,6 +1,10 @@
 "use client";
 
+import { useMemo } from "react";
+import { usePersistent } from "../../hooks/usePersistent";
 import { useScrollMemory } from "../../hooks/useScrollMemory";
+import { sortItems, type SortFields, type SortKey } from "../../lib/sort";
+import { persistentStore } from "../../lib/storage";
 import { errorMessage } from "../../lib/api";
 import { countChip, type ChipSpec } from "../../lib/chips";
 import type { Capability } from "../../lib/types";
@@ -10,6 +14,7 @@ import { useNav } from "../providers/NavProvider";
 import { AgentAvatar, ExpertAvatar } from "../ui/Avatar";
 import { EmptyState, Loading, SectionHeading, TopBar } from "../ui/basics";
 import { ChipRow, ItemText } from "../ui/Item";
+import { SortControl, useSortedList } from "../ui/SortControl";
 
 /** Status (使用中, 已打包) → kind (专家, model) → counts (技能, 用过 N 次). */
 export function expertChips(capability: Capability): ChipSpec[] {
@@ -65,15 +70,27 @@ function Group({ title, note, items, mine, agentId }: { title: string; note: str
   );
 }
 
+const fields = (capability: Capability): SortFields => ({
+  name: capability.displayName || capability.name,
+  uses: capability.used?.count ?? null,
+  lastUsedAt: capability.lastUsedAt || capability.used?.lastUsedAt || null,
+  installedAt: capability.createdAt || null,
+  updatedAt: capability.updatedAt || capability.modifiedAt || null,
+});
+const EXPERT_SORTS: SortKey[] = ["uses", "used", "installed", "name"];
+
+export const expertsTabStore = persistentStore<string>("experts-tab", "all", (value) => /^[a-z0-9._-]{1,64}$/i.test(value));
+
 export function ExpertsPage() {
   const { capabilities } = useData();
   const scrollRef = useScrollMemory<HTMLDivElement>("experts");
-  const products = capabilities.data?.products || [];
-  const workbuddy = products.find((product) => product.id === "workbuddy");
-  const items = workbuddy?.items || [];
-  const mine = items.filter((item) => item.origin === "mine");
-  const market = items.filter((item) => item.origin !== "mine");
-  const others = products.filter((product) => product.id !== "workbuddy" && product.items.length);
+  const [tabChoice, setTab] = usePersistent(expertsTabStore);
+  const products = (capabilities.data?.products || []).filter((product) => product.items.length);
+  const allItems = useMemo(() => products.flatMap((product) => product.items), [products]);
+  const { key, options, setKey } = useSortedList("experts", allItems, fields, EXPERT_SORTS);
+  const tab = tabChoice === "all" || products.some((product) => product.id === tabChoice) ? tabChoice : "all";
+  const shown = tab === "all" ? products : products.filter((product) => product.id === tab);
+  const sorted = (items: Capability[]) => sortItems(items, key, fields);
 
   return (
     <section className="page" aria-labelledby="page-title">
@@ -88,30 +105,63 @@ export function ExpertsPage() {
           </EmptyState>
         ) : !capabilities.data ? (
           <Loading label="正在读取专家…" rows={6} />
-        ) : !items.length && !others.length ? (
+        ) : !products.length ? (
           <EmptyState title="没有找到专家或 Agent 配置">WorkBuddy、Hermes、OpenClaw 等产品的专家会显示在这里。</EmptyState>
         ) : (
           <>
-            <Group title="我做的专家" note={`${mine.length} 个 · 来自 WorkBuddy 的“我的专家”`} items={mine} mine agentId="workbuddy" />
-            <Group
-              title="从专家市场添加"
-              note={`${market.length} 个已下载到本机${workbuddy?.catalogCount ? ` · 专家中心共 ${workbuddy.catalogCount} 个` : ""}`}
-              items={market}
-              agentId="workbuddy"
-            />
-            {others.map((product) => (
-              <Group
-                key={product.id}
-                title={product.name}
-                note={`${product.items.length} 个${product.kindLabel}${product.sourcePath ? ` · ${product.sourcePath}` : ""}`}
-                items={product.items}
-                agentId={product.id}
-              />
-            ))}
-            <p className="footnote">“用过”来自 WorkBuddy 本地会话记录。专家的启用和对话在各自的产品里完成，这里只读。</p>
+            <div className="sticky-bar" role="toolbar" aria-label="按产品筛选和排序">
+              <div className="tabbar" role="group" aria-label="按产品筛选">
+                {[{ id: "all", name: "全部", count: allItems.length }, ...products.map((product) => ({ id: product.id, name: product.name, count: product.items.length }))].map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    aria-pressed={tab === item.id}
+                    className={`tab-chip ${tab === item.id ? "on" : ""}`}
+                    onClick={() => setTab(item.id)}
+                  >
+                    {item.id !== "all" ? <AgentAvatar id={item.id} size="xs" /> : null}
+                    {item.name}
+                    <em>{item.count}</em>
+                  </button>
+                ))}
+              </div>
+              <SortControl value={key} options={options} onChange={setKey} />
+            </div>
+            {shown.map((product) =>
+              product.id === "workbuddy" ? (
+                <WorkBuddyGroups key={product.id} items={sorted(product.items)} catalogCount={product.catalogCount} />
+              ) : (
+                <Group
+                  key={product.id}
+                  title={product.name}
+                  note={`${product.items.length} 个${/^[A-Za-z]/u.test(product.kindLabel) ? " " : ""}${product.kindLabel}${product.sourcePath ? ` · ${product.sourcePath}` : ""}`}
+                  items={sorted(product.items)}
+                  agentId={product.id}
+                />
+              ),
+            )}
+            <p className="footnote">
+              {shown.some((product) => product.id === "workbuddy") ? "“用过”来自 WorkBuddy 本地会话记录。" : ""}专家的启用和对话在各自的产品里完成，这里只读。
+            </p>
           </>
         )}
       </div>
     </section>
+  );
+}
+
+function WorkBuddyGroups({ items, catalogCount }: { items: Capability[]; catalogCount: number }) {
+  const mine = items.filter((item) => item.origin === "mine");
+  const market = items.filter((item) => item.origin !== "mine");
+  return (
+    <>
+      <Group title="我做的专家" note={`${mine.length} 个 · 来自 WorkBuddy 的“我的专家”`} items={mine} mine agentId="workbuddy" />
+      <Group
+        title="从专家市场添加"
+        note={`${market.length} 个已下载到本机${catalogCount ? ` · 专家中心共 ${catalogCount} 个` : ""}`}
+        items={market}
+        agentId="workbuddy"
+      />
+    </>
   );
 }

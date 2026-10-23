@@ -1,6 +1,6 @@
 "use client";
 
-import { activityReason, MAX_PRIMARY_AGENTS } from "../../lib/agents";
+import { activitySummary, MAX_PRIMARY_AGENTS } from "../../lib/agents";
 import type { ScanAgent } from "../../lib/types";
 import { useData } from "../providers/DataProvider";
 import { AgentAvatar } from "../ui/Avatar";
@@ -48,25 +48,27 @@ export function AgentPicker({
       <legend className="sr-only">常用 Agent</legend>
       {list.map((agent) => {
         const on = selected.includes(agent.id);
-        const reason = agent.refuseInstall
-          ? "技能由它自己管理 · 只读"
-          : activityReason(activityById.get(agent.id), suggested.has(agent.id));
+        const line = agent.refuseInstall ? "技能由它自己管理 · 只读" : activitySummary(activityById.get(agent.id));
         return (
-          <label key={agent.id} className={on ? "on" : ""}>
+          <label key={agent.id} className={on ? "on" : ""} title={`${agent.name} · ${line} · ${agent.skillCount} 个技能`}>
             <AgentAvatar id={agent.id} size="md" />
-            <span>
-              <b>{agent.name}</b>
-              <span>
-                {reason} · {agent.skillCount} 个技能
+            <span className="pick-text">
+              <span className="pick-name">
+                <b>{agent.name}</b>
+                {suggested.has(agent.id) ? <span className="tag info pick-chip">推荐</span> : null}
               </span>
+              <span className="pick-line">{line}</span>
+              <span className="pick-line">{agent.skillCount} 个技能</span>
             </span>
-            <input
-              type="checkbox"
-              name={name}
-              value={agent.id}
-              checked={on}
-              onChange={(event) => toggle(agent.id, event.target.checked)}
-            />
+            <span className="pick-check">
+              <input
+                type="checkbox"
+                name={name}
+                value={agent.id}
+                checked={on}
+                onChange={(event) => toggle(agent.id, event.target.checked)}
+              />
+            </span>
           </label>
         );
       })}

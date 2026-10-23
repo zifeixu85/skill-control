@@ -5,6 +5,7 @@ export const MAIN_PAGES = [
   "plugins",
   "experts",
   "connectors",
+  "secrets",
   "updates",
   "usage",
   "pricing",
@@ -27,6 +28,7 @@ export const PAGE_TITLES: Record<PageId, string> = {
   plugins: "插件",
   experts: "专家与 Agent",
   connectors: "连接器与 MCP",
+  secrets: "密钥",
   updates: "更新",
   usage: "数据",
   pricing: "模型价格表",
@@ -58,4 +60,6 @@ export type DrawerTarget =
   | { kind: "plugin"; id: string }
   | { kind: "expert"; id: string }
   | { kind: "mcp"; id: string }
-  | { kind: "update"; id: string };
+  | { kind: "update"; id: string }
+  | { kind: "connector"; id: string }
+  | { kind: "cli"; id: string };

@@ -21,7 +21,9 @@ const BOTH = { prompt: "请帮我修复失效的软链接", commands: [{ label: 
 test("remedy: tolerant parsing; empty remedies are null", () => {
   assert.equal(remedy.normalizeRemedy(null), null);
   assert.equal(remedy.normalizeRemedy({ prompt: "  ", commands: [{ command: " " }] }), null);
-  assert.deepEqual(remedy.normalizeRemedy({ prompt: "p" }), { prompt: "p", commands: [] });
+  assert.deepEqual(remedy.normalizeRemedy({ prompt: "p" }), { prompt: "p", commands: [], action: null });
+  assert.deepEqual(remedy.normalizeRemedy({ prompt: "p", action: { kind: "agent-update", id: "codex" } }).action, { kind: "agent-update", id: "codex" });
+  assert.equal(remedy.normalizeRemedy({ prompt: "p", action: { kind: "agent-update" } }).action, null, "an action needs an id");
   assert.deepEqual(remedy.normalizeRemedy(BOTH).commands, [
     { label: "删除失效链接", command: "rm ~/.claude/skills/x" },
     { label: null, command: "ls ~/.claude/skills" },
@@ -76,7 +78,7 @@ test("remedy: health findings and update units carry remedy; reports carry remed
   });
   assert.equal(report.findings[0].remedy.commands.length, 2);
   assert.equal(report.findings[1].remedy, null);
-  assert.deepEqual(report.remedyAll, { prompt: "一次处理全部", commands: [] });
+  assert.deepEqual(report.remedyAll, { prompt: "一次处理全部", commands: [], action: null });
   assert.equal(health.normalizeHealthReport({}).remedyAll, null);
 
   const data = updates.normalizeUpdates({

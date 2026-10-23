@@ -8,7 +8,7 @@ import {
   filterChips,
   matchesFilter,
   matchesQuery,
-  sortViews,
+  skillSortFields,
   type FilterChip,
   type SkillView,
 } from "../../../lib/skill-model";
@@ -19,6 +19,7 @@ import { takeRevealTarget, useNav } from "../../providers/NavProvider";
 import { useToast } from "../../providers/ToastProvider";
 import { AgentAvatar } from "../../ui/Avatar";
 import { Loading, TopBar } from "../../ui/basics";
+import { SortControl, useSortedList } from "../../ui/SortControl";
 import { InspectorResizer, INSPECTOR_DEFAULT, clampInspector } from "./InspectorResizer";
 import { SkillInspector, type InspectorTab } from "./SkillInspector";
 import { SkillTable } from "./SkillTable";
@@ -78,10 +79,11 @@ export function SkillsPage() {
     return list;
   }, [views, primary, nav.skillFilter, agentName]);
   const filter = chips.some((chip) => chip.id === nav.skillFilter) ? nav.skillFilter : "all";
-  const list = useMemo(
-    () => sortViews(views.filter((view) => matchesFilter(view, filter, primary) && matchesQuery(view, nav.query))),
+  const filtered = useMemo(
+    () => views.filter((view) => matchesFilter(view, filter, primary) && matchesQuery(view, nav.query)),
     [views, filter, primary, nav.query],
   );
+  const { sorted: list, key: sortKey, options: sortOptions, setKey: setSortKey } = useSortedList("skills", filtered, skillSortFields);
   const selected = nav.selectedSkillId ? viewsById.get(nav.selectedSkillId) || null : null;
   const [limit, setLimitState] = useState(() => {
     const index = selected ? list.findIndex((view) => view.id === selected.id) : -1;
@@ -161,14 +163,24 @@ export function SkillsPage() {
       </TopBar>
       <div className={`split ${selected ? "open" : ""}`} style={{ "--inspector-width": `${width}px` } as CSSProperties}>
         <div className="split-list">
-          <Filters
-            chips={chips}
-            value={filter}
-            onChange={(id) => {
-              nav.setSkillFilter(id);
-              listChanged();
-            }}
-          />
+          <div className="list-bar">
+            <Filters
+              chips={chips}
+              value={filter}
+              onChange={(id) => {
+                nav.setSkillFilter(id);
+                listChanged();
+              }}
+            />
+            <SortControl
+              value={sortKey}
+              options={sortOptions}
+              onChange={(key) => {
+                setSortKey(key);
+                listChanged();
+              }}
+            />
+          </div>
           <div className="scroll" ref={scrollRef}>
             {scan.data ? (
               <SkillTable

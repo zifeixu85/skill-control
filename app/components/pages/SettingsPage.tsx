@@ -12,6 +12,9 @@ import { useNav } from "../providers/NavProvider";
 import { AgentPicker } from "../shell/AgentPicker";
 import { HistoryList } from "./settings/HistoryList";
 import { AgentVersionsSetting } from "./settings/AgentVersionsSetting";
+import { AboutSection, AppUpdateSetting } from "./settings/AboutSection";
+import { SettingsNav, useSectionSpy } from "./settings/SettingsNav";
+import { NewAgentsNotice } from "./home/NewAgentsNotice";
 import { AgentAvatar } from "../ui/Avatar";
 import { Loading, TopBar } from "../ui/basics";
 
@@ -83,6 +86,7 @@ export function SettingsPage() {
   const visible = config.data?.visibleAgentIds || [];
   // Until the user customizes it, every detected Agent is read.
   const customized = config.data?.visibleCustomized !== false;
+  const { current, showSection } = useSectionSpy(Boolean(config.data && scan.data));
 
   return (
     <section className="page" aria-labelledby="page-title">
@@ -91,145 +95,163 @@ export function SettingsPage() {
         {!config.data || !scan.data ? (
           <Loading rows={6} />
         ) : (
-          <div className="set-grid">
-            <section className="set-block" aria-labelledby="set-primary">
-              <h2 id="set-primary">常用 Agent</h2>
-              <p>Skill Control 只按这几个 Agent 检查差异和多份副本。其他 Agent 照常显示，但不会提醒你安装。</p>
-              <AgentPicker
-                name="primary-settings"
-                selected={primary}
-                onChange={(next) => void write({ primaryAgentIds: next }, `已设为常用：${joinNames(next.map(agentName))}`)}
-                onLimit={(message) => toast.show(message)}
-                disabled={saving}
-              />
-            </section>
-            <section className="set-block" aria-labelledby="set-mode">
-              <h2 id="set-mode">安装方式</h2>
-              <p>把技能装到另一个 Agent 时默认怎么做。</p>
-              <div className="radio-row">
-                <Choice
-                  name="sync-mode"
-                  value="copy"
-                  current={mode}
-                  disabled={saving}
-                  title="复制（推荐）"
-                  detail="每个 Agent 一份独立副本；替换前自动备份"
-                  onSelect={(value) => void write({ syncMode: value }, "安装方式改为复制")}
-                />
-                <Choice
-                  name="sync-mode"
-                  value="symlink"
-                  current={mode}
-                  disabled={saving}
-                  title="软链接"
-                  detail="所有 Agent 共用一份，改一处全部生效；只支持复制的 Agent 仍会复制"
-                  onSelect={(value) => void write({ syncMode: value }, "安装方式改为软链接")}
-                />
-              </div>
-            </section>
-            <section className="set-block" aria-labelledby="set-theme">
-              <h2 id="set-theme">外观</h2>
-              <div className="radio-row three">
-                <Choice name="theme" value="system" current={theme} title="跟随系统" detail="和 macOS 的外观一致" onSelect={setTheme} />
-                <Choice name="theme" value="light" current={theme} title="浅色" detail="始终使用浅色" onSelect={setTheme} />
-                <Choice name="theme" value="dark" current={theme} title="深色" detail="始终使用深色" onSelect={setTheme} />
-              </div>
-            </section>
-            <section className="set-block" aria-labelledby="set-visible">
-              <h2 id="set-visible">读取哪些 Agent 的技能</h2>
-              <p>
-                没勾选的 Agent 只统计数量，不读取技能内容，也不会出现在技能列表里。常用 Agent 总会读取。
-                {customized ? "" : "目前读取全部检测到的 Agent。"}
-              </p>
-              <div className="check-grid">
-                {agents
-                  .filter((agent) => agent.available)
-                  .map((agent) => {
-                    const locked = primary.includes(agent.id);
-                    const on = locked || !customized || visible.includes(agent.id);
-                    return (
-                      <label key={agent.id} className={locked ? "locked" : ""}>
-                        <input
-                          type="checkbox"
-                          checked={on}
-                          disabled={locked || saving}
-                          onChange={(event) => {
-                            const shown = customized ? visible : agents.filter((item) => item.available).map((item) => item.id);
-                            const next = event.target.checked
-                              ? [...new Set([...shown, agent.id])]
-                              : shown.filter((id) => id !== agent.id);
-                            void write(
-                              { visibleAgentIds: next, visibleCustomized: true },
-                              event.target.checked ? `开始读取 ${agent.name} 的技能` : `不再读取 ${agent.name} 的技能`,
-                            );
-                          }}
-                        />
-                        <AgentAvatar id={agent.id} size="sm" />
-                        <span>{agent.name}</span>
-                        <small>{agent.skillCount} 个</small>
-                      </label>
-                    );
-                  })}
-              </div>
-            </section>
-            <section className="set-block" aria-labelledby="set-roots">
-              <h2 id="set-roots">技能文件夹</h2>
-              <p>自动识别。软链接会显示它实际指向的位置。</p>
-              <div className="copies">
-                {agents
-                  .filter((agent) => agent.available)
-                  .flatMap((agent) =>
-                    agent.roots.map((root) => (
-                      <div key={`${agent.id}:${root.path}`}>
-                        <code title={root.path}>
-                          {root.path}
-                          {root.realPath && root.realPath !== root.path ? ` → ${root.realPath}` : ""}
-                        </code>
-                        <em>{agent.name}</em>
-                        <em>{root.available ? `${root.skillCount} 个` : "不存在"}</em>
-                      </div>
-                    )),
-                  )}
-              </div>
-            </section>
-            {integrations.data?.relatedProducts?.length ? (
-              <section className="set-block" aria-labelledby="set-related">
-                <h2 id="set-related">也检测到这些相关产品</h2>
-                <p>它们不是 Agent 本身，Skill Control 只显示，不改动。</p>
-                <div className="copies">
-                  {integrations.data.relatedProducts.map((product) => (
-                    <div key={product.id}>
-                      <code>
-                        {product.name}
-                        {product.version ? ` ${product.version}` : ""}
-                      </code>
-                      <em>{product.notes}</em>
-                      <em>{product.stateDir}</em>
+          <div className="settings-layout">
+            <SettingsNav current={current} onPick={showSection} />
+            <div className="set-grid">
+              <div className="set-group" id="set-group-agents" data-section="agents">
+                <NewAgentsNotice />
+                <section className="set-block" aria-labelledby="set-primary">
+                  <h2 id="set-primary">常用 Agent</h2>
+                  <p>Skill Control 只按这几个 Agent 检查差异和多份副本。其他 Agent 照常显示，但不会提醒你安装。</p>
+                  <AgentPicker
+                    name="primary-settings"
+                    selected={primary}
+                    onChange={(next) => void write({ primaryAgentIds: next }, `已设为常用：${joinNames(next.map(agentName))}`)}
+                    onLimit={(message) => toast.show(message)}
+                    disabled={saving}
+                  />
+                </section>
+                <section className="set-block" aria-labelledby="set-visible">
+                  <h2 id="set-visible">读取哪些 Agent 的技能</h2>
+                  <p>
+                    没勾选的 Agent 只统计数量，不读取技能内容，也不会出现在技能列表里。常用 Agent 总会读取。
+                    {customized ? "" : "目前读取全部检测到的 Agent。"}
+                  </p>
+                  <div className="check-grid">
+                    {agents
+                      .filter((agent) => agent.available)
+                      .map((agent) => {
+                        const locked = primary.includes(agent.id);
+                        const on = locked || !customized || visible.includes(agent.id);
+                        return (
+                          <label key={agent.id} className={locked ? "locked" : ""}>
+                            <input
+                              type="checkbox"
+                              checked={on}
+                              disabled={locked || saving}
+                              onChange={(event) => {
+                                const shown = customized ? visible : agents.filter((item) => item.available).map((item) => item.id);
+                                const next = event.target.checked
+                                  ? [...new Set([...shown, agent.id])]
+                                  : shown.filter((id) => id !== agent.id);
+                                void write(
+                                  { visibleAgentIds: next, visibleCustomized: true },
+                                  event.target.checked ? `开始读取 ${agent.name} 的技能` : `不再读取 ${agent.name} 的技能`,
+                                );
+                              }}
+                            />
+                            <AgentAvatar id={agent.id} size="sm" />
+                            <span>{agent.name}</span>
+                            <small>{agent.skillCount} 个</small>
+                          </label>
+                        );
+                      })}
+                  </div>
+                </section>
+                <section className="set-block" aria-labelledby="set-roots">
+                  <h2 id="set-roots">技能文件夹</h2>
+                  <p>自动识别。软链接会显示它实际指向的位置。</p>
+                  <div className="copies">
+                    {agents
+                      .filter((agent) => agent.available)
+                      .flatMap((agent) =>
+                        agent.roots.map((root) => (
+                          <div key={`${agent.id}:${root.path}`}>
+                            <code title={root.path}>
+                              {root.path}
+                              {root.realPath && root.realPath !== root.path ? ` → ${root.realPath}` : ""}
+                            </code>
+                            <em>{agent.name}</em>
+                            <em>{root.available ? `${root.skillCount} 个` : "不存在"}</em>
+                          </div>
+                        )),
+                      )}
+                  </div>
+                </section>
+                {integrations.data?.relatedProducts?.length ? (
+                  <section className="set-block" aria-labelledby="set-related">
+                    <h2 id="set-related">也检测到这些相关产品</h2>
+                    <p>它们不是 Agent 本身，Skill Control 只显示，不改动。</p>
+                    <div className="copies">
+                      {integrations.data.relatedProducts.map((product) => (
+                        <div key={product.id}>
+                          <code>
+                            {product.name}
+                            {product.version ? ` ${product.version}` : ""}
+                          </code>
+                          <em>{product.notes}</em>
+                          <em>{product.stateDir}</em>
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
-              </section>
-            ) : null}
-            <AgentVersionsSetting />
-            <section className="set-block" aria-labelledby="set-history">
-              <h2 id="set-history">历史与撤销</h2>
-              <p>
-                每次安装、导入、更新、移除和整理都会记录下来。替换前的旧版本保存在 <code>~/.agent-skill-manager/backups</code>，
-                移除的技能在 <button type="button" className="link-btn" onClick={() => go("library")}>技能库 → 回收站</button>。
-              </p>
-              <HistoryList />
-            </section>
-            <section className="set-block" aria-labelledby="set-privacy">
-              <h2 id="set-privacy">数据与隐私</h2>
-              <p>所有扫描都在本机完成。使用次数只统计会话记录里的调用，不读取对话内容，也不会上传。密钥和令牌在读取配置时就被隐藏。</p>
-              <p>
-                “数据”页的预估费用按各厂商官方 API 价格计算，订阅内的用量不等于实际支出。价格和计算规则见{" "}
-                <button type="button" className="link-btn" onClick={() => go("pricing")}>
-                  模型价格表
-                </button>
-                。
-              </p>
-            </section>
+                  </section>
+                ) : null}
+              </div>
+              <div className="set-group" id="set-group-mode" data-section="mode">
+                <section className="set-block" aria-labelledby="set-mode">
+                  <h2 id="set-mode">安装方式</h2>
+                  <p>把技能装到另一个 Agent 时默认怎么做。</p>
+                  <div className="radio-row">
+                    <Choice
+                      name="sync-mode"
+                      value="copy"
+                      current={mode}
+                      disabled={saving}
+                      title="复制（推荐）"
+                      detail="每个 Agent 一份独立副本；替换前自动备份"
+                      onSelect={(value) => void write({ syncMode: value }, "安装方式改为复制")}
+                    />
+                    <Choice
+                      name="sync-mode"
+                      value="symlink"
+                      current={mode}
+                      disabled={saving}
+                      title="软链接"
+                      detail="所有 Agent 共用一份，改一处全部生效；只支持复制的 Agent 仍会复制"
+                      onSelect={(value) => void write({ syncMode: value }, "安装方式改为软链接")}
+                    />
+                  </div>
+                </section>
+                <section className="set-block" aria-labelledby="set-history">
+                  <h2 id="set-history">历史与撤销</h2>
+                  <p>
+                    每次安装、导入、更新、移除和整理都会记录下来。替换前的旧版本保存在 <code>~/.agent-skill-manager/backups</code>，
+                    移除的技能在 <button type="button" className="link-btn" onClick={() => go("library")}>技能库 → 回收站</button>。
+                  </p>
+                  <HistoryList />
+                </section>
+              </div>
+              <div className="set-group" id="set-group-theme" data-section="theme">
+                <section className="set-block" aria-labelledby="set-theme">
+                  <h2 id="set-theme">外观</h2>
+                  <div className="radio-row three">
+                    <Choice name="theme" value="system" current={theme} title="跟随系统" detail="和 macOS 的外观一致" onSelect={setTheme} />
+                    <Choice name="theme" value="light" current={theme} title="浅色" detail="始终使用浅色" onSelect={setTheme} />
+                    <Choice name="theme" value="dark" current={theme} title="深色" detail="始终使用深色" onSelect={setTheme} />
+                  </div>
+                </section>
+              </div>
+              <div className="set-group" id="set-group-privacy" data-section="privacy">
+                <section className="set-block" aria-labelledby="set-privacy">
+                  <h2 id="set-privacy">数据与隐私</h2>
+                  <p>所有扫描都在本机完成。使用次数只统计会话记录里的调用，不读取对话内容，也不会上传。密钥和令牌在读取配置时就被隐藏。</p>
+                  <p>
+                    “数据”页的预估费用按各厂商官方 API 价格计算，订阅内的用量不等于实际支出。价格和计算规则见{" "}
+                    <button type="button" className="link-btn" onClick={() => go("pricing")}>
+                      模型价格表
+                    </button>
+                    。
+                  </p>
+                </section>
+              </div>
+              <div className="set-group" id="set-group-versions" data-section="versions">
+                <AgentVersionsSetting />
+                <AppUpdateSetting />
+              </div>
+              <div className="set-group" id="set-group-about" data-section="about">
+                <AboutSection />
+              </div>
+            </div>
           </div>
         )}
       </div>

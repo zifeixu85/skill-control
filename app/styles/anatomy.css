@@ -124,7 +124,7 @@
 /* Cards in grids: equal height per row, footer pinned to the bottom. */
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  /* columns: layout.css (one rule for every card grid) */
   gap: 12px;
   align-items: stretch;
 }

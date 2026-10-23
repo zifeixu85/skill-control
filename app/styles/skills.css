@@ -50,6 +50,8 @@ body.resizing .inspector-resizer::after {
 .split-list {
   container-type: inline-size;
   display: grid;
+  /* Pinned to the column: a long chip row scrolls instead of widening the list. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   min-height: 0;
   min-width: 0;
@@ -59,7 +61,7 @@ body.resizing .inspector-resizer::after {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
-  padding: 0 28px 12px;
+  padding: 0 var(--inline-pad) 12px;
 }
 .fchip {
   border: 1px solid var(--line);
@@ -333,10 +335,8 @@ body.resizing .inspector-resizer::after {
   background: var(--warn);
 }
 
-@media (max-width: 880px) {
-  .filters {
-    padding: 0 16px 12px;
-  }
+/* Content width, not the window: the page is the container (layout-rules.md). */
+@container page (max-width: 640px) {
   .split,
   .split.open,
   .split.open.wide {

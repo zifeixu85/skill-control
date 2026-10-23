@@ -8,6 +8,7 @@ import {
   AGENT_VERSION_LABELS,
   AGENT_VERSION_TONES,
   inAppHint,
+  oneClickUpdate,
   versionSourceLabel,
   type AgentVersion,
   type AgentVersionsReport,
@@ -20,7 +21,8 @@ import { useToast } from "../../providers/ToastProvider";
 import { AgentAvatar } from "../../ui/Avatar";
 import { SectionHeading } from "../../ui/basics";
 import { ExternalLink } from "../../ui/ExternalLink";
-import { RemedyButton, RemedyPanel } from "../../ui/RemedyPanel";
+import { RemedyActions, RemedyPanel } from "../../ui/RemedyPanel";
+import { AgentUpdateDialog } from "./AgentUpdateDialog";
 
 export const AGENT_VERSIONS_KEY = "agent-versions";
 export const loadAgentVersions = () => api.agentVersions();
@@ -48,6 +50,28 @@ function VersionPair({ agent }: { agent: AgentVersion }) {
   );
 }
 
+/** "打开 X 检查更新": the app updates itself; Skill Control only launches it. */
+function OpenAppButton({ agent }: { agent: AgentVersion }) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const open = async () => {
+    setBusy(true);
+    try {
+      await api.openAgentApp(agent.id);
+      toast.show(`已打开 ${agent.name}，在它的菜单里检查更新`);
+    } catch (error) {
+      toast.show(errorMessage(error, `没能打开 ${agent.name}。`), { tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <button type="button" className="btn sm" disabled={busy} title="只打开这个应用，不下载也不改文件" onClick={() => void open()}>
+      打开 {agent.name} 检查更新
+    </button>
+  );
+}
+
 function AgentVersionRow({ agent }: { agent: AgentVersion }) {
   const now = useNow();
   const [open, setOpen] = useState(false);
@@ -56,8 +80,10 @@ function AgentVersionRow({ agent }: { agent: AgentVersion }) {
   const installedFrom = versionSourceLabel(agent.installed?.source || null);
   const hasCommands = Boolean(agent.remedy?.commands.length);
   const needsUpdate = agent.status === "update-available";
+  const updateId = needsUpdate ? oneClickUpdate(agent) : null;
+  const [updating, setUpdating] = useState(false);
   return (
-    <li className="avrow" data-memory-id={`agent:${agent.agentId}`}>
+    <li className="avrow" data-memory-id={`agent:${agent.id}`}>
       <AgentAvatar id={agent.agentId} size="md" />
       <div className="it-main">
         <div className="it-title av-title">
@@ -78,31 +104,55 @@ function AgentVersionRow({ agent }: { agent: AgentVersion }) {
               <span>{formatMonthDay(agent.latest.releasedAt, now || undefined)}发布</span>
             </>
           ) : null}
+          {isHttpsUrl(agent.latest?.notesUrl) ? (
+            <>
+              <span className="sep">·</span>
+              <ExternalLink className="md-link" href={agent.latest.notesUrl}>
+                更新说明
+              </ExternalLink>
+            </>
+          ) : null}
+          {isHttpsUrl(agent.latest?.url) ? (
+            <>
+              <span className="sep">·</span>
+              <ExternalLink className="md-link" href={agent.latest.url}>
+                官网
+              </ExternalLink>
+            </>
+          ) : null}
         </div>
         {agent.error ? <div className="it-desc danger-text">{agent.error}</div> : null}
         {!agent.error && agent.status === "unknown" ? (
-          <div className="it-desc">{agent.installed ? "查不到最新版本，无法比较。" : "找不到本机安装的版本。"}</div>
+          <div className="it-desc">{agent.reason || (agent.installed ? "查不到最新版本，无法比较。" : "找不到本机安装的版本。")}</div>
         ) : null}
-        {needsUpdate && !hasCommands ? <div className="it-desc">{inAppHint(agent.name)}</div> : null}
+        {needsUpdate && !hasCommands && !updateId && !agent.openApp ? <div className="it-desc">{inAppHint(agent.name)}</div> : null}
+        {!agent.active ? <div className="it-desc">另一份排在 PATH 前面，平时运行的不是这一份。</div> : null}
         {installedFrom && agent.installed?.path ? (
           <div className="it-desc mono" title={agent.installed.path}>
             {installedFrom} · {agent.installed.path}
           </div>
         ) : null}
       </div>
-      <div className="it-acts">
-        {isHttpsUrl(agent.latest?.notesUrl) ? (
-          <ExternalLink className="btn sm ghost" href={agent.latest.notesUrl}>
-            更新说明
+      <div className="it-acts av-acts">
+        {needsUpdate && agent.openApp ? <OpenAppButton agent={agent} /> : null}
+        {needsUpdate && agent.downloadUrl && isHttpsUrl(agent.downloadUrl) ? (
+          <ExternalLink className="btn sm ghost" href={agent.downloadUrl}>
+            下载页
           </ExternalLink>
         ) : null}
-        {isHttpsUrl(agent.latest?.url) ? (
-          <ExternalLink className="btn sm ghost" href={agent.latest.url}>
-            官网
-          </ExternalLink>
+        {needsUpdate && agent.remedy && (hasCommands || updateId) ? (
+          <RemedyActions remedy={agent.remedy} open={open} onToggle={() => setOpen((value) => !value)} controls={remedyId} />
         ) : null}
-        {needsUpdate && agent.remedy && hasCommands ? <RemedyButton open={open} onToggle={() => setOpen((value) => !value)} controls={remedyId} /> : null}
+        {updateId ? (
+          <button type="button" className="btn sm primary" title="先列出要运行的命令和影响，确认后才执行" onClick={() => setUpdating(true)}>
+            一键更新
+          </button>
+        ) : null}
+        {needsUpdate && (updateId || (agent.remedy?.prompt && hasCommands)) ? (
+          <small className="act-note">{updateId ? "一键更新会先预览命令，确认后才运行" : "复制 AI 指令只复制，不改任何东西"}</small>
+        ) : null}
       </div>
+      {updating && updateId ? <AgentUpdateDialog agent={agent} updateId={updateId} onClose={() => setUpdating(false)} /> : null}
       {open && agent.remedy ? (
         <div className="remedy-slot">
           <RemedyPanel id={remedyId} remedy={agent.remedy} label={agent.name} />
@@ -159,7 +209,7 @@ export function AgentVersions() {
       {shown.length ? (
         <ul className="avlist">
           {shown.map((agent) => (
-            <AgentVersionRow key={agent.agentId} agent={agent} />
+            <AgentVersionRow key={agent.id} agent={agent} />
           ))}
         </ul>
       ) : data && data.agents.length ? (

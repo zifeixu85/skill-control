@@ -1,5 +1,5 @@
 import { historyIdOf } from "./history";
-import { asArray, asOptionalString, asRecord, asString, asStringList } from "./parse";
+import { asArray, asOptionalNumber, asOptionalString, asRecord, asString, asStringList } from "./parse";
 
 /** /api/cli-tools shapes (docs/ARCHITECTURE.md · 统一技能库与 CLI 工具卡片). */
 
@@ -38,6 +38,21 @@ export interface CliFix {
   agentIds: string[];
 }
 
+export interface CliOwner {
+  type: "npm" | "uv" | "pipx" | "app" | "native" | "homebrew" | "cargo" | "script" | "other";
+  name: string | null;
+  version: string | null;
+}
+
+/** Per-Agent availability for the inventory list (dots); deep tools also have `agents` rows. */
+export interface CliAvailability {
+  agentId: string;
+  available: boolean | null;
+  detail: string | null;
+  /** Whether the Agent's allow rules already cover this command (null when not applicable). */
+  allowed: boolean | null;
+}
+
 export interface CliTool {
   id: string;
   name: string;
@@ -46,6 +61,97 @@ export interface CliTool {
   versionSkew: boolean;
   agents: CliAgentRow[];
   fixes: CliFix[];
+  /** Inventory fields (v0.2 §12). */
+  path: string | null;
+  kind: string | null;
+  owner: CliOwner | null;
+  description: string | null;
+  size: number | null;
+  mtime: string | null;
+  referencedBySkills: string[];
+  referencedCount: number;
+  aiRelated: boolean;
+  /** Why it counts as AI-related: skill-reference, known-ai-cli, ai-app, npm-keywords, local-bin. */
+  aiReasons: string[];
+  /** Where it was found (~/.local/bin, nvm, Homebrew, …). */
+  sourceLabel: string | null;
+  /** Other entry points to the same file. */
+  links: string[];
+  target: string | null;
+  availability: CliAvailability[];
+  /** Has the per-Agent table or fixes (the old lark-cli card). */
+  deep: boolean;
+}
+
+export interface CliInventory {
+  tools: CliTool[];
+  summary: { total: number; aiRelated: number };
+}
+
+const OWNER_TYPES: CliOwner["type"][] = ["npm", "uv", "pipx", "app", "native", "homebrew", "cargo", "script"];
+
+export const OWNER_LABELS: Record<CliOwner["type"], string> = {
+  npm: "npm 全局包",
+  uv: "uv 工具",
+  pipx: "pipx 工具",
+  app: "应用自带",
+  native: "原生程序",
+  homebrew: "Homebrew",
+  cargo: "cargo 安装",
+  script: "脚本",
+  other: "其他",
+};
+
+export const AI_REASON_LABELS: Record<string, string> = {
+  "skill-reference": "有技能提到它",
+  "known-ai-cli": "常见的 AI 命令行工具",
+  "ai-app": "指向 AI 应用",
+  "npm-keywords": "npm 包标注了 AI / Agent / MCP",
+  "local-bin": "装在 ~/.local/bin",
+};
+
+function availabilityOf(raw: unknown, rows: CliAgentRow[]): CliAvailability[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item) => {
+        const entry = asRecord(item);
+        const state = asString(entry.state || entry.status).toLowerCase();
+        const available =
+          typeof entry.available === "boolean"
+            ? entry.available
+            : "resolves" in entry
+              ? Boolean(entry.resolves)
+              : state
+                ? ["ok", "available", "yes", "found"].includes(state)
+                  ? true
+                  : ["missing", "no", "not-found", "unavailable"].includes(state)
+                    ? false
+                    : null
+                : null;
+        return {
+          agentId: asString(entry.agentId),
+          available,
+          detail: asOptionalString(entry.detail) || asOptionalString(entry.pathSource),
+          allowed: typeof entry.allowed === "boolean" ? entry.allowed : null,
+        };
+      })
+      .filter((entry) => entry.agentId);
+  }
+  const map = asRecord(raw);
+  if (Object.keys(map).length) {
+    return Object.entries(map).map(([agentId, value]) => {
+      const entry = asRecord(value);
+      const flag = typeof value === "boolean" ? value : typeof entry.available === "boolean" ? entry.available : null;
+      const state = typeof value === "string" ? value.toLowerCase() : "";
+      return { agentId, available: flag ?? (state ? ["ok", "available", "yes"].includes(state) : null), detail: asOptionalString(entry.detail), allowed: null };
+    });
+  }
+  return rows.map((row) => ({
+    agentId: row.agentId,
+    available: Boolean(row.resolves),
+    detail: row.resolves ? row.resolves.path : null,
+    allowed: row.allowRule === "present" || row.allowRule === "ok" ? true : row.allowRule === "missing" ? false : null,
+  }));
 }
 
 export type CliPlan =
@@ -77,9 +183,32 @@ const boolOrNull = (value: unknown) => (typeof value === "boolean" ? value : nul
 export function normalizeCliTools(raw: unknown): CliTool[] {
   return asArray(asRecord(raw).tools).map((value) => {
     const tool = asRecord(value);
+    const rows = normalizeAgentRows(tool.agents);
+    const fixes = normalizeFixes(tool.fixes);
+    const owner = asRecord(tool.owner);
+    const ownerType = asString(owner.type) as CliOwner["type"];
+    const referenced = tool.referencedBySkills;
+    const referencedBySkills = Array.isArray(referenced) ? asStringList(referenced) : [];
     return {
-      id: asString(tool.id),
+      id: asString(tool.id) || asString(tool.name) || asString(tool.path),
       name: asString(tool.name, asString(tool.id)),
+      path: asOptionalString(tool.path),
+      kind: asOptionalString(tool.kind),
+      owner: Object.keys(owner).length
+        ? { type: OWNER_TYPES.includes(ownerType) ? ownerType : "other", name: asOptionalString(owner.name), version: asOptionalString(owner.version) }
+        : null,
+      description: asOptionalString(tool.description),
+      size: asOptionalNumber(tool.size),
+      mtime: asOptionalString(tool.mtime),
+      referencedBySkills,
+      referencedCount: typeof referenced === "number" ? referenced : referencedBySkills.length,
+      aiRelated: tool.aiRelated === true || (tool.aiRelated === undefined && (rows.length > 0 || fixes.length > 0)),
+      aiReasons: asStringList(tool.aiReasons),
+      sourceLabel: asOptionalString(tool.sourceLabel) || asOptionalString(tool.source),
+      links: asStringList(tool.links),
+      target: asOptionalString(tool.target),
+      availability: availabilityOf(rows.length ? null : tool.agents, rows),
+      deep: rows.length > 0 || fixes.length > 0,
       binaries: asArray(tool.binaries).map((item) => {
         const binary = asRecord(item);
         return {
@@ -92,7 +221,33 @@ export function normalizeCliTools(raw: unknown): CliTool[] {
       }),
       latest: asOptionalString(tool.latest),
       versionSkew: tool.versionSkew === true,
-      agents: asArray(tool.agents).map((item) => {
+      agents: rows,
+      fixes,
+    };
+  }).filter((tool) => tool.id);
+}
+
+/** The full response: the tools plus the service's summary (or one counted here). */
+export function normalizeCliInventory(raw: unknown): CliInventory {
+  const tools = normalizeCliTools(raw);
+  const summary = asRecord(asRecord(raw).summary);
+  return {
+    tools,
+    summary: {
+      total: asOptionalNumber(summary.total) ?? tools.length,
+      aiRelated: asOptionalNumber(summary.aiRelated) ?? tools.filter((tool) => tool.aiRelated).length,
+    },
+  };
+}
+
+/** Deep rows only: entries that describe how the Agent resolves the command. */
+function normalizeAgentRows(raw: unknown): CliAgentRow[] {
+  return asArray(raw)
+    .filter((item) => {
+      const agent = asRecord(item);
+      return "pathSource" in agent || "resolves" in agent || "workspace" in agent || "allowRule" in agent;
+    })
+    .map((item) => {
         const agent = asRecord(item);
         const resolves = asRecord(agent.resolves);
         const skill = asRecord(agent.skill);
@@ -112,21 +267,22 @@ export function normalizeCliTools(raw: unknown): CliTool[] {
           sandboxNetwork: asOptionalString(agent.sandboxNetwork),
           plist: asOptionalString(agent.plist),
         };
-      }),
-      fixes: asArray(tool.fixes).map((item) => {
-        const fix = asRecord(item);
-        return {
-          id: asString(fix.id),
-          label: asString(fix.label),
-          kind: (asString(fix.kind) === "self" ? "self" : "guide") as CliFix["kind"],
-          applicable: fix.applicable === true,
-          reason: asOptionalString(fix.reason),
-          instructions: asOptionalString(fix.instructions),
-          agentIds: asStringList(fix.agentIds),
-        };
-      }),
+      });
+}
+
+function normalizeFixes(raw: unknown): CliFix[] {
+  return asArray(raw).map((item) => {
+    const fix = asRecord(item);
+    return {
+      id: asString(fix.id),
+      label: asString(fix.label),
+      kind: (asString(fix.kind) === "self" ? "self" : "guide") as CliFix["kind"],
+      applicable: fix.applicable === true,
+      reason: asOptionalString(fix.reason),
+      instructions: asOptionalString(fix.instructions),
+      agentIds: asStringList(fix.agentIds),
     };
-  }).filter((tool) => tool.id);
+  });
 }
 
 export function normalizeCliPlan(raw: unknown): CliPlan {
