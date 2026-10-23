@@ -17,7 +17,6 @@ import { api } from "../../lib/api";
 import {
   ChevronIcon,
   ConnectorsIcon,
-  KeyIcon,
   UpdateIcon,
   LibraryIcon,
   ExpertsIcon,
@@ -109,7 +108,6 @@ export function Sidebar() {
       Icon: ConnectorsIcon,
       count: (integrations.data?.connectors.length || 0) + (integrations.data?.mcpMatrix.length || 0) || undefined,
     },
-    { id: "secrets", label: "密钥", Icon: KeyIcon, sub: true },
     { id: "updates", label: "更新", Icon: UpdateIcon, count: pendingUpdates || undefined, badge: true },
   ];
   const insight: NavItem[] = [
@@ -125,7 +123,7 @@ export function Sidebar() {
         right.skillCount - left.skillCount,
     );
   // 模型价格表 lives under 数据.
-  const current = (id: string) => route.page === id || (id === "usage" && route.page === "pricing");
+  const current = (id: string) => route.page === id || (id === "usage" && route.page === "pricing") || (id === "connectors" && route.page === "secrets");
   const navButton = ({ id, label, Icon, count, badge, sub }: NavItem) => (
     <button
       key={id}

@@ -13,6 +13,7 @@ import { CopiesIcon, RefreshIcon } from "../../icons";
 import { useToast } from "../../providers/ToastProvider";
 import { EmptyState, Loading, SectionHeading, TopBar } from "../../ui/basics";
 import { useCopyRemedy } from "../../ui/RemedyPanel";
+import { RunningProgress } from "../../ui/RunningProgress";
 import { InfoPopover } from "../../ui/InfoPopover";
 import { AgentVersions } from "./AgentVersions";
 import { UnitRow } from "./UnitRow";
@@ -24,20 +25,17 @@ const FOLDED = new Set<UpdateStatus>(["unknown-source", "managed-by-host", "up-t
 let polling = false;
 
 function CheckProgress({ job }: { job: CheckJob }) {
-  const ratio = job.total ? Math.min(1, job.done / job.total) : 0;
+  const started = job.startedAt ? Date.parse(job.startedAt) : NaN;
   return (
-    <div className="index-progress" role="status" aria-live="polite">
-      <div>
-        <b>正在检查更新…</b>
-        <span>
-          {job.total ? `${job.done} / ${job.total} 个来源` : "正在整理来源"}
-          {job.requests ? ` · 已发出 ${job.requests} 个请求` : ""}
-          {job.hosts.length ? ` · ${joinNames(job.hosts)}` : ""}
-        </span>
-      </div>
-      <span className="progress" role="progressbar" aria-label="检查进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(ratio * 100)}>
-        <i style={{ transform: `scaleX(${ratio})` }} />
-      </span>
+    <div className="check-progress">
+      <RunningProgress
+        label="正在检查更新…"
+        done={job.total ? job.done : null}
+        total={job.total || null}
+        startedAt={Number.isFinite(started) ? started : null}
+        expectedMs={30_000}
+        detail={[job.total ? `${job.done} / ${job.total} 个来源` : "正在整理来源", job.requests ? `已发出 ${job.requests} 个请求` : "", job.hosts.length ? joinNames(job.hosts) : ""].filter(Boolean).join(" · ")}
+      />
     </div>
   );
 }

@@ -9,6 +9,7 @@ import { api } from "../../../lib/api";
 import { CHOICE_TEXT, type ApplyResult, type ConflictChoice, type UpdatePlan, type UpdateUnit } from "../../../lib/updates";
 import { CopyPathButton } from "../../files/ConfigDetailView";
 import { PlanView, ResultView } from "./UpdateViews";
+import { RunningProgress } from "../../ui/RunningProgress";
 
 function Intro({ unit, onStart }: { unit: UpdateUnit; onStart: () => void }) {
   const canPlan = unit.action.kind !== "none";
@@ -122,6 +123,14 @@ function UpdateReview({ unit, onCancel }: { unit: UpdateUnit; onCancel: () => vo
           </>
         ) : null}
       </div>
+      {flow.applying ? (
+        <RunningProgress
+          label={plan?.kind === "plan" && plan.action === "delegate" ? "正在运行更新命令…" : "正在下载并替换…"}
+          total={plan?.kind === "plan" ? plan.steps.length : null}
+          expectedMs={plan?.kind === "plan" && plan.action === "delegate" ? 60_000 : 15_000}
+          detail="完成前请不要关闭这个面板。"
+        />
+      ) : null}
       {failure ? (
         <p className="form-error" role="alert">
           {failure}

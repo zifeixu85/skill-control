@@ -82,6 +82,7 @@ test("v0.2 routes: new Agents, discovery, secrets, totals, sort fields, CLI inve
   const secrets = (await json("secrets", "/api/secrets")).json;
   assert.deepEqual(secrets.items.map((item) => [item.service, item.keyName, item.storage]).sort(), [["GitHub", "登录令牌", "keychain"], ["npm（registry.npmjs.org）", "_authToken", "credential-file"]]);
   assert.ok(secrets.items.every((item) => typeof item.remedy?.prompt === "string"));
+  assert.deepEqual([typeof secrets.guide.text, secrets.guide.prompt], ["string", null], "no plaintext secret here: nothing to tidy up");
 
   // §7: totals for every window in one response.
   const totals = (await json("totals", "/api/usage/totals")).json;
@@ -103,10 +104,20 @@ test("v0.2 routes: new Agents, discovery, secrets, totals, sort fields, CLI inve
   const offline = await post("apply:offline", "/api/agent-versions/apply", { planId: "x", confirm: true }, { "x-skill-manager-confirm": "yes" });
   assert.deepEqual([offline.status, offline.json.code], [409, "updates-offline"]);
   assert.equal((await post("open:missing", "/api/agent-versions/open", { id: "cursor-app" })).status, 404);
+  const terminalNoHeader = await post("terminal:no-header", "/api/agent-versions/terminal", { planId: "x", confirm: true });
+  assert.deepEqual([terminalNoHeader.status, terminalNoHeader.json.code], [400, "confirm-required"]);
+  const terminalOffline = await post("terminal:offline", "/api/agent-versions/terminal", { planId: "x", confirm: true }, { "x-skill-manager-confirm": "yes" });
+  assert.deepEqual([terminalOffline.status, terminalOffline.json.code], [409, "updates-offline"]);
+  const background = await post("apply:background", "/api/agent-versions/apply", { planId: "x", confirm: true, background: true }, { "x-skill-manager-confirm": "yes" });
+  assert.deepEqual([background.status, background.json.code], [409, "updates-offline"]);
+  const missingJob = await json("job:missing", "/api/agent-versions/jobs/00000000-0000-0000-0000-000000000000");
+  assert.deepEqual([missingJob.status, missingJob.json.code], [404, "job-not-found"]);
+  assert.equal((await json("job:bad", "/api/agent-versions/jobs/..%2Fetc")).status, 404);
+  assert.equal((await request("/api/agent-versions/jobs/00000000-0000-0000-0000-000000000000", { headers: { "Sec-Fetch-Site": "cross-site" } })).status, 403);
 
   assert.deepEqual(bodies.filter((item) => /ZZ9/u.test(item.body)).map((item) => item.label), []);
   assert.deepEqual(bodies.filter((item) => item.body.includes(home)).map((item) => item.label), []);
-  for (const [pathname, method] of [["/api/secrets", "GET"], ["/api/agents/discover", "GET"], ["/api/usage/totals", "GET"], ["/api/agents/acknowledge", "POST"], ["/api/agent-versions/plan", "POST"]]) {
+  for (const [pathname, method] of [["/api/secrets", "GET"], ["/api/agents/discover", "GET"], ["/api/usage/totals", "GET"], ["/api/agents/acknowledge", "POST"], ["/api/agent-versions/plan", "POST"], ["/api/agent-versions/terminal", "POST"]]) {
     const crossSite = await request(pathname, { method, ...(method === "POST" ? { body: "{}" } : {}), headers: { "Sec-Fetch-Site": "cross-site" } });
     assert.equal(crossSite.status, 403, pathname);
   }

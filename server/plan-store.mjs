@@ -45,6 +45,11 @@ export function createPlanStore({ ttlMs, now = () => Date.now(), label = "计划
       plans.set(planId, { ...plan, planId, createdAt: now() });
       return planId;
     },
+    /** The plan without using it up, or null. */
+    peek(planId) {
+      purge();
+      return plans.get(String(planId || "")) || null;
+    },
     /** Returns the plan and removes it (single use); throws a coded 404 otherwise. */
     take(planId, kind = null) {
       purge();

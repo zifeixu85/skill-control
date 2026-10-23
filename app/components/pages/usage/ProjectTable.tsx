@@ -1,5 +1,7 @@
 "use client";
 
+import { formatRate, rateTone } from "../../../lib/cache";
+import { CacheHint } from "./TotalsStrip";
 import { COST_HINT, formatCost } from "../../../lib/cost";
 import { formatCompact } from "../../../lib/format";
 import { PROJECT_NOTE, projectLabel, topModelNames, type OtherProjects, type ProjectRow } from "../../../lib/projects";
@@ -39,6 +41,7 @@ function Row({ project, showAgents }: { project: ProjectRow; showAgents: boolean
       <td className="num" title={splitText(project)}>
         {formatCompact(project.tokens)}
       </td>
+      <td className={`num rate ${rateTone(project.cacheHitRate)}`}>{formatRate(project.cacheHitRate)}</td>
       <td className="num cost" title={COST_HINT}>
         {formatCost(project.costUsd)}
       </td>
@@ -88,6 +91,12 @@ export function ProjectTable({
                 会话
               </th>
               <th scope="col" className="num">Tokens</th>
+              <th scope="col" className="num">
+                <span className="with-hint">
+                  缓存命中
+                  <CacheHint />
+                </span>
+              </th>
               <th scope="col" className="num" title={COST_HINT}>
                 预估费用
               </th>
@@ -107,6 +116,7 @@ export function ProjectTable({
                 </th>
                 <td className="num" />
                 <td className="num">{formatCompact(other.tokens)}</td>
+                <td className="num" />
                 <td className="num cost">{formatCost(other.costUsd)}</td>
                 <td />
               </tr>
@@ -118,6 +128,7 @@ export function ProjectTable({
               {/* Sessions don't add up across projects (one session can work in several). */}
               <td className="num" />
               <td className="num">{formatCompact(tokens)}</td>
+              <td className="num" />
               <td className="num cost" title={COST_HINT}>
                 {formatCost(totalCost)}
               </td>

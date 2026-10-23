@@ -1,5 +1,6 @@
 "use client";
 
+import { RunningProgress } from "../ui/RunningProgress";
 import { useMemo, useState, type DragEvent } from "react";
 import { refreshAfterWrite } from "../../hooks/refresh";
 import { noop, useEscape } from "../../hooks/useEscape";
@@ -193,6 +194,7 @@ export function ImportDialog({ onClose }: { onClose: () => void }) {
             {error}
           </p>
         ) : null}
+        {working && step.name === "plan" ? <RunningProgress label="正在安装…" expectedMs={5_000} /> : null}
         <div className="acts">
           <small>替换已有技能前会自动备份</small>
           <span className="acts-right">

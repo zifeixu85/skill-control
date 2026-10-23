@@ -1,5 +1,6 @@
 "use client";
 
+import { RunningProgress } from "../../ui/RunningProgress";
 import { useEffect, useRef, useState } from "react";
 import { refreshAfterWrite } from "../../../hooks/refresh";
 import { noop, useEscape } from "../../../hooks/useEscape";
@@ -116,6 +117,7 @@ export function PlanReview({ request, onClose, onWiden }: { request: PlanRequest
             </div>
           </>
         )}
+        {flow.applying ? <RunningProgress label={`正在整理 ${active} 项…`} expectedMs={Math.max(6_000, active * 1_500)} detail="替换前都会先备份；完成前不能关闭。" /> : null}
         {flow.planError || flow.error ? (
           <p className="form-error" role="alert">
             {flow.planError || flow.error}

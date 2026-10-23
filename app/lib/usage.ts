@@ -1,3 +1,4 @@
+import { cacheDistributionOf, cacheHitRate, type CacheDistribution } from "./cache";
 import { normalizeCost, normalizeModelRows, type CostSplit, type ModelRow } from "./cost";
 import { normalizeOtherProjects, normalizeProjectList, type OtherProjects, type ProjectRow } from "./projects";
 import { windowLabel } from "./usage-window";
@@ -62,6 +63,11 @@ export interface UsageAgent {
   sources: UsageSource[];
   /** Caveats from the service, e.g. Codex moved old sessions into its database (partly estimated). */
   notes: string[];
+  /** 0–1, see lib/cache. */
+  cacheHitRate: number | null;
+  cacheWriteShare: number | null;
+  /** Per-conversation hit rates (Agent 使用数据). */
+  cacheDistribution: CacheDistribution | null;
 }
 
 /** `notes` (strings or { text }) or a single `note`; trimmed, deduplicated, at most 5. */
@@ -191,6 +197,9 @@ export function normalizeUsageAgent(value: unknown, fallbackId = ""): UsageAgent
     series: normalizeSeries(record.series),
     sources: normalizeSources(record.sources),
     notes: usageNotes(record),
+    cacheHitRate: cacheHitRate(pick(base, "cacheHitRate"), normalizeTokens(base.tokens)),
+    cacheWriteShare: asOptionalNumber(pick(base, "cacheWriteShare")),
+    cacheDistribution: cacheDistributionOf(record) || cacheDistributionOf(base),
   };
 }
 

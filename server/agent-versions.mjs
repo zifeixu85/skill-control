@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { appendFile, mkdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
+import { appendFile, chmod, mkdir, mkdtemp, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import { createJobRegistry, openScript, runStreaming, terminalScript } from "./agent-update-run.mjs";
+import { npmPrefixOf, updateStepsFor } from "./agent-update-steps.mjs";
 import { applicationDirectoriesFor, parseYamlSafe, readAppBundle } from "./config-files.mjs";
 import { compactHomeInText, compactHomePath, exists, homeVariants, object, readBoundedJson, readBoundedText, scrubTokens, text } from "./fs-safe.mjs";
 import { CodedError, createPlanStore } from "./plan-store.mjs";
-import { runCommand } from "./update-apply.mjs";
 import { defaultSearchDirectories } from "./path-lookup.mjs";
 import { remedyForVersion } from "./remedies.mjs";
 
@@ -117,13 +119,6 @@ async function packageOf(realFile, npmPackage) {
 }
 
 /** The npm executable of the prefix a global package lives in (…/lib/node_modules/…). */
-/** <prefix>/lib/node_modules/<pkg> → <prefix> (npm's global folder layout on Unix). */
-export function npmPrefixOf(packageRoot) {
-  const marker = `${path.sep}lib${path.sep}node_modules${path.sep}`;
-  const index = typeof packageRoot === "string" ? packageRoot.indexOf(marker) : -1;
-  return index > 0 ? packageRoot.slice(0, index) : null;
-}
-
 async function npmFor(packageRoot) {
   const prefix = npmPrefixOf(packageRoot);
   if (!prefix) return null;
@@ -402,51 +397,14 @@ function withComparableVersion(row, latest) {
 }
 
 // ---------------------------------------------------------------------------
-// One-click updates: only official, verified commands, run without a shell
+// One-click updates: only official, verified commands (agent-update-steps.mjs), run without a shell
 
-/** npm packages whose official upgrade is `npm install -g <package>@latest` with the npm that owns the install. */
-const NPM_ONE_CLICK = new Set(["@openai/codex", "@anthropic-ai/claude-code", "@google/gemini-cli", "@larksuite/cli"]);
+export { npmPrefixOf, updateStepsFor };
+
 const STEP_TIMEOUT_MS = 5 * 60_000;
 const OUTPUT_LIMIT = 4 * 1024;
+const JOB_OUTPUT_LIMIT = 2 * 1024;
 const PLAN_TTL_MS = 10 * 60_000;
-
-/**
- * The verified update steps for an installed copy, or null (AI prompt only):
- * - npm global packages: `<that install's npm> install -g <pkg>@latest` (npm documents @latest
- *   for upgrades; Claude Code's docs say the same and warn against `npm update -g`);
- * - Claude Code native install: `claude update` (code.claude.com/docs/en/setup, "Update manually");
- * - OpenClaw: `openclaw update` (its docs, install/updating.md "Recommended: openclaw update").
- */
-export function updateStepsFor(row, display = (value) => value) {
-  const internal = row.internal || {};
-  const pkg = row.feed?.package;
-  if (row.agentId === "openclaw" && row.installed?.source === "npm" && internal.program) {
-    return {
-      steps: [{ program: internal.program, args: ["update"] }],
-      effects: ["运行 OpenClaw 自带的更新命令 openclaw update（官方文档推荐的更新方式）", "它会检测安装方式、更新并自动运行 Doctor；正在运行的 Gateway 可能会被重启", "需要联网"],
-    };
-  }
-  const prefix = npmPrefixOf(internal.packageRoot);
-  if ((row.installed?.source === "npm" || row.installed?.source === "bundled") && NPM_ONE_CLICK.has(pkg) && internal.npmAbs && prefix) {
-    return {
-      // --prefix pins the global folder that owns this copy (an npmrc prefix cannot redirect it).
-      steps: [{ program: internal.npmAbs, args: ["install", "-g", "--prefix", prefix, `${pkg}@latest`] }],
-      effects: [
-        `用 ${display(internal.npmAbs)} 把 ${pkg} 升级到最新版`,
-        `安装位置：${row.installed.path}${internal.bundledWith ? `（${internal.bundledWith} 自带的这一份）` : ""}`,
-        "只改这个 npm 全局目录里的这个包，不改配置和登录状态",
-        "需要联网，可能要几分钟",
-      ],
-    };
-  }
-  if (row.agentId === "claude" && internal.native && internal.program) {
-    return {
-      steps: [{ program: internal.program, args: ["update"] }],
-      effects: ["运行 Claude Code 自带的更新命令 claude update（官方文档的手动更新方式）", "新版本装到 ~/.local/share/claude/versions/，启动器指向新版本", "正在运行的会话不受影响，下次启动生效", "需要联网"],
-    };
-  }
-  return null;
-}
 
 const inside = (directory, file) => {
   const relative = path.relative(directory, file);
@@ -474,12 +432,15 @@ export function createAgentVersionService({
   intervalMs = VERSION_CHECK_INTERVAL_MS,
   timeoutMs = REQUEST_TIMEOUT_MS,
   historyFile = path.join(stateDirectory, "history.jsonl"),
-  run = runCommand,
+  run = runStreaming,
   launch = null,
+  openFile = null,
+  tempRoot = tmpdir(),
   platform = process.platform,
   pinnedDirectories = pinnedCommandDirectories(),
 }) {
   const plans = createPlanStore({ ttlMs: PLAN_TTL_MS, now, label: "更新计划" });
+  const jobs = createJobRegistry({ now });
   const cacheFile = path.join(stateDirectory, "agent-versions.json");
   const get = createHttp(fetchImpl, timeoutMs);
   let running = null;
@@ -651,45 +612,139 @@ export function createAgentVersionService({
     };
   }
 
-  /** POST /api/agent-versions/apply { planId, confirm: true } (confirm header checked by the route). */
-  async function apply({ planId, confirm } = {}) {
-    if (confirm !== true) throw new CodedError(400, "需要明确确认后才能执行更新。", "confirm-required");
-    if (offline) throw new CodedError(409, "离线模式下不执行会联网的更新命令。", "updates-offline");
-    const stored = plans.take(planId);
+  /** No shell, no inherited secrets: PATH holds the program's own folder (npm needs its node). */
+  async function pathFor(program) {
+    return [...new Set([path.dirname(program), path.dirname(await realpath(program).catch(() => program)), "/usr/bin", "/bin", "/usr/sbin", "/sbin"])];
+  }
+
+  const clean = (value) => scrubTokens(compactHomeInText(value, displayHomes));
+
+  /** Runs the plan's steps in order, stopping at the first failure. */
+  async function runSteps(stored, { onStep = () => {}, onOutput = () => {} } = {}) {
     const results = [];
     let ok = true;
-    for (const step of stored.steps) {
+    for (const [index, step] of stored.steps.entries()) {
       await assertRunnable(step.program);
-      // No shell, no inherited secrets: PATH holds the program's own folder (npm needs its node).
-      const env = {
-        PATH: [...new Set([path.dirname(step.program), path.dirname(await realpath(step.program).catch(() => step.program)), "/usr/bin", "/bin", "/usr/sbin", "/sbin"])].join(path.delimiter),
-        HOME: homeDirectory,
-        LANG: "en_US.UTF-8",
-      };
-      const outcome = await run(step.program, step.args, { cwd: homeDirectory, timeoutMs: STEP_TIMEOUT_MS, env });
-      const output = scrubTokens(compactHomeInText(`${outcome.stdout || ""}${outcome.stderr ? `\n${outcome.stderr}` : ""}`, displayHomes)).trim();
+      onStep(index);
+      const env = { PATH: (await pathFor(step.program)).join(path.delimiter), HOME: homeDirectory, LANG: "en_US.UTF-8" };
+      const outcome = await run(step.program, step.args, { cwd: homeDirectory, timeoutMs: STEP_TIMEOUT_MS, env, onOutput });
+      const output = clean(`${outcome.stdout || ""}${outcome.stderr ? `\n${outcome.stderr}` : ""}`).trim();
       results.push({ display: step.display, exitCode: outcome.exitCode, output: output.length > OUTPUT_LIMIT ? `…${output.slice(-OUTPUT_LIMIT)}` : output });
       if (outcome.exitCode !== 0) {
         ok = false;
         break;
       }
     }
-    const after = (await detectInstalledVersions(await context()).catch(() => [])).find((item) => item.id === stored.id)?.installed.version || null;
-    const record = {
-      id: createHash("sha1").update(`${now()}:agent-update:${stored.id}`).digest("hex").slice(0, 12),
+    return { ok, results };
+  }
+
+  /** The version after the update (read from files) and the history record. */
+  async function record(stored, { ok, steps, mode }) {
+    const after = mode === "terminal" ? null : (await detectInstalledVersions(await context()).catch(() => [])).find((item) => item.id === stored.id)?.installed.version || null;
+    const entry = {
+      id: createHash("sha1").update(`${now()}:agent-update:${stored.id}:${mode}`).digest("hex").slice(0, 12),
       type: "agent-update",
+      mode,
       title: stored.title,
       productId: stored.id,
       agentId: stored.agentId,
       ok,
-      steps: results.map(({ display: shown, exitCode }) => ({ display: shown, exitCode })),
+      steps,
       version: { before: stored.before, after },
       restorable: false,
       createdAt: new Date(now()).toISOString(),
     };
     await mkdir(path.dirname(historyFile), { recursive: true });
-    await appendFile(historyFile, `${JSON.stringify(record)}\n`, "utf8");
-    return { ok, steps: results, version: { before: stored.before, after }, historyEntry: record };
+    await appendFile(historyFile, `${JSON.stringify(entry)}\n`, "utf8");
+    return entry;
+  }
+
+  function confirmed({ confirm }) {
+    if (confirm !== true) throw new CodedError(400, "需要明确确认后才能执行更新。", "confirm-required");
+    if (offline) throw new CodedError(409, "离线模式下不执行会联网的更新命令。", "updates-offline");
+  }
+
+  function notRunning(planId) {
+    const pending = plans.peek(planId);
+    if (pending && jobs.running(pending.id)) throw new CodedError(409, "这个产品正在后台更新，请等它完成。", "job-running");
+  }
+
+  /**
+   * POST /api/agent-versions/apply { planId, confirm: true, background? } (confirm header checked by
+   * the route). In the app it returns when done; with `background` it returns { jobId } at once.
+   */
+  async function apply({ planId, confirm, background = false } = {}) {
+    confirmed({ confirm });
+    notRunning(planId);
+    const stored = plans.take(planId);
+    if (!background) {
+      const { ok, results } = await runSteps(stored);
+      const historyEntry = await record(stored, { ok, steps: results.map(({ display: shown, exitCode }) => ({ display: shown, exitCode })), mode: "in-app" });
+      return { ok, steps: results, version: historyEntry.version, historyEntry };
+    }
+    for (const step of stored.steps) await assertRunnable(step.program);
+    const job = jobs.create(stored.id, stored.steps);
+    let tail = "";
+    const update = (chunk) => {
+      tail = `${tail}${chunk}`.slice(-8 * JOB_OUTPUT_LIMIT);
+      const shown = clean(tail);
+      job.outputTail = shown.length > JOB_OUTPUT_LIMIT ? shown.slice(-JOB_OUTPUT_LIMIT) : shown;
+    };
+    (async () => {
+      try {
+        const { ok, results } = await runSteps(stored, { onStep: (index) => (job.step = index + 1), onOutput: update });
+        results.forEach((result, index) => (job.steps[index] = { display: result.display, exitCode: result.exitCode }));
+        if (!tail && results.length) update(results.map((result) => result.output).join("\n"));
+        const entry = await record(stored, { ok, steps: job.steps.filter((step) => "exitCode" in step), mode: "background" });
+        Object.assign(job, { status: ok ? "done" : "error", version: entry.version, historyId: entry.id });
+      } catch (error) {
+        Object.assign(job, { status: "error", error: text(clean(String(error?.message || "更新失败。")), 300) });
+      } finally {
+        job.finishedAt = new Date(now()).toISOString();
+      }
+    })();
+    return { jobId: job.jobId, status: "running", afterCheck: { kind: "version", id: stored.id } };
+  }
+
+  /** GET /api/agent-versions/jobs/:id */
+  function job(jobId) {
+    const found = jobs.get(jobId);
+    if (!found) throw new CodedError(404, "没有找到这个后台任务（任务结束 1 小时后不再保留）。", "job-not-found");
+    return {
+      jobId: found.jobId,
+      productId: found.productId,
+      status: found.status,
+      step: found.step,
+      steps: found.steps.map((step) => ({ ...step })),
+      outputTail: found.outputTail,
+      startedAt: found.startedAt,
+      finishedAt: found.finishedAt,
+      ...(found.version ? { version: found.version } : {}),
+      ...(found.error ? { error: found.error } : {}),
+    };
+  }
+
+  /**
+   * POST /api/agent-versions/terminal { planId, confirm: true }: writes the plan's exact commands
+   * into a one-off script in a private temp folder (0700) and opens it with the default handler
+   * (Terminal or iTerm on macOS, `start` on Windows). The UI re-checks versions afterwards.
+   */
+  async function terminal({ planId, confirm } = {}) {
+    confirmed({ confirm });
+    // Sandboxes and tests pin commands: nothing is opened unless an opener is injected.
+    if (!openFile && pinnedDirectories.length) throw new CodedError(403, "当前环境限制了可执行的命令，未打开终端。", "command-not-allowed");
+    notRunning(planId);
+    const stored = plans.take(planId);
+    for (const step of stored.steps) await assertRunnable(step.program);
+    const script = terminalScript({ title: stored.title, steps: stored.steps, pathEntries: await pathFor(stored.steps[0].program), platform });
+    const directory = await mkdtemp(path.join(tempRoot, "skill-control-update-"));
+    await chmod(directory, 0o700);
+    const file = path.join(directory, script.name);
+    await writeFile(file, script.content, { encoding: "utf8", mode: 0o700 });
+    await chmod(file, 0o700);
+    await (openFile || openScript)(file, platform);
+    const historyEntry = await record(stored, { ok: null, steps: stored.steps.map((step) => ({ display: step.display })), mode: "terminal" });
+    return { opened: true, afterCheck: { kind: "version", id: stored.id }, historyEntry };
   }
 
   /** POST /api/agent-versions/open { id }: `open -b <bundle id>` so the app can check for updates itself. */
@@ -703,7 +758,7 @@ export function createAgentVersionService({
     return { opened: true, bundleId: row.internal.bundleId };
   }
 
-  return { view, check, start, stop, cacheFile, plan, apply, openApp };
+  return { view, check, start, stop, cacheFile, plan, apply, terminal, job, openApp };
 }
 
 /** Starts an app by bundle id (macOS `open -b`, detached, no shell). */

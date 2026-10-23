@@ -3,6 +3,10 @@ import { CODEX_DB_REASON, costIndex, modelsAcrossAgents, roundUsd, sumCosts } fr
 import { agentProjects, costProjects, projectsAcrossAgents } from "./usage-projects.mjs";
 import { fileActiveDays, recordActiveDays, sessionCounter, sessionKeyOf } from "./usage-sessions.mjs";
 import { dayKey } from "./usage-sources.mjs";
+import { cacheBySession, rowRates, ratesAcross, ratesOf, reportsCache } from "./usage-cache.mjs";
+
+/** byModel rows with their cache rates. */
+const withRowRates = (byModel, agentId = null) => byModel.map((row) => ({ ...row, ...rowRates(row, agentId) }));
 
 /**
  * Read-side of the usage index: per-agent summaries, one skill across agents and one
@@ -271,6 +275,7 @@ export function usageSummary(index, { days = 30, now = Date.now() } = {}) {
   const skills = skillsByAgent(index, inWindow);
   const costs = costIndex(index, inWindow);
   const notes = agentNotes(index, inWindow);
+  const cache = cacheBySession(index, inWindow);
   const agentIds = [...new Set([...daily.keys(), ...skills.keys(), ...costs.keys()])].sort();
   const agents = agentIds.map((agentId) => {
     const byDay = daily.get(agentId) || new Map();
@@ -293,7 +298,9 @@ export function usageSummary(index, { days = 30, now = Date.now() } = {}) {
       tokens,
       ...costFields(priced),
       ...(USAGE_SOURCES[agentId]?.reportedCost ? { reportedCostUsd: priced.reportedCostUsd ?? 0 } : {}),
-      byModel: priced.byModel,
+      ...ratesOf(agentId, priced.byModel),
+      cacheBySession: cache.get(agentId) || null,
+      byModel: withRowRates(priced.byModel, agentId),
       ...(agentId === "workbuddy" ? { credits: Math.round(credits * 100) / 100 } : {}),
       series: dates.map((date) => ({
         date,
@@ -372,6 +379,7 @@ function windowTotals(index, { id, days, label, now }) {
   const { daily, windowSessions } = dailyByAgent(index, inWindow);
   const costs = costIndex(index, inWindow);
   const notes = agentNotes(index, inWindow);
+  const cache = cacheBySession(index, inWindow);
   const tokens = emptyTokens();
   const activeDays = new Set();
   const byAgent = [];
@@ -384,7 +392,15 @@ function windowTotals(index, { id, days, label, now }) {
     for (const field of FIELDS) tokens[field] += agentTokens[field];
     const costUsd = costs.get(agentId)?.costUsd || 0;
     if (agentTokens.total || costUsd || windowSessions.get(agentId)) {
-      byAgent.push({ agentId, tokens: agentTokens, costUsd, sessions: windowSessions.get(agentId) || 0, ...(notes.has(agentId) ? { notes: notes.get(agentId) } : {}) });
+      byAgent.push({
+        agentId,
+        tokens: agentTokens,
+        costUsd,
+        sessions: windowSessions.get(agentId) || 0,
+        ...ratesOf(agentId, costs.get(agentId)?.byModel || []),
+        cacheBySession: cache.get(agentId) || null,
+        ...(notes.has(agentId) ? { notes: notes.get(agentId) } : {}),
+      });
     }
   }
   byAgent.sort((left, right) => right.costUsd - left.costUsd || right.tokens.total - left.tokens.total || left.agentId.localeCompare(right.agentId));
@@ -398,6 +414,7 @@ function windowTotals(index, { id, days, label, now }) {
     ...sumCosts([...costs.values()]),
     sessions: [...windowSessions.values()].reduce((sum, value) => sum + value, 0),
     activeDays: activeDays.size,
+    ...ratesAcross([...costs].map(([agentId, priced]) => [agentId, priced.byModel])),
     byAgent,
   };
 }
@@ -429,7 +446,10 @@ export function usageProjects(index, { days = 30, now = Date.now() } = {}) {
 export function usageModels(index, { days = 30, now = Date.now() } = {}) {
   const dates = windowDays(days, now, index);
   const costs = costIndex(index, windowFilter(dates));
-  const models = modelsAcrossAgents(costs);
+  // A merged row's rate is null when none of its agents records cache tokens.
+  const models = modelsAcrossAgents(costs).map((row) =>
+    row.agents.some((agent) => reportsCache(agent.agentId)) ? { ...row, ...rowRates(row) } : { ...row, cacheHitRate: null, cacheWriteShare: null },
+  );
   const freshness = pricingFreshness(undefined, now);
   return {
     generatedAt: new Date(now).toISOString(),
@@ -507,20 +527,22 @@ export function usageForAgent(index, agentId, { days = 90, now = Date.now() } = 
     tokens: emptyTokens(),
     ...costFields(priced),
     ...(USAGE_SOURCES[agentId]?.reportedCost ? { reportedCostUsd: priced.reportedCostUsd ?? 0 } : {}),
+    ...ratesOf(agentId, priced.byModel),
+    cacheBySession: cacheBySession(index, inWindow).get(agentId) || null,
   };
   for (const row of byDay.values()) {
     totals.sessionsStarted += row.started;
     if (row.started || row.tokens.total) totals.activeDays += 1;
     for (const field of FIELDS) totals.tokens[field] += row.tokens[field];
   }
-  const { topProjects, otherProjects } = agentProjects(costProjects(index, inWindow, costs, { agentId }).get(agentId));
+  const { topProjects, otherProjects } = agentProjects(costProjects(index, inWindow, costs, { agentId }).get(agentId), 20, agentId);
   return {
     agentId,
     windowDays: days,
     windowLabel: windowLabel(days),
     index: indexStatus(index),
     totals,
-    byModel: priced.byModel,
+    byModel: withRowRates(priced.byModel, agentId),
     series: dates.map((date) => {
       const row = byDay.get(date);
       return {

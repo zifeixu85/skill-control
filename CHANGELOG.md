@@ -258,6 +258,19 @@ on Keep a Changelog and the project follows Semantic Versioning.
   times, model, folder name and the subagent flag are read; titles, messages, previews and
   thread history items never are.
 
+- Prompt-cache hit rate, as the vendors define it: cache reads ÷ (uncached input + cache
+  reads + cache writes), plus the cache-write share, on usage totals (each window and
+  agent), summaries, agent views, models and projects; a per-conversation distribution
+  (median, P10, P90, sessions under 50%, excluded Codex estimates) per agent and window;
+  `rules.cacheRate` in `/api/usage/pricing` explains it with links to both vendors' docs.
+- Agent CLI updates can run in the background (`apply` with `background: true`, polled at
+  `GET /api/agent-versions/jobs/:id`, one job per product, redacted output tail) or in the
+  user's own terminal (`POST /api/agent-versions/terminal`: a private one-off `.command` /
+  `.cmd` script with the plan's exact, quoted commands, opened with the default handler).
+- `/api/secrets` has a `guide` (a short reminder and one prompt that tidies up every
+  plaintext secret); per-item remedies use the same steps and now ask to verify that each
+  service still connects and to roll back from the backup if it does not.
+
 ### Changed
 
 - Hermes Agent versions are compared in the scheme of its latest GitHub release tag:

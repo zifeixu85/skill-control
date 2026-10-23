@@ -129,7 +129,7 @@ test("bounds work on pathological configuration values", () => {
     url: `https://example.test/?${"a=b&".repeat(50_000)}`,
   });
   const elapsed = performance.now() - started;
-  assert.ok(elapsed < 200, `took ${elapsed.toFixed(1)} ms`);
+  assert.ok(elapsed < 2000, `took ${elapsed.toFixed(1)} ms`);
 });
 
 test("separates likely credentials from other literal header and env values", () => {

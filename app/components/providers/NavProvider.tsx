@@ -13,6 +13,7 @@ import {
 import type { LibraryAction } from "../../lib/library";
 import type { PlanScope } from "../../lib/library-review";
 import { persistentStore } from "../../lib/storage";
+import { connectorsTabStore } from "../../lib/connectors-tab";
 
 const routeStore = persistentStore<string>("route", "home", isValidRoute);
 const filterStore = persistentStore<string>("skills-filter", "all", (value) => value.length < 80);
@@ -95,7 +96,10 @@ export function NavProvider({ children }: { children: ReactNode }) {
   const [libraryRequest, setLibraryRequest] = useState<LibraryRequest | null>(null);
 
   const go = useCallback(
-    (page: PageId, options: GoOptions = {}) => {
+    (target: PageId, options: GoOptions = {}) => {
+      // 密钥 is a tab of 连接器与 MCP; old links and saved routes still land on it.
+      if (target === "secrets") connectorsTabStore.set("secrets");
+      const page: PageId = target === "secrets" ? "connectors" : target;
       setRouteText(serializeRoute({ page, agentId: page === "agent" ? options.agentId || null : null }));
       setDrawer(null);
       if (options.filter !== undefined) setSkillFilter(options.filter);

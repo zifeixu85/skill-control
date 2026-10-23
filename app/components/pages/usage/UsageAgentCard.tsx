@@ -1,6 +1,7 @@
 "use client";
 
 import { usePageMemory } from "../../../hooks/usePageMemory";
+import { formatRate, rateTone } from "../../../lib/cache";
 import { COST_HINT, formatCost } from "../../../lib/cost";
 import { formatCompact } from "../../../lib/format";
 import { CONFIDENCE_HINTS, confidenceLabel, SESSIONS_HINT, type UsageAgent, type UsageSource } from "../../../lib/usage";
@@ -11,6 +12,7 @@ import { useData } from "../../providers/DataProvider";
 import { AgentAvatar } from "../../ui/Avatar";
 import { Segmented } from "../../ui/basics";
 import { InfoPopover } from "../../ui/InfoPopover";
+import { CacheHint } from "./TotalsStrip";
 
 export type Metric = "sessions" | "tokens" | "cost";
 
@@ -139,6 +141,12 @@ export function UsageAgentCard({ usage, days, endDate }: { usage: UsageAgent; da
       )}
       {tokens && tokens.total ? (
         <p className="token-split">
+          {usage.cacheHitRate !== null ? (
+            <span className={`cache-rate ${rateTone(usage.cacheHitRate)}`}>
+              缓存命中 <b>{formatRate(usage.cacheHitRate)}</b>
+              <CacheHint />
+            </span>
+          ) : null}
           输入 {formatCompact(tokens.input)} · 输出 {formatCompact(tokens.output)} · 缓存读取 {formatCompact(tokens.cacheRead)} · 缓存写入{" "}
           {formatCompact(tokens.cacheWrite)}
         </p>

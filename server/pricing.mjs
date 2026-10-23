@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { scrubTokens } from "./redact.mjs";
+import { CACHE_RATE_RULE } from "./usage-rules.mjs";
 
 /**
  * Official API prices (server/pricing/model-prices.json, USD per 1M tokens) and the pure
@@ -274,5 +275,7 @@ export function publicPriceTable(table = priceTable(), now = Date.now()) {
     models: raw.models,
     estimates: raw.estimates,
     families: raw.families,
+    // How derived figures are computed, for the UI's "怎么算的".
+    rules: { cacheRate: CACHE_RATE_RULE },
   };
 }

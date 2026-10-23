@@ -1,3 +1,4 @@
+import { cacheHitRate } from "./cache";
 import type { ChipSpec } from "./chips";
 import { asArray, asNumber, asOptionalNumber, asOptionalString, asRecord, asString, asStringList } from "./parse";
 
@@ -48,6 +49,8 @@ export interface ModelRow {
   requests: number;
   costUsd: number;
   longShare: number;
+  /** 0–1, see lib/cache. */
+  cacheHitRate: number | null;
   /** Only in /api/usage/models: which Agents used the model. */
   agents: { agentId: string; tokens: number; costUsd: number }[];
 }
@@ -125,6 +128,7 @@ export function normalizeModelRow(value: unknown): ModelRow | null {
         ? { section: section as PriceRef["section"], id: asString(ref.id) }
         : null,
     tokens: normalizeModelTokens(record.tokens),
+    cacheHitRate: cacheHitRate(record.cacheHitRate, normalizeModelTokens(record.tokens)),
     requests: asNumber(record.requests),
     costUsd: asNumber(record.costUsd),
     longShare: Math.min(1, Math.max(0, asNumber(record.longShare))),

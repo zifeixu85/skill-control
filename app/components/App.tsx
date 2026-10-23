@@ -16,7 +16,7 @@ import { SkillsPage } from "./pages/skills/SkillsPage";
 import { UpdatesPage } from "./pages/updates/UpdatesPage";
 import { UsagePage } from "./pages/usage/UsagePage";
 import { PricingPage } from "./pages/pricing/PricingPage";
-import { SecretsPage } from "./pages/SecretsPage";
+
 import { DataProvider, useData } from "./providers/DataProvider";
 import { NavProvider, useNav } from "./providers/NavProvider";
 import { ToastProvider } from "./providers/ToastProvider";
@@ -40,6 +40,15 @@ function focusSearchSoon() {
   attempt();
 }
 
+/** 密钥 lives in 连接器与 MCP now; a saved "secrets" route opens that tab. */
+function SecretsRedirect() {
+  const { go } = useNav();
+  useEffect(() => {
+    go("secrets");
+  }, [go]);
+  return null;
+}
+
 function CurrentPage() {
   const { route } = useNav();
   switch (route.page) {
@@ -54,7 +63,7 @@ function CurrentPage() {
     case "connectors":
       return <ConnectorsPage />;
     case "secrets":
-      return <SecretsPage />;
+      return <SecretsRedirect />;
     case "updates":
       return <UpdatesPage />;
     case "usage":

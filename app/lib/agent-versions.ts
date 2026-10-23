@@ -188,3 +188,64 @@ export function normalizeUpdateResult(raw: unknown): AgentUpdateResult {
 
 /** The agent-update action on a version's remedy, if the service offers one. */
 export const oneClickUpdate = (agent: AgentVersion) => (agent.remedy?.action?.kind === "agent-update" ? agent.remedy.action.id || agent.id : null);
+
+/** A one-click update running in the background (GET /api/agent-versions/jobs/:id). */
+export interface AgentUpdateJob {
+  id: string;
+  status: "running" | "done" | "error";
+  /** Steps finished and steps in total, when the service says. */
+  done: number | null;
+  total: number | null;
+  /** What is running now. */
+  step: string | null;
+  startedAt: number | null;
+  result: AgentUpdateResult | null;
+  error: string | null;
+  /** The last ~2 KB of output, scrubbed by the service. */
+  outputTail: string | null;
+}
+
+export function normalizeUpdateJob(raw: unknown, fallbackId = ""): AgentUpdateJob {
+  const record = asRecord(raw);
+  const statusText = asString(record.status || record.state).toLowerCase();
+  const status: AgentUpdateJob["status"] = /done|finish|success|complete|ok/u.test(statusText) ? "done" : /error|fail/u.test(statusText) ? "error" : "running";
+  const steps = asArray(record.steps).map(asRecord);
+  const finishedSteps = steps.filter((step) => typeof step.exitCode === "number").length;
+  // `step` is the running step's index (or its text in older services).
+  const index = typeof record.step === "number" ? record.step : null;
+  const doneCount = typeof record.done === "number" ? record.done : index !== null ? index : steps.length ? finishedSteps : null;
+  const total = typeof record.total === "number" ? record.total : steps.length || null;
+  const current = asRecord(record.current);
+  const step =
+    (typeof record.step === "string" ? record.step : null) ||
+    asOptionalString(current.display) ||
+    (doneCount !== null && steps[doneCount] ? asOptionalString(steps[doneCount].display) : null);
+  const started = Date.parse(asString(record.startedAt));
+  const version = asRecord(record.version);
+  const result =
+    status === "running"
+      ? null
+      : record.result
+        ? normalizeUpdateResult(record.result)
+        : {
+            ok: status === "done",
+            steps: steps.map((item) => ({
+              display: asString(item.display),
+              exitCode: typeof item.exitCode === "number" ? item.exitCode : null,
+              output: asString(item.output),
+            })),
+            version: { before: asOptionalString(version.before), after: asOptionalString(version.after) },
+            historyId: null,
+          };
+  return {
+    id: asString(record.jobId || record.id, fallbackId),
+    status,
+    done: doneCount,
+    total,
+    step,
+    startedAt: Number.isFinite(started) ? started : null,
+    result,
+    error: asOptionalString(record.error) || (status === "error" ? asOptionalString(asRecord(record.result).error) : null),
+    outputTail: asOptionalString(record.outputTail),
+  };
+}

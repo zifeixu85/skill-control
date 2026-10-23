@@ -187,7 +187,7 @@
 }
 .totals-breakdown li {
   display: grid;
-  grid-template-columns: minmax(90px, 160px) minmax(40px, 1fr) 64px 72px;
+  grid-template-columns: minmax(90px, 160px) minmax(40px, 1fr) 64px 72px 44px;
   gap: 10px;
   align-items: center;
   font-size: 12.5px;
@@ -251,7 +251,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
   .totals-breakdown li {
-    grid-template-columns: minmax(80px, 1fr) minmax(30px, 1fr) 56px 64px;
+    grid-template-columns: minmax(80px, 1fr) minmax(30px, 1fr) 56px 64px 40px;
   }
 }
 
@@ -991,3 +991,350 @@
 .intro-row .btn {
   flex: none;
 }
+
+/* Totals: tokens lead, cost is secondary (toggle remembered). */
+.totals-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.totals > .totals-bar {
+  margin-bottom: 8px;
+}
+.totals-caption {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.totals-bar .seg button {
+  padding: 2px 9px;
+  font-size: 12px;
+}
+.totals-cell b small {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-3);
+}
+.totals-cache {
+  color: var(--ink-3);
+}
+.totals-breakdown .num.lead {
+  color: var(--ink);
+  font-weight: 600;
+}
+.with-hint {
+  display: inline-flex;
+  align-items: center;
+}
+.cache-rate {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 10px;
+  color: var(--ink-2);
+}
+.cache-rate b {
+  font-weight: 650;
+  color: var(--ink);
+}
+.cache-rate.warn b {
+  color: var(--warn);
+}
+.cache-rate.bad b {
+  color: var(--danger);
+}
+td.rate.warn {
+  color: var(--warn);
+}
+td.rate.bad {
+  color: var(--danger);
+}
+th .with-hint {
+  justify-content: flex-end;
+}
+
+/* Agent 使用数据 · 对话缓存命中率 */
+.cache-block {
+  margin-top: 22px;
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: var(--r-card);
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--line-2);
+  max-width: 640px;
+}
+.cache-block h3 {
+  font-size: 13px;
+  font-weight: 650;
+}
+.cache-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.cache-median {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 650;
+  color: var(--ink);
+}
+.cache-median.warn {
+  color: var(--warn);
+}
+.cache-median.bad {
+  color: var(--danger);
+}
+.cache-range {
+  display: grid;
+  gap: 3px;
+}
+.cache-track {
+  position: relative;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--hover);
+  overflow: hidden;
+}
+.cache-track i {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+.cache-low {
+  left: 0;
+  background: color-mix(in oklab, var(--danger) 12%, transparent);
+}
+.cache-band {
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--accent) 45%, transparent);
+}
+.cache-mid {
+  width: 3px;
+  margin-left: -1.5px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.cache-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.cache-low-count {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+/* Running writes: spinner, bar (exact or easing toward 90%), elapsed time. */
+.running {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+.running-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+.running-meta {
+  font-size: 12px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.running-spinner {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid color-mix(in oklab, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+.running-bar {
+  position: relative;
+  display: block;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--hover);
+  overflow: hidden;
+}
+.running-bar i {
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  border-radius: inherit;
+  transform-origin: left;
+  transition: transform 0.5s var(--ease);
+}
+/* A soft sheen tells "still working" even when the bar barely moves. */
+.running-bar.simulated i::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, white 45%, transparent), transparent);
+  animation: running-sheen 1.6s ease-in-out infinite;
+}
+@keyframes running-sheen {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+.running-step {
+  display: block;
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+/* Compact form inside list rows (background updates). */
+.running.inline {
+  padding: 6px 0 0;
+  background: none;
+  box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .running-spinner {
+    animation: none;
+    border-color: var(--accent);
+  }
+  .running-bar i {
+    transition: none;
+  }
+  .running-bar.simulated i::after {
+    animation: none;
+    display: none;
+  }
+}
+.au-modes {
+  border: 0;
+  margin: 14px 0 0;
+  padding: 12px 0 0;
+  border-top: 1px solid var(--line-2);
+  display: grid;
+  gap: 8px;
+}
+.au-modes legend {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--ink-2);
+  padding: 0;
+  margin-bottom: 6px;
+}
+.au-handoff {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--accent-wash);
+}
+.check-progress { margin-bottom: 12px; }
+
+/* 密钥 tab: one reminder at the top, quiet rows. */
+.secret-guide {
+  display: flex;
+  align-items: center;
+  gap: 10px 16px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: var(--r-card);
+  background: var(--warn-wash);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--warn) 25%, transparent);
+}
+.secret-guide > div {
+  flex: 1 1 320px;
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.secret-guide b {
+  font-size: 13px;
+  font-weight: 650;
+}
+.secret-guide span {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.secret-guide .btn {
+  flex: none;
+}
+.secret-overview {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.secret-overview b {
+  color: var(--ink);
+}
+.secret-row.plain {
+  box-shadow: 0 0 0 1px var(--line-2), inset 3px 0 0 color-mix(in oklab, var(--danger) 55%, transparent);
+}
+.secret-acts {
+  justify-items: end;
+}
+
+/* ⋯ row menu */
+.row-menu {
+  position: relative;
+  display: inline-flex;
+}
+.row-menu-btn {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink-3);
+  font-size: 16px;
+  line-height: 1;
+}
+.row-menu-btn:hover,
+.row-menu.open .row-menu-btn {
+  background: var(--hover);
+  color: var(--ink);
+}
+.row-menu-list {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  min-width: 170px;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--window);
+  box-shadow: var(--shadow-lg), 0 0 0 1px var(--line);
+}
+.row-menu-list button {
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.row-menu-list button:hover,
+.row-menu-list button:focus-visible {
+  background: var(--hover);
+}
+.list-tools > .btn:last-child { margin-left: auto; }

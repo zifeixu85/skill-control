@@ -1,3 +1,4 @@
+import { cacheHitRate } from "./cache";
 import { asArray, asNumber, asOptionalNumber, asOptionalString, asRecord, asString } from "./parse";
 
 /** GET /api/usage/totals: every window at once, all Agents combined plus each Agent's share. */
@@ -19,7 +20,10 @@ export interface TotalsWindow {
   costUsd: number | null;
   sessions: number;
   activeDays: number;
-  byAgent: { agentId: string; tokens: number; costUsd: number | null }[];
+  /** 0–1, see lib/cache. */
+  cacheHitRate: number | null;
+  cacheWriteShare: number | null;
+  byAgent: { agentId: string; tokens: number; costUsd: number | null; cacheHitRate: number | null }[];
 }
 
 export interface UsageTotals {
@@ -60,6 +64,8 @@ export function normalizeTotals(raw: unknown): UsageTotals {
         costUsd: asOptionalNumber(window.costUsd),
         sessions: asNumber(window.sessions),
         activeDays: asNumber(window.activeDays),
+        cacheHitRate: cacheHitRate(window.cacheHitRate, normalizeTokens(window.tokens)),
+        cacheWriteShare: asOptionalNumber(window.cacheWriteShare),
         byAgent: asArray(window.byAgent)
           .map((item) => {
             const agent = asRecord(item);
@@ -68,6 +74,7 @@ export function normalizeTotals(raw: unknown): UsageTotals {
               agentId: asString(agent.agentId),
               tokens: typeof tokens === "object" ? normalizeTokens(tokens).total : asNumber(tokens),
               costUsd: asOptionalNumber(agent.costUsd),
+              cacheHitRate: cacheHitRate(agent.cacheHitRate, typeof tokens === "object" && tokens ? normalizeTokens(tokens) : null),
             };
           })
           .filter((agent) => agent.agentId)

@@ -1,5 +1,7 @@
 "use client";
 
+import { formatRate, rateTone } from "../../../lib/cache";
+import { CacheHint } from "../usage/TotalsStrip";
 import { basisChip, BASIS_HINTS, BASIS_LABELS, COST_HINT, formatCost, longShareLabel, priceTarget, type ModelRow } from "../../../lib/cost";
 import { formatCompact } from "../../../lib/format";
 import { confidenceLabel, type AgentUsage } from "../../../lib/usage";
@@ -65,6 +67,7 @@ function ModelLine({ row }: { row: ModelRow }) {
         />
       </th>
       <td className="num">{formatCompact(row.tokens.total)}</td>
+      <td className={`num rate ${rateTone(row.cacheHitRate)}`}>{formatRate(row.cacheHitRate)}</td>
       <td className="num cost">{row.basis === "unpriced" ? "—" : formatCost(row.costUsd)}</td>
       <td className="cell-tags">
         <button
@@ -90,6 +93,12 @@ export function ModelBreakdown({ usage }: { usage: AgentUsage }) {
           <tr>
             <th scope="col">模型</th>
             <th scope="col" className="num">Tokens</th>
+            <th scope="col" className="num">
+              <span className="with-hint">
+                缓存命中
+                <CacheHint />
+              </span>
+            </th>
             <th scope="col" className="num" title={COST_HINT}>
               预估费用
             </th>

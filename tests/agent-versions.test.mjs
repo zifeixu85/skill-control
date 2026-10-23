@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -212,6 +212,7 @@ async function oneClickSetup(context, options = {}) {
   };
   const launches = [];
   const result = await setup(context, { fetchImpl, run, launch: async (bundleId) => launches.push(bundleId), platform: "darwin", pinnedDirectories: [], ...options.service });
+  if (options.service?.run) runs.length = 0;
   const node = path.join(result.home, ".nvm", "versions", "node", "v24.0.0");
   await writeFixtureFile(node, "lib/node_modules/openclaw/package.json", JSON.stringify({ name: "openclaw", version: "2026.9.8" }));
   await writeFixtureFile(node, "lib/node_modules/openclaw/openclaw.mjs", "#!/usr/bin/env node\n");
@@ -355,4 +356,105 @@ test("Hermes: the installed version in the latest tag's scheme (baseVersion for 
   await writeFixtureFile(calendar.home, ".hermes/hermes-agent/install-stamp.json", JSON.stringify({ baseVersion: "0.21.5" }));
   const old = rows(await calendar.service.check())["hermes-cli"];
   assert.deepEqual([old.installed.version, old.latest.version, old.status], ["2026.9.1", "2026.9.24", "update-available"]);
+});
+
+test("background update: returns a job at once, one job per product, redacted output tail, history", LIMIT, async (context) => {
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  const { home, service } = await oneClickSetup(context, {
+    service: {
+      run: async (file, args, options) => {
+        options.onOutput(`fetching… api_key=ZZ9jobSecret01abcdef in ${options.cwd}/x\n`);
+        await gate;
+        await writeFile(path.join(options.cwd, ".nvm", "versions", "node", "v24.0.0", "lib", "node_modules", "@openai", "codex", "package.json"), JSON.stringify({ name: "@openai/codex", version: "0.160.0" }));
+        return { exitCode: 0, stdout: "changed 1 package\n", stderr: "" };
+      },
+    },
+  });
+  await service.check();
+  const started = await service.apply({ planId: (await service.plan({ id: "codex-cli" })).planId, confirm: true, background: true });
+  assert.match(started.jobId, /^[0-9a-f-]{36}$/u);
+  assert.deepEqual([started.status, started.afterCheck], ["running", { kind: "version", id: "codex-cli" }]);
+  for (let attempt = 0; attempt < 100 && service.job(started.jobId).step === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+  const running = service.job(started.jobId);
+  assert.deepEqual([running.status, running.step, running.finishedAt], ["running", 1, null]);
+  assert.match(running.outputTail, /api_key=•••••• in ~\/x/u);
+  assert.doesNotMatch(JSON.stringify(running), /ZZ9/u);
+  assert.equal(JSON.stringify(running).includes(home), false);
+  // One job per product: a second plan for the same CLI is refused (and stays usable later).
+  const second = await service.plan({ id: "codex-cli" });
+  await assert.rejects(service.apply({ planId: second.planId, confirm: true, background: true }), (error) => error.code === "job-running");
+  await assert.rejects(service.terminal({ planId: second.planId, confirm: true }), (error) => error.code === "command-not-allowed" || error.code === "job-running");
+  release();
+  let done = service.job(started.jobId);
+  for (let attempt = 0; attempt < 200 && done.status === "running"; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    done = service.job(started.jobId);
+  }
+  assert.deepEqual([done.status, done.steps[0].exitCode, done.version], ["done", 0, { before: "0.150.0", after: "0.160.0" }]);
+  assert.ok(Date.parse(done.finishedAt) >= Date.parse(done.startedAt));
+  const history = (await readFile(path.join(home, ".agent-skill-manager", "history.jsonl"), "utf8")).trim().split("\n").map((entry) => JSON.parse(entry));
+  assert.deepEqual([history.at(-1).mode, history.at(-1).ok], ["background", true]);
+  assert.throws(() => service.job("00000000-0000-0000-0000-000000000000"), (error) => error.code === "job-not-found");
+});
+
+test("open in terminal: a private one-off script with the plan's exact commands, opened by the injected opener", LIMIT, async (context) => {
+  const opened = [];
+  const temp = await mkdtemp(path.join(tmpdir(), "agent-versions-terminal-"));
+  context.after(() => rm(temp, { recursive: true, force: true }));
+  const { home, service, runs } = await oneClickSetup(context, { service: { openFile: async (file, platform) => opened.push({ file, platform }), tempRoot: temp } });
+  await service.check();
+  const plan = await service.plan({ id: "codex-cli" });
+  await assert.rejects(service.terminal({ planId: plan.planId }), (error) => error.code === "confirm-required");
+  const result = await service.terminal({ planId: plan.planId, confirm: true });
+  assert.deepEqual([result.opened, result.afterCheck, result.historyEntry.mode, result.historyEntry.ok], [true, { kind: "version", id: "codex-cli" }, "terminal", null]);
+  assert.equal(runs.length, 0, "the app itself runs nothing");
+  assert.equal(opened.length, 1);
+  const { file } = opened[0];
+  assert.equal(path.basename(file), "skill-control-update.command");
+  assert.equal((await stat(file)).mode & 0o777, 0o700);
+  assert.equal((await stat(path.dirname(file))).mode & 0o777, 0o700);
+  assert.ok(path.dirname(file).startsWith(temp));
+  const script = await readFile(file, "utf8");
+  const node = await realpath(path.join(home, ".nvm", "versions", "node", "v24.0.0"));
+  assert.ok(script.includes(`'${path.join(node, "bin", "npm")}' 'install' '-g' '--prefix' '${node}' '@openai/codex@latest' || status=$?`));
+  assert.match(script, /完成，可以关闭这个窗口（退出码 \$status）/u);
+  assert.match(script, /^PATH='[^']+'$/mu);
+  await assert.rejects(service.terminal({ planId: plan.planId, confirm: true }), (error) => error.code === "plan-not-found");
+
+  // Run the generated script (not in a terminal): it shows the command, runs it and waits for a key.
+  await writeFile(path.join(node, "bin", "npm"), '#!/bin/sh\necho "npm was called with: $*"\nexit 3\n');
+  await chmod(path.join(node, "bin", "npm"), 0o755);
+  const { spawnSync } = await import("node:child_process");
+  const ran = spawnSync("/bin/sh", [file], { input: "x", encoding: "utf8", env: { HOME: home, PATH: "/usr/bin:/bin" } });
+  assert.match(ran.stdout, /运行：~\/\.nvm\/versions\/node\/v24\.0\.0\/bin\/npm install -g --prefix/u);
+  assert.match(ran.stdout, /npm was called with: install -g --prefix .* @openai\/codex@latest/u);
+  assert.match(ran.stdout, /退出码 3/u);
+  assert.equal(ran.status, 3);
+  assert.equal(await stat(file).catch(() => null), null, "the script removes itself");
+
+  // Sandboxes (pinned commands) never open anything without an injected opener.
+  const pinned = createAgentVersionService({ homeDirectory: home, stateDirectory: path.join(home, ".agent-skill-manager"), applicationDirectories: [], searchDirectories: [], pinnedDirectories: ["/nowhere"] });
+  await assert.rejects(pinned.terminal({ planId: "x", confirm: true }), (error) => error.code === "command-not-allowed");
+});
+
+test("terminal scripts quote every value; the Windows script refuses unsafe characters", async () => {
+  const { posixQuote, terminalScript } = await import("../server/agent-update-run.mjs");
+  assert.equal(posixQuote("it's $HOME `x`"), "'it'\\''s $HOME `x`'");
+  const steps = [{ program: "C:\\Program Files\\nodejs\\npm.cmd", args: ["install", "-g", "@openai/codex@latest"], display: "npm install -g @openai/codex@latest" }];
+  const windows = terminalScript({ title: "Codex", steps, pathEntries: ["C:\\Program Files\\nodejs"], platform: "win32" });
+  assert.equal(windows.name, "skill-control-update.cmd");
+  assert.match(windows.content, /"C:\\Program Files\\nodejs\\npm\.cmd" "install" "-g" "@openai\/codex@latest"\r\n/u);
+  assert.match(windows.content, /pause\r\n/u);
+  assert.throws(() => terminalScript({ title: "x", steps: [{ ...steps[0], args: ["a&calc"] }], pathEntries: [], platform: "win32" }), (error) => error.code === "unsafe-command");
+});
+
+test("the streaming runner runs without a shell, streams output and times out", LIMIT, async () => {
+  const { runStreaming } = await import("../server/agent-update-run.mjs");
+  const chunks = [];
+  const echoed = await runStreaming("/bin/echo", ["a;b", "$HOME"], { cwd: tmpdir(), env: { PATH: "/usr/bin:/bin" }, timeoutMs: 5_000, onOutput: (chunk) => chunks.push(chunk) });
+  assert.deepEqual([echoed.exitCode, echoed.stdout, chunks.join("")], [0, "a;b $HOME\n", "a;b $HOME\n"]);
+  const slow = await runStreaming("/bin/sleep", ["5"], { cwd: tmpdir(), env: { PATH: "/usr/bin:/bin" }, timeoutMs: 50 });
+  assert.equal(slow.exitCode, "timeout");
+  assert.equal((await runStreaming("/nonexistent/program", [], { cwd: tmpdir(), timeoutMs: 1_000 })).exitCode, 1);
 });

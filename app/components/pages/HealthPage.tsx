@@ -14,7 +14,7 @@ import { CopyPathButton } from "../files/ConfigDetailView";
 import { useData } from "../providers/DataProvider";
 import { useNav } from "../providers/NavProvider";
 import { useToast } from "../providers/ToastProvider";
-import { connectorsTabStore } from "./ConnectorsPage";
+import { connectorsTabStore } from "../../lib/connectors-tab";
 import { AgentAvatar } from "../ui/Avatar";
 import { EmptyState, Loading, SectionHeading, TopBar } from "../ui/basics";
 import { ACTION_NOTES, RemedyActions, RemedyAllBar, RemedyPanel } from "../ui/RemedyPanel";

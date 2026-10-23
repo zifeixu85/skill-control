@@ -1,5 +1,6 @@
 "use client";
 
+import { RunningProgress } from "../../ui/RunningProgress";
 import { useEffect, useState } from "react";
 import { refreshAfterWrite } from "../../../hooks/refresh";
 import { useMarkBusy } from "../../../hooks/useBusy";
@@ -180,6 +181,7 @@ export function InstallPlan({ view, agentId, onDone }: { view: SkillView; agentI
           </p>
         </>
       ) : null}
+      {running ? <RunningProgress label="正在安装…" expectedMs={5_000} /> : null}
       <div className="acts">
         <button type="button" className="btn sm ghost" onClick={onDone} disabled={running}>
           取消

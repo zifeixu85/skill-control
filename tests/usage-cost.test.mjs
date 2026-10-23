@@ -173,7 +173,7 @@ test("costs: official prices per rule, agent averages, families, reported figure
   assert.equal(summary.topSkills.find((item) => item.name === "pdf").costUsd, 0.134);
 
   const agent = usageForAgent(index, "workbuddy", { days: 30 });
-  assert.deepEqual(Object.keys(agent.totals).sort(), ["activeDays", "costBasis", "costUsd", "sessions", "sessionsStarted", "tokens", "unpricedTokens"]);
+  assert.deepEqual(Object.keys(agent.totals).sort(), ["activeDays", "cacheBySession", "cacheHitRate", "cacheWriteShare", "costBasis", "costUsd", "sessions", "sessionsStarted", "tokens", "unpricedTokens"]);
   assert.ok(agent.byModel.length === 3 && agent.series.every((day) => typeof day.costUsd === "number"));
   assert.equal(usageForAgent(index, "hermes", { days: 30 }).totals.reportedCostUsd, 0.75);
 });
@@ -187,7 +187,7 @@ test("GET /api/usage/models shape: one row per model and basis, with the agents 
   const deepseek = result.models.find((row) => row.model === "deepseek-v4-pro");
   assert.deepEqual(deepseek.agents.map((item) => item.agentId), ["workbuddy", "hermes"]);
   near(deepseek.costUsd, 7.92 + 0.66, "deepseek");
-  assert.deepEqual(Object.keys(deepseek).sort(), ["agents", "basis", "costUsd", "longShare", "model", "name", "priceRef", "requests", "tokens", "vendor"]);
+  assert.deepEqual(Object.keys(deepseek).sort(), ["agents", "basis", "cacheHitRate", "cacheWriteShare", "costUsd", "longShare", "model", "name", "priceRef", "requests", "tokens", "vendor"]);
   const unknown = result.models.find((row) => row.model === "unknown");
   assert.deepEqual([unknown.basis, unknown.costUsd, unknown.agents[0].agentId], ["reported", 0.25, "hermes"], "a session without a model keeps its own figure");
   near(result.totals.costUsd, usageSummary(index, { days: 30 }).cost.costUsd, "totals");
@@ -211,7 +211,7 @@ test("project costs: priced like the agent totals, unnamed sessions included, to
   // WorkBuddy's DeepSeek and "auto" tokens make the unnamed project the most expensive one.
   assert.deepEqual(result.projects.map((project) => project.name), [null, "priced"]);
   const priced = result.projects[1];
-  assert.deepEqual(Object.keys(priced).sort(), ["agents", "costBasis", "costUsd", "name", "sessions", "sessionsStarted", "tokens", "topModels", "unpricedTokens"]);
+  assert.deepEqual(Object.keys(priced).sort(), ["agents", "cacheHitRate", "cacheWriteShare", "costBasis", "costUsd", "name", "sessions", "sessionsStarted", "tokens", "topModels", "unpricedTokens"]);
   assert.deepEqual(priced.agents.map((agent) => agent.agentId), ["codex", "claude"]);
   near(priced.costUsd, agentCost("codex") + agentCost("claude"), "priced");
   assert.deepEqual(priced.topModels.map((model) => model.model), ["gpt-6.1-sol", "claude-opus-5-5", "claude-sonnet-5-5"]);

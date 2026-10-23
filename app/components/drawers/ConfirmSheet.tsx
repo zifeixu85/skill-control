@@ -1,5 +1,6 @@
 "use client";
 
+import { RunningProgress } from "../ui/RunningProgress";
 import type { ReactNode } from "react";
 import { noop, useEscape } from "../../hooks/useEscape";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
@@ -46,6 +47,7 @@ export function ConfirmSheet({
           </p>
         ) : null}
         {children}
+        {busy ? <RunningProgress label="正在执行…" expectedMs={8_000} detail="完成前不能关闭，改动会记在历史里。" /> : null}
         {error ? (
           <p className="form-error" role="alert">
             {error}

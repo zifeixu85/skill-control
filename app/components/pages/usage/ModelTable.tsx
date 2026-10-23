@@ -2,6 +2,8 @@
 
 import { useOpenedItem } from "../../../hooks/usePageMemory";
 import { markOpened } from "../../../lib/page-memory";
+import { formatRate, rateTone } from "../../../lib/cache";
+import { CacheHint } from "./TotalsStrip";
 import { isUnsupported, useResource } from "../../../hooks/useResource";
 import { api, errorMessage } from "../../../lib/api";
 import {
@@ -86,6 +88,7 @@ function Row({ row }: { row: ModelRow }) {
       <td className="num" title={row.tokens.cacheWrite1h ? `5 分钟 ${formatCompact(row.tokens.cacheWrite)} · 1 小时 ${formatCompact(row.tokens.cacheWrite1h)}` : undefined}>
         {formatCompact(writes)}
       </td>
+      <td className={`num rate ${rateTone(row.cacheHitRate)}`}>{formatRate(row.cacheHitRate)}</td>
       <td className="num cost">{unpriced ? "—" : formatCost(row.costUsd)}</td>
       <td className="cell-tags">
         <button
@@ -135,6 +138,12 @@ export function ModelTable({ window }: { window: UsageWindow }) {
               <th scope="col" className="num">输出</th>
               <th scope="col" className="num">缓存读</th>
               <th scope="col" className="num">缓存写</th>
+              <th scope="col" className="num">
+                <span className="with-hint">
+                  缓存命中
+                  <CacheHint />
+                </span>
+              </th>
               <th scope="col" className="num" title={COST_HINT}>
                 预估费用
               </th>
@@ -148,7 +157,7 @@ export function ModelTable({ window }: { window: UsageWindow }) {
           </tbody>
           <tfoot>
             <tr>
-              <th scope="row" colSpan={6}>
+              <th scope="row" colSpan={7}>
                 合计
                 {report.totals.unpricedTokens ? <small className="muted"> · 另有 {formatCompact(report.totals.unpricedTokens)} tokens 未定价</small> : null}
               </th>

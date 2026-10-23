@@ -33,6 +33,8 @@ export interface SecretChange {
 
 export interface SecretsReport {
   generatedAt: string | null;
+  /** The page's one reminder: text to show, prompt to copy (from the service, or built here). */
+  guide: { text: string; prompt: string } | null;
   items: SecretItem[];
   changes: SecretChange[];
   summary: { total: number; plaintext: number; byStorage: Record<string, number> };
@@ -106,8 +108,10 @@ export function normalizeSecrets(raw: unknown): SecretsReport {
   const summary = asRecord(record.summary);
   const byStorage: Record<string, number> = {};
   for (const [key, value] of Object.entries(asRecord(summary.byStorage))) byStorage[key] = asNumber(value);
+  const guide = asRecord(record.guide);
   return {
     generatedAt: asOptionalString(record.generatedAt),
+    guide: asString(guide.text) || asString(guide.prompt) ? { text: asString(guide.text), prompt: asString(guide.prompt) } : null,
     items,
     changes: asArray(record.changes)
       .map((value) => {
@@ -155,4 +159,27 @@ export function secretPrompt(item: SecretItem): string {
     return `${item.service} 的密钥 ${item.keyName} 以明文写在配置文件里${where}。${users}请帮我把它改成环境变量引用：在配置里只写变量名，把值放进我的 shell 环境或系统钥匙串；先告诉我要改的文件和改法，备份后再改，改完确认使用它的服务还能正常工作。不要在回复里显示密钥的值。`;
   }
   return `请帮我检查 ${item.service} 的密钥 ${item.keyName}${where}的保存方式（目前是${STORAGE_LABELS[item.storage]}）是否安全、是否还有程序在用。${users}只告诉我结论和建议，改动前先问我，不要显示密钥的值。`;
+}
+
+export const GUIDE_TEXT = "明文存储不安全：能读这些文件的程序和备份都能看到密钥。可以改成环境变量引用，或交给系统钥匙串保存。";
+
+/**
+ * The page's one prompt when the service sends none: every plaintext key by name and place,
+ * the goal, and the caution that each service must still connect afterwards. Never a value.
+ */
+export function guidePrompt(items: SecretItem[]): string {
+  const plain = items.filter((item) => item.storage === "plaintext");
+  const list = plain.slice(0, 40).map((item, index) => `${index + 1}. ${item.service} · ${item.keyName}（${item.location || "位置未知"}）`);
+  return [
+    `我的电脑上有 ${plain.length} 个密钥以明文写在配置文件里（Skill Control 只列了名称和位置，没有读取值）：`,
+    ...list,
+    plain.length > 40 ? `……另有 ${plain.length - 40} 个` : "",
+    "",
+    "请帮我逐个改成更安全的保存方式（环境变量引用或系统钥匙串）：",
+    "- 先告诉我每个文件要怎么改，备份后再改；",
+    "- 改完后逐个确认对应的服务还能正常连接（MCP 能启动、命令行工具能登录），不能连接的先恢复原样再告诉我；",
+    "- 不要在回复里显示密钥的值。",
+  ]
+    .filter((line, index, lines) => line || lines[index - 1])
+    .join("\n");
 }

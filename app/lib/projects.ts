@@ -1,3 +1,4 @@
+import { cacheHitRate } from "./cache";
 import { normalizeCost, type Cost } from "./cost";
 import { asArray, asNumber, asOptionalString, asRecord, asString } from "./parse";
 
@@ -24,6 +25,8 @@ export interface ProjectRow extends Cost {
   tokenSplit: { input: number; output: number; cacheRead: number; cacheWrite: number; cacheWrite1h: number } | null;
   agents: { agentId: string; tokens: number; costUsd: number }[];
   topModels: ProjectModel[];
+  /** 0–1, see lib/cache. */
+  cacheHitRate: number | null;
 }
 
 export interface OtherProjects {
@@ -50,15 +53,17 @@ export function normalizeOtherProjects(value: unknown): OtherProjects | null {
 
 export function normalizeProject(value: unknown): ProjectRow {
   const record = asRecord(value);
-  const split = asRecord(record.tokenSplit);
+  const split = asRecord(Object.keys(asRecord(record.tokenSplit)).length ? record.tokenSplit : record.tokens);
   const tokens = typeof record.tokens === "object" && record.tokens ? asNumber(asRecord(record.tokens).total) : asNumber(record.tokens);
+  const hasSplit = "input" in split || "cacheRead" in split;
   return {
     ...normalizeCost(record),
     name: asOptionalString(record.name),
     sessions: asNumber(record.sessions),
     sessionsStarted: asNumber(record.sessionsStarted, asNumber(record.sessions)),
     tokens,
-    tokenSplit: Object.keys(split).length
+    cacheHitRate: cacheHitRate(record.cacheHitRate, hasSplit ? { input: asNumber(split.input), cacheRead: asNumber(split.cacheRead), cacheWrite: asNumber(split.cacheWrite), cacheWrite1h: asNumber(split.cacheWrite1h) } : null),
+    tokenSplit: hasSplit
       ? {
           input: asNumber(split.input),
           output: asNumber(split.output),

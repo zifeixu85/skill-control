@@ -988,6 +988,20 @@ version: { before, after }, historyEntry }`：计划 10 分钟内有效、只能
 执行后重新读本机版本，并在历史里记一条不可撤销的 `agent-update`。`POST /api/agent-versions/open { id }` 用 `open -b <bundleId>`
 打开桌面应用（不下载、不改文件；命令目录被固定时拒绝）。
 
+同一份计划还有两种执行方式（确认规则、白名单、固定命令目录、离线拒绝都相同；同一产品同时只能有一个后台任务，否则 409
+`job-running`，计划不会被用掉）：
+
+- **后台执行**：`POST /api/agent-versions/apply { planId, confirm: true, background: true }` 立即返回 `{ jobId, status: "running",
+  afterCheck }`；`GET /api/agent-versions/jobs/:id` → `{ jobId, productId, status: "running" | "done" | "error", step, steps: [{ display,
+  exitCode? }], outputTail, startedAt, finishedAt, version?, error? }`。`outputTail` 是边运行边收集的输出经密钥擦除与主目录压缩后的
+  最后 2 KB；任务只在内存里，结束 1 小时后清除（之后 404 `job-not-found`）；完成时记一条 `mode: "background"` 的历史。
+- **在终端里执行**：`POST /api/agent-versions/terminal { planId, confirm: true }` + 确认头 → `{ opened: true, afterCheck, historyEntry }`。
+  在私有临时目录（0700）里写一个一次性脚本（0700）：macOS / Linux 为 `.command`（`/bin/sh`，程序和每个参数都用 POSIX 单引号原样
+  写入，PATH 同应用内执行），逐条显示并运行命令，打印“完成，可以关闭这个窗口”和退出码，等按键后删除自己；Windows 为 `.cmd`
+  （参数加双引号，含 `"%^&|<>!` 或换行时拒绝，409 `unsafe-command`），用 `cmd /c start` 打开。macOS 用 `/usr/bin/open <文件>`
+  交给默认程序（终端或 iTerm）。应用自己不执行命令，历史记 `mode: "terminal"`、`ok: null`，界面之后按需重新检查版本。
+  命令目录被固定（测试与沙箱）时不打开任何东西，除非注入了打开函数。应用内执行的历史为 `mode: "in-app"`。
+
 ## v0.2 后台新增
 
 ### 新 Agent 与发现（§1）
@@ -1035,13 +1049,30 @@ lark-cli `config.json`（`appSecret` 来源为 keychain 时注明）。
 大写变量名算引用，其他内容按“误填的值”记为 plaintext；超时、调试开关等设置项不算密钥。不少于 16 个字符的值
 记 8 位 HMAC-SHA256 指纹，盐是 `~/.agent-skill-manager/secret-salt`（随机、0600），只用来判断“变了没有”。
 `secret-snapshot.json`（0600）只存 id、键名、指纹与时间；第一次是基线，之后报告新增、变化、删除（最多保留 200 条）。
-从不读取 macOS 钥匙串。每条带 `remedy`（按存储类型给出整改提示，例如把明文改成环境变量引用）。
+从不读取 macOS 钥匙串。每条带 `remedy`：明文项按统一的步骤——备份、把值移到环境变量或系统钥匙串 / 凭据管理器（值由用户
+自己填，不显示）、配置改为引用、重启用到它的 Agent / MCP 并做一次无害调用确认仍能连接、连不上就从备份恢复；其他类型说明
+“通常不需要改动”。响应另有 `guide: { text, prompt }`：`text` 提醒明文保存的风险、多数条目不用改；`prompt` 用同样的步骤一次
+覆盖全部明文项（最多列 40 项，一次只改一项，最后逐项汇报结果；没有明文项时为 `null`）。
 
 ### 用量合计（§7）
 
 `GET /api/usage/totals` → `{ generatedAt, index, status, windows: [{ id: "today" | "7" | "30" | "90" | "all", label, windowDays,
-from, to, tokens, costUsd, costBasis, unpricedTokens, sessions, activeDays, byAgent: [{ agentId, tokens, costUsd, sessions }] }] }`，
-与 `/api/usage/summary` 同一索引、同一计费规则。
+from, to, tokens, costUsd, costBasis, unpricedTokens, sessions, activeDays, cacheHitRate, cacheWriteShare, byAgent: [{ agentId, tokens, costUsd,
+sessions, cacheHitRate, cacheWriteShare, cacheBySession, notes? }] }] }`，与 `/api/usage/summary` 同一索引、同一计费规则。
+
+### 缓存率（Round 17）
+
+`server/usage-cache.mjs`。按厂商文档：Anthropic 的总输入 = `cache_read_input_tokens + cache_creation_input_tokens + input_tokens`，
+OpenAI 的缓存命中率 = 缓存 token ÷ 输入 token。所以 `cacheHitRate = cacheRead / (未缓存输入 + cacheRead + cacheWrite)`，
+`cacheWriteShare = cacheWrite / 同一分母`（含 1 小时缓存写入），输出 token 不计；没有输入 token 时为 `null`。由数据库总数估算的
+Codex 行（拆分是推算的）和不记录缓存 token 的来源（办公小浣熊）不参与，相应的值为 `null`。
+
+出现在：`/api/usage/totals` 的每个窗口与 `byAgent`；`/api/usage/summary` 的每个 Agent 及其 `byModel`；`/api/usage/agent` 的
+`totals`、`byModel` 与 `topProjects`；`/api/usage/models` 的每一行；`/api/usage/projects` 的每个项目。按会话的分布
+`cacheBySession: { sessions, median, p10, p90, lowSessions, excludedSessions }`（在 totals 的 `byAgent`、summary 的 Agent、agent 的
+`totals` 上）：每个会话（会话文件及其子代理记录，或一条数据库会话）先算自己窗口内的缓存率，取最近秩分位数；`lowSessions` 为
+低于 50% 的会话数，`excludedSessions` 为不参与的 Codex 估算会话数；不列出任何会话。`/api/usage/pricing` 的
+`rules.cacheRate: { text, formula, url, links }` 给界面的“怎么算的”。
 
 ### 通用 CLI 清单（§12）
 

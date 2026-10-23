@@ -1,5 +1,6 @@
 import { priceTable } from "./pricing.mjs";
 import { collectModelRows, priceRows, recordRow, roundUsd, sumCosts } from "./usage-cost.mjs";
+import { ratesAcross, ratesOf } from "./usage-cache.mjs";
 import { fileActiveDays, recordActiveDays, sessionCounter, sessionKeyOf } from "./usage-sessions.mjs";
 
 /**
@@ -99,9 +100,10 @@ export function costProjects(index, inWindow, costs, { agentId: onlyAgent = null
 }
 
 /** topProjects / otherProjects of GET /api/usage/agent. */
-export function agentProjects(projects = [], limit = 20) {
+export function agentProjects(projects = [], limit = 20, agentId = null) {
   const list = projects
     .map(({ name, sessions, sessionsStarted, tokens, priced }) => ({
+      ...ratesOf(agentId, priced.byModel),
       name,
       sessions,
       sessionsStarted,
@@ -121,11 +123,12 @@ export function projectsAcrossAgents(projectsByAgent, costs, limit = 30) {
   const merged = new Map();
   for (const [agentId, projects] of projectsByAgent) {
     for (const { name, sessions, sessionsStarted, tokens, priced } of projects) {
-      const target = merged.get(name) || { name, sessions: 0, sessionsStarted: 0, tokens: 0, parts: [], agents: [], models: new Map() };
+      const target = merged.get(name) || { name, sessions: 0, sessionsStarted: 0, tokens: 0, parts: [], agents: [], models: new Map(), splits: [] };
       target.sessions += sessions;
       target.sessionsStarted += sessionsStarted;
       target.tokens += tokens;
       target.parts.push(priced);
+      target.splits.push([agentId, priced.byModel]);
       target.agents.push({ agentId, tokens, costUsd: priced.costUsd });
       for (const row of priced.byModel) {
         const model = target.models.get(row.model) || { model: row.model, name: row.name, costUsd: 0, tokens: 0 };
@@ -137,9 +140,10 @@ export function projectsAcrossAgents(projectsByAgent, costs, limit = 30) {
     }
   }
   const list = [...merged.values()]
-    .map(({ parts, models, agents, ...project }) => ({
+    .map(({ parts, models, agents, splits, ...project }) => ({
       ...project,
       ...sumCosts(parts),
+      ...ratesAcross(splits),
       agents: agents.sort((left, right) => right.costUsd - left.costUsd || right.tokens - left.tokens),
       topModels: topModels(
         [...models.values()]

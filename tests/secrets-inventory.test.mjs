@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { buildSecretsInventory, guessService, STORAGE_TYPES } from "../server/secrets-inventory.mjs";
-import { remedyForSecret } from "../server/remedies.mjs";
+import { REMEDY_ALL_LIMIT, REMEDY_PROMPT_LIMIT, remedyForSecret, secretsGuide } from "../server/remedies.mjs";
 import { createHermesHome, createOpenClawHome, createQClawHome } from "./fixtures/claw-hermes.mjs";
 import { createRaccoonHome } from "./fixtures/office-raccoon.mjs";
 import { createPlantedConfigFixture } from "./fixtures/planted.mjs";
@@ -97,11 +97,29 @@ test("the inventory lists every source by key name and storage, never a value", 
     if (item.storage === "env-ref" || item.storage === "keychain") assert.equal(item.fingerprint, undefined, item.keyName);
     assert.equal(typeof item.firstSeenAt, "string");
   }
-  // Remedies explain what to do per storage type, without values.
+  // Remedies explain what to do per storage type, without values; plaintext ones move, verify and roll back.
   for (const item of inventory.items) {
     const remedy = remedyForSecret(item, { homes: [home] });
-    if (remedy) assert.doesNotMatch(JSON.stringify(remedy), MARKERS);
+    assert.doesNotMatch(JSON.stringify(remedy), MARKERS);
+    assert.ok(remedy.prompt.length <= REMEDY_PROMPT_LIMIT, item.keyName);
+    if (item.storage === "plaintext") {
+      assert.match(remedy.prompt, /环境变量.*钥匙串/su);
+      assert.match(remedy.prompt, /无害的调用/u);
+      assert.match(remedy.prompt, /从备份恢复原配置/u);
+    } else assert.match(remedy.prompt, /通常不需要改动/u);
   }
+  // One guide for the page: a short reminder and a single prompt for every plaintext item.
+  const guide = secretsGuide(inventory.items, { homes: [home] });
+  assert.match(guide.text, /明文/u);
+  assert.ok(guide.prompt.length <= REMEDY_ALL_LIMIT);
+  const plaintext = inventory.items.filter((item) => item.storage === "plaintext");
+  assert.match(guide.prompt, new RegExp(`共 ${plaintext.length} 项`, "u"));
+  for (const item of plaintext.slice(0, 5)) assert.ok(guide.prompt.includes(item.keyName), item.keyName);
+  assert.match(guide.prompt, /一次只改一项/u);
+  assert.match(guide.prompt, /确认连接/u);
+  assert.doesNotMatch(guide.prompt, MARKERS);
+  assert.equal(guide.prompt.includes(home), false);
+  assert.deepEqual(secretsGuide([{ storage: "keychain" }]).prompt, null);
 
   // Salt and snapshot: owner-only files that never contain values.
   const salt = await stat(path.join(stateDirectory, "secret-salt"));

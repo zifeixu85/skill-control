@@ -433,26 +433,33 @@ export function remedyForVersion(row, { homes = [] } = {}) {
 // Secrets inventory
 
 const SECRET_GOALS = {
-  plaintext: "明文改为环境变量引用（如 ${NAME}）或交给系统钥匙串，配置文件里不再出现密钥本身。",
-  "env-ref": "确认这个环境变量在需要它的地方已设置，配置里保持只写变量名。",
-  keychain: "密钥留在系统钥匙串里；如需更换，用这个工具自己的登录或配置命令。",
-  "credential-file": "凭据文件只有自己可读（权限 600），不被提交到任何仓库；不再使用的凭据作废后从文件中移除。",
-  oauth: "登录令牌由工具自己维护；不再使用时用工具的退出登录命令撤销，而不是手动编辑文件。",
+  plaintext: "密钥不再以明文写在配置文件里：值放进环境变量或系统钥匙串 / 凭据管理器，配置只引用它；用到它的服务照常连接。",
+  "env-ref": "通常不需要改动：配置里只写了变量名，值在环境变量里。只需确认需要它的程序能读到这个变量。",
+  keychain: "通常不需要改动：密钥在系统钥匙串里。需要更换时用这个工具自己的登录或配置命令。",
+  "credential-file": "通常不需要改动：凭据文件只要只有自己可读（权限 600）、不在任何仓库里即可。",
+  oauth: "通常不需要改动：登录令牌由工具自己维护；不再使用时用工具的退出登录命令撤销，而不是手动编辑文件。",
 };
+
+/** The same wording for one plaintext secret and for the "tidy up everything" prompt. */
+const PLAINTEXT_STEPS = [
+  "先备份这个配置文件。",
+  "把值移到环境变量，或系统钥匙串 / 凭据管理器（macOS 钥匙串、Windows 凭据管理器），值由我自己填进去；过程中不要显示、打印或复制值本身。",
+  "把配置改为引用它（例如 ${变量名}，或这个工具支持的钥匙串写法）。",
+  "确认连接：重启用到它的 Agent / MCP，做一次无害的调用（例如列出工具、查询账号状态），确认服务仍能正常连接。从程序坞启动的应用可能读不到 shell 里的环境变量，要用它能读到的方式设置。",
+  "如果连接失败，立刻从备份恢复原配置，并告诉我是哪一项、哪一步失败了。",
+];
+const envName = (keyName) => (/^[A-Za-z_]\w{0,63}$/u.test(keyName) ? keyName.toUpperCase() : "MY_SECRET");
+const usersOf = (item) => (item.usedBy || []).map((user) => `${user.kind === "mcp" ? "MCP" : user.kind === "skill" ? "技能" : "命令行"} ${user.name}`);
 
 /** Remedy for one secrets-inventory item: how to keep or move it, never its value. */
 export function remedyForSecret(item, { homes = [] } = {}) {
-  const users = (item.usedBy || []).map((user) => `${user.kind === "mcp" ? "MCP" : user.kind === "skill" ? "技能" : "命令行"} ${user.name}`);
+  const users = usersOf(item);
   const steps =
     item.storage === "plaintext"
-      ? [
-          "先备份这个文件。",
-          `把 ${item.keyName} 的值移到环境变量（或系统钥匙串），配置里改为引用，例如 \${${/^[A-Za-z_]\w{0,63}$/u.test(item.keyName) ? item.keyName : "MY_SECRET"}}；新值由我自己填写，不要在对话里显示。`,
-          "确认使用它的 Agent / MCP 能读到这个环境变量（从程序坞启动的应用可能读不到 shell 里的变量）。",
-        ]
+      ? PLAINTEXT_STEPS.map((step, index) => (index === 1 ? `${step}变量名可以用 ${envName(item.keyName)}。` : step))
       : item.storage === "credential-file"
-        ? [`检查文件权限是否为 600（ls -l），不对时改为 chmod 600；不要打开或打印文件内容。`, "确认这个文件不在任何 git 仓库里。"]
-        : ["不需要改动文件；需要更换时用工具自己的登录命令，旧凭据在服务商后台作废。"];
+        ? ["检查文件权限是否为 600（ls -l），不对时改为 chmod 600；不要打开或打印文件内容。", "确认这个文件不在任何 git 仓库里。", "改了权限后运行一次这个工具的无害命令，确认它仍能读到凭据。"]
+        : ["不需要改动文件；需要更换时用工具自己的登录命令，旧凭据在服务商后台作废，换完后做一次无害的调用确认仍能连接。"];
   return remedy(
     buildPrompt(
       {
@@ -460,9 +467,37 @@ export function remedyForSecret(item, { homes = [] } = {}) {
         where: [item.location, users.length ? `使用者：${users.join("、")}` : ""],
         goal: SECRET_GOALS[item.storage] || SECRET_GOALS.plaintext,
         steps,
-        verify: "重启相关 Agent 后确认功能正常，然后在 Skill Control 的“密钥”页面重新查看",
+        verify: "每个用到它的服务都能正常连接，然后在 Skill Control 的“密钥”页面重新查看",
       },
       homes,
     ),
   );
+}
+
+const GUIDE_ITEM_LIMIT = 40;
+
+/**
+ * GET /api/secrets → guide: a short reminder and one prompt that tidies up every plaintext
+ * secret the same way as the per-item remedies (backup, move, reference, verify, roll back).
+ */
+export function secretsGuide(items, { homes = [] } = {}) {
+  const plaintext = items.filter((item) => item.storage === "plaintext");
+  if (!plaintext.length) {
+    return { text: "没有发现明文写在配置文件里的密钥，不需要处理。这里列出的条目只用来了解每个密钥放在哪里。", prompt: null };
+  }
+  const text = `大多数条目不需要改动。有 ${plaintext.length} 项密钥以明文写在配置文件里，文件一旦被同步、分享或提交到仓库就可能泄露；可以复制下面的提示词，让你的 AI 助手把它们整理到环境变量或系统钥匙串，并逐个确认服务仍能连接。`;
+  const lines = [
+    `请帮我整理这些以明文保存在配置文件里的密钥（共 ${plaintext.length} 项），只说明位置，不要显示它们的值：`,
+    ...plaintext.slice(0, GUIDE_ITEM_LIMIT).map((item, index) => {
+      const users = usersOf(item);
+      return `${index + 1}. ${item.service} · ${item.keyName}：${item.location}${users.length ? `（使用者：${users.join("、")}）` : ""}`;
+    }),
+    ...(plaintext.length > GUIDE_ITEM_LIMIT ? [`其余 ${plaintext.length - GUIDE_ITEM_LIMIT} 项在 Skill Control 的“密钥”页面里，同样处理。`] : []),
+    "对每一项，一次只改一项，按这个顺序做：",
+    ...PLAINTEXT_STEPS.map((step, index) => `${index + 1}. ${step}`),
+    "全部规则：",
+    ...SAFETY.map((step) => `- ${step}`),
+    "全部做完后，把每一项的结果（已迁移并确认能连接 / 已恢复原样及原因）列给我，然后我会在 Skill Control 的“密钥”页面重新查看。",
+  ];
+  return { text, prompt: cleanRemedyText(lines.join("\n"), homes, REMEDY_ALL_LIMIT) };
 }

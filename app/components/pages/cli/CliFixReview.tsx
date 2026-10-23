@@ -1,5 +1,6 @@
 "use client";
 
+import { RunningProgress } from "../../ui/RunningProgress";
 import { refreshAfterWrite } from "../../../hooks/refresh";
 import { usePlanApply } from "../../../hooks/usePlanApply";
 import { useUndoToast } from "../../../hooks/useUndoToast";
@@ -81,6 +82,7 @@ export function CliFixReview({
           ))}
         </div>
       ) : null}
+      {flow.applying ? <RunningProgress label="正在写入…" expectedMs={5_000} /> : null}
       {failure ? (
         <p className="form-error" role="alert">
           {failure}

@@ -11,6 +11,7 @@ import { UpdateDrawer } from "./UpdateDrawer";
 import { ConnectorDrawer } from "./ConnectorDrawer";
 import { CliDrawer } from "./CliDrawer";
 import { DiscoveryDrawer } from "./DiscoveryDrawer";
+import { AgentJobToasts } from "../pages/updates/agentJobs";
 
 /** Drawers and dialogs that any page can open. Keyed by target so a new item starts fresh. */
 export function DrawerHost() {
@@ -25,6 +26,7 @@ export function DrawerHost() {
       {drawer?.kind === "connector" ? <ConnectorDrawer key={drawer.id} id={drawer.id} onClose={closeDrawer} /> : null}
       {drawer?.kind === "cli" ? <CliDrawer key={drawer.id} id={drawer.id} onClose={closeDrawer} /> : null}
       {drawer?.kind === "discovery" ? <DiscoveryDrawer onClose={closeDrawer} /> : null}
+      <AgentJobToasts />
       {importOpen ? <ImportDialog onClose={() => setImportOpen(false)} /> : null}
       {libraryRequest ? (
         <PlanReview

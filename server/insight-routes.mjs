@@ -32,6 +32,7 @@ export const INSIGHT_ROUTES = [
   "/api/agent-versions/check",
   "/api/agent-versions/plan",
   "/api/agent-versions/apply",
+  "/api/agent-versions/terminal",
   "/api/agent-versions/open",
   "/api/health-report",
   "/api/agent-icon",
@@ -42,6 +43,9 @@ export const INSIGHT_ROUTES = [
   "/api/updates/plan",
   "/api/updates/apply",
 ];
+
+/** Routes with an id in the path (same-site only, like INSIGHT_ROUTES). */
+export const INSIGHT_ROUTE_PREFIXES = ["/api/agent-versions/jobs/"];
 
 const HEALTH_CACHE_TTL = 5 * 60_000;
 const AGENT_ID = /^[a-z0-9][a-z0-9-]{0,39}$/u;
@@ -228,9 +232,16 @@ export function createInsightRoutes(context) {
       if (request.headers["x-skill-manager-confirm"] !== "yes" || body.confirm !== true) {
         throw new RouteError(400, "需要明确确认后才能执行更新。", "confirm-required");
       }
-      const result = await versions.apply({ planId: body.planId, confirm: true });
+      const result = await versions.apply({ planId: body.planId, confirm: true, background: body.background === true });
       context.afterWrite?.();
       return result;
+    },
+    // The same confirmed plan, run in the user's own terminal window instead of the app.
+    async "/api/agent-versions/terminal"(body, request) {
+      if (request.headers["x-skill-manager-confirm"] !== "yes" || body.confirm !== true) {
+        throw new RouteError(400, "需要明确确认后才能在终端里执行更新。", "confirm-required");
+      }
+      return versions.terminal({ planId: body.planId, confirm: true });
     },
     // Opens a desktop app so it can update itself (no download, no file change).
     async "/api/agent-versions/open"(body) {
@@ -255,6 +266,12 @@ export function createInsightRoutes(context) {
       return true;
     }
     if (request.method !== "GET") return false;
+    if (url.pathname.startsWith("/api/agent-versions/jobs/")) {
+      const jobId = url.pathname.slice("/api/agent-versions/jobs/".length);
+      if (!/^[0-9a-f-]{36}$/u.test(jobId)) throw new RouteError(404, "没有找到这个后台任务。", "job-not-found");
+      context.json(response, 200, versions.job(jobId), origin);
+      return true;
+    }
     if (url.pathname === "/api/agent-icon") {
       const icon = await readAgentIcon(agentParam(url.searchParams.get("id")), {
         homeDirectory: context.homeDirectory,

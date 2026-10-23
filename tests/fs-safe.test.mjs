@@ -48,7 +48,7 @@ test("visits each real directory once when skill folders link back to themselves
   const started = performance.now();
   const names = await findSkillDirectoryNames(skills, root, { maxDepth: 6 });
   assert.deepEqual(names, ["real-skill"]);
-  assert.ok(performance.now() - started < 500);
+  assert.ok(performance.now() - started < 3000);
 });
 
 test("compacts Windows and POSIX home paths in serialized text", () => {

@@ -1,5 +1,5 @@
 import { normalizeAgentFile, normalizeAgentFiles, normalizeAgentTools } from "./agent-extras";
-import { normalizeAgentVersions, normalizeUpdatePlan, normalizeUpdateResult } from "./agent-versions";
+import { normalizeAgentVersions, normalizeUpdateJob, normalizeUpdatePlan, normalizeUpdateResult } from "./agent-versions";
 import { normalizeDiscovery } from "./discovery";
 import { normalizeSecrets } from "./secrets";
 import { normalizeTotals } from "./totals";
@@ -359,6 +359,16 @@ export const api = {
     normalizeUpdateResult(
       await sendJson<unknown>("POST", "/api/agent-versions/apply", { planId, confirm: true }, { confirm: true, timeout: TIMEOUTS.agentUpdate }),
     ),
+  /** Opens the user's terminal running the planned command; Skill Control doesn't wait for it. */
+  applyAgentUpdateInTerminal: (planId: string) =>
+    sendJson<Record<string, unknown>>("POST", "/api/agent-versions/terminal", { planId, confirm: true }, WRITE),
+  /** Runs the plan in the background; poll agentUpdateJob(jobId). null when the service ran it right away or has no jobs. */
+  applyAgentUpdateInBackground: async (planId: string) => {
+    const raw = await sendJson<Record<string, unknown>>("POST", "/api/agent-versions/apply", { planId, confirm: true, background: true }, WRITE);
+    return typeof raw?.jobId === "string" && raw.jobId ? raw.jobId : null;
+  },
+  agentUpdateJob: async (jobId: string) =>
+    normalizeUpdateJob(await getJson<unknown>(`/api/agent-versions/jobs/${encodeURIComponent(jobId)}`), jobId),
   /** Opens a desktop app (open -b) so it checks for its own updates; changes no files. */
   openAgentApp: (id: string) => sendJson<{ opened?: boolean }>("POST", "/api/agent-versions/open", { id }),
   usageTotals: async () => normalizeTotals(await getJson<unknown>("/api/usage/totals")),

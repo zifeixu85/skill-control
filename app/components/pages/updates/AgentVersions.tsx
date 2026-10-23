@@ -23,6 +23,8 @@ import { SectionHeading } from "../../ui/basics";
 import { ExternalLink } from "../../ui/ExternalLink";
 import { RemedyActions, RemedyPanel } from "../../ui/RemedyPanel";
 import { AgentUpdateDialog } from "./AgentUpdateDialog";
+import { useAgentJobs } from "./agentJobs";
+import { RunningProgress } from "../../ui/RunningProgress";
 
 export const AGENT_VERSIONS_KEY = "agent-versions";
 export const loadAgentVersions = () => api.agentVersions();
@@ -82,6 +84,7 @@ function AgentVersionRow({ agent }: { agent: AgentVersion }) {
   const needsUpdate = agent.status === "update-available";
   const updateId = needsUpdate ? oneClickUpdate(agent) : null;
   const [updating, setUpdating] = useState(false);
+  const background = useAgentJobs()[agent.id] || null;
   return (
     <li className="avrow" data-memory-id={`agent:${agent.id}`}>
       <AgentAvatar id={agent.agentId} size="md" />
@@ -144,14 +147,34 @@ function AgentVersionRow({ agent }: { agent: AgentVersion }) {
           <RemedyActions remedy={agent.remedy} open={open} onToggle={() => setOpen((value) => !value)} controls={remedyId} />
         ) : null}
         {updateId ? (
-          <button type="button" className="btn sm primary" title="先列出要运行的命令和影响，确认后才执行" onClick={() => setUpdating(true)}>
-            一键更新
+          <button type="button" className="btn sm primary" disabled={Boolean(background)} title="先列出要运行的命令和影响，确认后才执行" onClick={() => setUpdating(true)}>
+            {background ? "正在后台更新…" : "一键更新"}
           </button>
         ) : null}
         {needsUpdate && (updateId || (agent.remedy?.prompt && hasCommands)) ? (
           <small className="act-note">{updateId ? "一键更新会先预览命令，确认后才运行" : "复制 AI 指令只复制，不改任何东西"}</small>
         ) : null}
       </div>
+      {background ? (
+        <div className="remedy-slot">
+          <RunningProgress
+            compact
+            label={`正在后台更新 ${agent.name}`}
+            step={background.job?.step || null}
+            done={background.job?.done ?? null}
+            total={background.job?.total ?? null}
+            startedAt={background.job?.startedAt || background.startedAt}
+            expectedMs={60_000}
+            detail={
+              background.stale
+                ? "暂时没拿到进度，会继续尝试…"
+                : background.job?.outputTail
+                  ? background.job.outputTail.trim().split("\n").pop() || "可以继续使用 Skill Control，完成后会提醒你。"
+                  : "可以继续使用 Skill Control，完成后会提醒你。"
+            }
+          />
+        </div>
+      ) : null}
       {updating && updateId ? <AgentUpdateDialog agent={agent} updateId={updateId} onClose={() => setUpdating(false)} /> : null}
       {open && agent.remedy ? (
         <div className="remedy-slot">

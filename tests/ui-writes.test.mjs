@@ -18,6 +18,8 @@ const WRITE_ARGS = {
   restoreTrash: ["trash-1"],
   cliApply: ["plan-1"],
   applyAgentUpdate: ["plan-1"],
+  applyAgentUpdateInTerminal: ["plan-1"],
+  applyAgentUpdateInBackground: ["plan-1"],
 };
 const PLAN_ARGS = {
   planSync: [{ sourceInstanceId: "s", targetAgentIds: ["codex"], mode: "copy" }],

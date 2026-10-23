@@ -28,9 +28,9 @@ import { parseFrontmatter } from "./frontmatter.mjs";
 import { ACTIVITY_WINDOW_DAYS, scanAgentActivity } from "./agents-activity.mjs";
 import { AGENT_APPS, defaultApplicationDirectories, hasAgentIcon } from "./agent-icons.mjs";
 import { contentHash } from "./fs-links.mjs";
-import { createInsightRoutes, INSIGHT_ROUTES } from "./insight-routes.mjs";
+import { createInsightRoutes, INSIGHT_ROUTE_PREFIXES, INSIGHT_ROUTES } from "./insight-routes.mjs";
 import { discoverAgents } from "./agent-discovery.mjs";
-import { remedyForSecret } from "./remedies.mjs";
+import { remedyForSecret, secretsGuide } from "./remedies.mjs";
 import { buildSecretsInventory } from "./secrets-inventory.mjs";
 import { skillUsageStats } from "./usage-query.mjs";
 import { createManageRoutes, MANAGE_ROUTES } from "./manage-routes.mjs";
@@ -455,7 +455,7 @@ async function secretsInventory() {
   }
   const homes = [HOME_DIRECTORY, REAL_HOME_DIRECTORY];
   const inventory = await buildSecretsInventory({ homeDirectory: HOME_DIRECTORY, homes, stateDirectory: STATE_DIRECTORY, skillDirectories: [...directories.values()] });
-  return { ...inventory, items: inventory.items.map((item) => ({ ...item, remedy: remedyForSecret(item, { homes }) })) };
+  return { ...inventory, guide: secretsGuide(inventory.items, { homes }), items: inventory.items.map((item) => ({ ...item, remedy: remedyForSecret(item, { homes }) })) };
 }
 
 /** Detected Agents the user has not acknowledged yet carry `isNew`. */
@@ -2913,7 +2913,7 @@ const SAME_SITE_ONLY_ROUTES = new Set([
 
 function crossSiteBlocked(request, pathname) {
   return (
-    SAME_SITE_ONLY_ROUTES.has(pathname) &&
+    (SAME_SITE_ONLY_ROUTES.has(pathname) || INSIGHT_ROUTE_PREFIXES.some((prefix) => pathname.startsWith(prefix))) &&
     String(request.headers["sec-fetch-site"] || "").toLowerCase() === "cross-site"
   );
 }

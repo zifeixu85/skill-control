@@ -81,6 +81,9 @@ test("indexes tokens, sessions and skills from every source without keeping any 
   const codex = usageForAgent(index, "codex", { days: 90 });
   assert.deepEqual(codex.topProjects, [
     {
+      // Cache rate: 1,000 cached of 1,600 prompt tokens.
+      cacheHitRate: 0.625,
+      cacheWriteShare: 0,
       name: "beta-project",
       sessions: 2,
       sessionsStarted: 2,

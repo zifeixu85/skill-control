@@ -17,6 +17,8 @@ import { EmptyState, Loading, SectionHeading, Segmented, TopBar } from "../ui/ba
 import { ItemText, TagStack } from "../ui/Item";
 import { SortControl, useSortedList } from "../ui/SortControl";
 import { CliTools } from "./cli/CliTools";
+import { SecretsView } from "./SecretsPage";
+import { CONNECTORS_TABS, connectorsTabStore } from "../../lib/connectors-tab";
 
 type View = "grid" | "list";
 const VIEWS: { id: View; label: string }[] = [
@@ -27,7 +29,7 @@ const isView = (value: string) => value === "grid" || value === "list";
 const connectorsViewStore = persistentStore<View>("connectors-view", "grid", isView);
 const mcpViewStore = persistentStore<View>("mcp-view", "grid", isView);
 
-export const connectorsTabStore = persistentStore<"mcp" | "cli">("connectors-tab", "mcp", (value) => value === "mcp" || value === "cli");
+export { connectorsTabStore } from "../../lib/connectors-tab";
 
 function useProvider(connector: Connector) {
   const { integrations } = useData();
@@ -220,14 +222,13 @@ function McpSection() {
       ) : (
         <McpMatrix items={sorted} />
       )}
-      <p className="footnote">点开任意一项查看各 Agent 里的配置原文。密钥在读取时就被隐藏，界面只显示字段名；保存位置见“密钥”页。</p>
+      <p className="footnote">点开任意一项查看各 Agent 里的配置原文。密钥在读取时就被隐藏，界面只显示字段名；保存位置见“密钥”标签。</p>
     </>
   );
 }
 
 export function ConnectorsPage() {
   const { integrations } = useData();
-  const { go } = useNav();
   const [tab, setTab] = usePersistent(connectorsTabStore);
   const [view, setView] = usePersistent(connectorsViewStore);
   const now = useNow();
@@ -239,24 +240,21 @@ export function ConnectorsPage() {
     <section className="page" aria-labelledby="page-title">
       <TopBar
         title={<span id="page-title">连接器与 MCP</span>}
-        sub={tab === "cli" ? "本机上 Agent 能调用的命令行工具：装在哪、谁装的、各 Agent 能不能用" : "连接器是 Codex 通过账号接入的应用；MCP 服务写在各 Agent 的配置文件里"}
+        sub={
+          tab === "cli"
+            ? "本机上 Agent 能调用的命令行工具：装在哪、谁装的、各 Agent 能不能用"
+            : tab === "secrets"
+              ? "连接器、MCP 和命令行工具用到的密钥存在哪里、谁在用；只显示名称和位置，从不读取或显示它的值"
+              : "连接器是 Codex 通过账号接入的应用；MCP 服务写在各 Agent 的配置文件里"
+        }
       >
-        <button type="button" className="btn ghost" onClick={() => go("secrets")}>
-          密钥
-        </button>
-        <Segmented
-          label="显示内容"
-          value={tab}
-          onChange={setTab}
-          items={[
-            { id: "mcp", label: "连接器与 MCP" },
-            { id: "cli", label: "命令行工具" },
-          ]}
-        />
+        <Segmented label="显示内容" value={tab} onChange={setTab} items={CONNECTORS_TABS} />
       </TopBar>
       <div className="scroll" ref={scrollRef}>
         {tab === "cli" ? (
           <CliTools />
+        ) : tab === "secrets" ? (
+          <SecretsView />
         ) : integrations.status === "error" && !integrations.data ? (
           <EmptyState tone="error" title="读取失败">
             {errorMessage(integrations.error)}

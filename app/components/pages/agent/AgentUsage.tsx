@@ -15,6 +15,7 @@ import { EmptyState, Loading, Segmented } from "../../ui/basics";
 import { IndexProgress } from "../usage/IndexProgress";
 import { dayLabel, SourceInfo } from "../usage/UsageAgentCard";
 import { ModelBreakdown, ProjectBreakdown, SkillRanking, USAGE_SECTIONS, type UsageSection } from "./AgentUsageSections";
+import { CacheBlock } from "./CacheBlock";
 
 export const AGENT_USAGE_DAYS = 90;
 const DAYS = AGENT_USAGE_DAYS;
@@ -136,6 +137,7 @@ export function AgentUsage({
           <p className="muted small">最近 {DAYS} 天没有会话记录。</p>
         )}
       </section>
+      <CacheBlock rate={data.cacheHitRate} distribution={data.cacheDistribution} agentName={agentName} />
       <div className="usage-columns">
         <section id={USAGE_SECTIONS.skills} className="usage-block">
           <h3>常用技能</h3>
