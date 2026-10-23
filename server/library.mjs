@@ -1,7 +1,7 @@
 import { lstat, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { classifyPath, contentHash } from "./fs-links.mjs";
-import { compactHomePath, exists, homeVariants, isWithin, readBoundedJson } from "./fs-safe.mjs";
+import { compactHomePath, createdAtOf, exists, homeVariants, isWithin, readBoundedJson } from "./fs-safe.mjs";
 import { AGENT_TIERS, agentOwnDirectories, readAgentSwitches, tierOf } from "./library-agents.mjs";
 import { readSkillsLock } from "./update-sources.mjs";
 
@@ -58,6 +58,7 @@ async function libraryEntries(libraryPath, realRoot, hasher, lock) {
     entries.push({
       name: dirent.name,
       path: full,
+      installedAt: createdAtOf(info),
       kind,
       real,
       gitCheckout,
@@ -219,6 +220,7 @@ export async function readLibrary({ config, homeDirectory, homes = [homeDirector
     entries: entries.map((entry) => ({
       name: entry.name,
       kind: entry.kind,
+      installedAt: entry.installedAt || null,
       ...(entry.kind.startsWith("link") || entry.kind === "broken" ? { target: display(entry.real) } : {}),
       hash: entry.hash ? entry.hash.slice(0, 16) : null,
       ...(entry.gitCheckout ? { externalManaged: "git" } : {}),

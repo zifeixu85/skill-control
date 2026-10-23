@@ -1,5 +1,6 @@
 import path from "node:path";
 import { createCliManager, fixesFor } from "./cli-fixes.mjs";
+import { inventoryCliTools, isKnownAiCommand } from "./cli-inventory.mjs";
 import { AGENT_PATH_SOURCES, detectCliTools } from "./cli-tools.mjs";
 import { object, readBoundedJson } from "./fs-safe.mjs";
 import { createLibraryService } from "./library-service.mjs";
@@ -71,18 +72,44 @@ export function createManageRoutes(context) {
     return { "lark-cli": fromCache || object(state.value).latest_version || null };
   }
 
-  async function detectTools() {
+  const agentsOf = (config) => ({
+    agents: (config.agents || []).map((agent) => agent.id).filter((id) => AGENT_PATH_SOURCES[id]),
+    agentNames: Object.fromEntries((config.agents || []).map((agent) => [agent.id, agent.name])),
+  });
+
+  async function detectTools({ launchctl } = {}) {
     const config = await context.getConfig();
     const libraryView = await library.readInternal();
     return detectCliTools({
       homeDirectory: context.homeDirectory,
       homes: context.homes,
       searchDirectories: await searchDirectories(),
-      agents: (config.agents || []).map((agent) => agent.id).filter((id) => AGENT_PATH_SOURCES[id]),
-      agentNames: Object.fromEntries((config.agents || []).map((agent) => [agent.id, agent.name])),
+      ...agentsOf(config),
       library: libraryView,
       latest: await latestVersions(),
-      launchctlPath: await launchctlPath(),
+      launchctlPath: launchctl === undefined ? await launchctlPath() : launchctl,
+    });
+  }
+
+  /** SKILL.md of every scanned skill copy (for "which skills mention this command"). */
+  async function skillFiles() {
+    const scan = await context.getScan().catch(() => null);
+    const expand = (value) => (value === "~" ? context.homeDirectory : String(value || "").startsWith("~/") ? path.join(context.homeDirectory, value.slice(2)) : value);
+    return (scan?.skills || []).flatMap((skill) =>
+      (skill.instances || []).filter((instance) => typeof instance.path === "string").map((instance) => ({ file: path.join(expand(instance.path), "SKILL.md"), name: skill.name })),
+    );
+  }
+
+  /** The generic inventory (v0.2 §12); system prefixes are skipped when commands are pinned. */
+  async function inventory({ launchctl } = {}) {
+    return inventoryCliTools({
+      homeDirectory: context.homeDirectory,
+      homes: context.homes,
+      stateDirectory: context.stateDirectory,
+      skillFiles: await skillFiles(),
+      ...agentsOf(await context.getConfig()),
+      launchctlPath: launchctl ?? null,
+      systemPrefixes: context.commandDirectories ? [] : ["/opt/homebrew", "/usr/local"],
     });
   }
 
@@ -105,12 +132,35 @@ export function createManageRoutes(context) {
     detect: detectTools,
   });
 
-  const publicTools = async () =>
-    (await detectTools()).map((tool) => {
+  const INVENTORY_FIELDS = ["path", "source", "kind", "fileKind", "interpreter", "target", "links", "owner", "description", "size", "mtime", "referencedBySkills", "referencedCount", "aiRelated", "aiReasons"];
+
+  /**
+   * GET /api/cli-tools: the deep cards (lark-cli, gh, uv) first, each with the inventory
+   * fields of its preferred copy, then every other inventoried command, plus summary counts.
+   */
+  async function publicTools() {
+    const launchctl = await launchctlPath();
+    const [deep, listed] = await Promise.all([
+      detectTools({ launchctl }),
+      inventory({ launchctl }).catch(() => ({ tools: [], summary: {} })),
+    ]);
+    const deepCommands = new Set(deep.map((tool) => tool.internal.descriptor.command));
+    const cards = deep.map((tool) => {
       const rest = { ...tool };
       delete rest.internal;
-      return { ...rest, fixes: fixesFor(tool, { homes: context.homes }) };
+      const command = tool.internal.descriptor.command;
+      const match = listed.tools.find((item) => item.name === command);
+      const fields = match
+        ? Object.fromEntries(INVENTORY_FIELDS.filter((key) => key in match).map((key) => [key, match[key]]))
+        : { path: rest.binaries[0]?.path || null, referencedBySkills: [], referencedCount: 0, aiRelated: isKnownAiCommand(command), aiReasons: isKnownAiCommand(command) ? ["known-ai-cli"] : [] };
+      return { ...fields, ...rest, fixes: fixesFor(tool, { homes: context.homes }) };
     });
+    const tools = [...cards, ...listed.tools.filter((tool) => !deepCommands.has(tool.name))];
+    return {
+      tools,
+      summary: { ...listed.summary, total: tools.length, aiRelated: tools.filter((tool) => tool.aiRelated).length, deep: cards.length },
+    };
+  }
 
   const confirmed = (request, body) => {
     if (request.headers["x-skill-manager-confirm"] !== "yes" || body.confirm !== true) throw new RouteError(400, "需要明确确认后才能执行。", "confirm-required");
@@ -118,7 +168,7 @@ export function createManageRoutes(context) {
 
   const getRoutes = {
     "/api/library": () => library.view(),
-    "/api/cli-tools": async () => ({ tools: await publicTools() }),
+    "/api/cli-tools": () => publicTools(),
     "/api/history": (url) => restore.listHistory(url.searchParams.get("limit")),
     "/api/trash": () => restore.listTrash(),
   };

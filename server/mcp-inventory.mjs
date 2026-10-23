@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import {
@@ -182,9 +183,21 @@ export function buildMcpMatrix(servers) {
     .sort((left, right) => right.agentIds.length - left.agentIds.length || left.name.localeCompare(right.name));
 }
 
+/** Modification time of each configuration file (for sorting MCP servers by "recently changed"). */
+async function sourceTimes(entries, homeDirectory) {
+  const times = new Map();
+  for (const source of new Set(entries.map((entry) => entry.source).filter((value) => typeof value === "string"))) {
+    const file = source.startsWith("~/") ? path.join(homeDirectory, source.slice(2)) : source;
+    const info = path.isAbsolute(file) ? await stat(file).catch(() => null) : null;
+    times.set(source, info ? new Date(info.mtimeMs).toISOString() : null);
+  }
+  return times;
+}
+
 export async function scanMcpInventory(homeDirectory = homedir()) {
   const { entries, warnings } = await readMcpSources(homeDirectory);
-  const servers = entries.map((entry) => summarizeServer(entry));
+  const times = await sourceTimes(entries, homeDirectory);
+  const servers = entries.map((entry) => ({ ...summarizeServer(entry), updatedAt: times.get(entry.source) || null }));
   return {
     servers,
     matrix: buildMcpMatrix(servers),

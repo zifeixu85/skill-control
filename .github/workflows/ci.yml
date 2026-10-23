@@ -47,6 +47,6 @@ jobs:
         run: npm test
 
       - name: Assemble unpacked desktop application
-        run: npm run desktop:runtime && npx electron-builder --dir --linux --x64
+        run: npm run desktop:runtime && npx electron-builder --dir --linux --x64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"

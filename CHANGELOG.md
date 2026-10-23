@@ -11,6 +11,29 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ### Added
 
+- In-app updates for Skill Control itself, from GitHub Releases: checked 15 seconds
+  after start when the last check is older than 24 hours, then daily, or on demand;
+  never in offline mode (`SKILL_MANAGER_UPDATES_OFFLINE=1`) or from source. macOS
+  (ad-hoc signed, so Squirrel.Mac cannot install) uses a custom updater in
+  `desktop/app-updater.mjs`: it reads `latest-mac.yml`, downloads the zip for the Mac's
+  architecture, verifies its sha512, unpacks it with `ditto`, checks the bundle id,
+  version and executable, moves the running app to the Trash under a timestamped name,
+  puts the new one in its place (rolling back on any failure) and relaunches with
+  `open -n`. An app in a read-only or translocated location opens the release page
+  instead. Windows (NSIS) and Linux (AppImage) use electron-updater; the portable EXE
+  and the .deb point to the release page.
+- Desktop bridge `skillManagerDesktop.appUpdate`: `status()`, `check()`, `download()`,
+  `install()` (each resolves with the state and never rejects) and `onProgress(cb)`
+  (every state change; returns an unsubscribe function). Only our own window's top
+  frame may call them.
+- Release pipeline: `electron-builder.yml` declares the GitHub provider, so builds write
+  `latest-mac.yml`, `latest.yml`, `latest-linux.yml` and `app-update.yml` (still with
+  `--publish never`). The release workflow uploads them with the `.blockmap` files,
+  merges the arm64 and x64 macOS manifests into one `latest-mac.yml`
+  (`scripts/merge-mac-update-manifests.mjs`) and publishes a pre-release when
+  `docs/releases/vX.Y.Z.md` starts with `prerelease: true` front matter
+  (`scripts/release-notes.mjs`).
+
 - 办公小浣熊 (SenseTime Office Raccoon) as an agent: detection, app version and icon,
   skills (user folder, copy-only; symlinked folders are reported as not loaded because
   the app skips them; `skill-settings.json` disabledSkillNames as the disable switch;
@@ -187,9 +210,58 @@ on Keep a Changelog and the project follows Semantic Versioning.
   explicit selection of changed files); the Hermes config is snapshotted
   before `hermes config set`.
 - CLI fix reasons name Agents by display name and list `agentIds`.
+- New Agents and discovery: `knownAgentIds` and `ignoredDiscoveries` in the config (the
+  first start is the baseline), `isNew` on scanned Agents and `newAgentIds` in
+  `/api/config`, `POST /api/agents/acknowledge`, and `GET /api/agents/discover`, which finds
+  unclaimed `skills/` folders under `~/.*` and Application Support, unclaimed app bundles
+  matched to their own folders, and `~/.local/bin` links into apps (innermost bundle) and
+  launchers. Read-only and bounded.
+- One-click Agent CLI updates with verified official commands only:
+  `npm install -g --prefix <prefix> <pkg>@latest` with the npm that owns the copy (Codex CLI,
+  Gemini CLI, Claude Code via npm, lark-cli including Hermes' own copy), `claude update`
+  for the native Claude Code install and `openclaw update`; everything else stays an AI
+  prompt. `POST /api/agent-versions/plan` / `apply` (confirmation header, single-use plans,
+  no shell, minimal environment, scrubbed output, version re-read, `agent-update` history
+  entry) and `POST /api/agent-versions/open` (`open -b`). Version rows mark the active copy
+  when a command is installed twice and carry `remedy.action`, `openApp` and `downloadUrl`.
+- Sort fields: skills `installedAt`, `updatedAt`, `lastUsedAt`, `uses30d`, `usesAll` (any
+  Agent, from the usage index); library `installedAt`; plugins `installedAt`, `updatedAt`,
+  `lastUsedAt`; MCP servers `updatedAt`; capability items `createdAt`, `updatedAt`,
+  `lastUsedAt`.
+- Codex connectors list their providing plugins, icon, a connection status with its basis
+  and their tools (name, short description, read-only hint).
+- `GET /api/secrets`: which services' credentials are kept where (plaintext, environment
+  reference, keychain, credential file, OAuth), used by which Agents, MCP servers, skills
+  or CLIs, with 8-digit salted fingerprints and added / changed / removed history. Covers
+  MCP configs, Agent settings and `.env` files, OpenClaw / QClaw configs, credential stores
+  and legacy auth files, 办公小浣熊, skill `.env` files, gh, npm, netrc, AWS, Docker and
+  lark-cli. Each item has a remedy prompt.
+- `GET /api/usage/totals`: today, 7, 30, 90 days and all time in one response, with
+  tokens, cost, sessions, active days and each Agent's share.
+- A generic CLI inventory in `GET /api/cli-tools` (`tools` plus `summary`): every command
+  in `~/.local/bin`, npm globals (each nvm Node, the system Node, Hermes' Node), pnpm, bun,
+  cargo, go, deno and uv tools, plus Homebrew commands that a skill or an Agent's allow rule
+  names; with kind and interpreter, owner (npm package, uv tool, app bundle, native
+  install, Homebrew formula, crate), a redacted description from the script's first
+  comments, size, time, the skills that mention it, per-Agent availability and allow rule,
+  and an AI-related flag with reasons. Backups (`*.bak`, `*.old`) are hidden. The lark-cli,
+  gh and uv cards stay as deep views at the top.
 
 ### Changed
 
+- Hermes Agent versions are compared in the scheme of its latest GitHub release tag:
+  `install-stamp.json` baseVersion for the v0.22+ semantic tags, the release date for older
+  calendar tags (it was always the release date, so v0.22.5 looked older than 2026.9.24).
+- Remedies for npm-installed CLIs pin `--prefix` to the global folder that owns the copy;
+  OpenClaw's remedy uses its documented `openclaw update`.
+- `smol-toml` 1.8.0 → 1.9.1 for GHSA-r4xh-jqrq-34v2 (quadratic-time parse); `npm audit
+  --omit=dev` reports no vulnerabilities.
+- New runtime dependency `electron-updater` 6.8.10 (exact; loaded on Windows and Linux
+  only, licenses in `resources/licenses/`). `js-yaml` 4.3.0 → 4.3.2 for
+  GHSA-5p4m-2wfm-xmqj and GHSA-2883-xcg3-v3hh, which failed the release audit gate.
+- The packaged smoke test runs with a fresh `--user-data-dir`, in offline mode, and
+  checks that the `appUpdate` bridge is wired. `SKILL_CONTROL_SMOKE_RELEASE_DIR` points
+  it at another build output.
 - Usage index version 3 keeps ten years of days (was 400) and is rebuilt once to
   recover older days still present in transcripts.
 - `GET /api/agent-files?agent=openclaw` without an agent lists every agent; group ids
@@ -255,6 +327,15 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ### Security
 
+- The secrets inventory never returns, logs or stores a value: values are classified and
+  fingerprinted inside the parser and dropped; the keychain and OpenClaw's SQLite stores
+  are never opened; the salt and snapshot files are owner-only.
+- The CLI inventory never runs a program and reads at most 512 bytes of each command; the
+  skill-mention cache keeps only matched names.
+- The app updater only follows release assets of `zifeixu85/skill-control` on
+  github.com, accepts downloads that end on GitHub's download hosts, caps sizes,
+  verifies sha512 against the release manifest and refuses a bundle with another
+  bundle id or version. It never runs downloaded code before the swap.
 - Library and CLI writes are refused under the account's real home whenever the
   service runs with another home or under a test runner; removals move folders
   to backups or the trash, never delete them.

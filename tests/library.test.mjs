@@ -42,6 +42,8 @@ test("library view: entry kinds and each Agent's visibility under its own rules"
     [["cindy", "link-external"], ["gstack", "real"], ["lark-shared", "real"], ["rev-1", "link-external"], ["shared-a", "real"], ["shared-b", "real"]],
   );
   assert.equal(view.entries.find((entry) => entry.name === "gstack").externalManaged, "git");
+  assert.ok(view.entries.every((entry) => entry.installedAt === null || Date.parse(entry.installedAt)), "installedAt for sorting");
+  assert.ok(Date.parse(view.entries.find((entry) => entry.name === "shared-a").installedAt));
   assert.equal(view.entries.find((entry) => entry.name === "rev-1").target, "~/.codex/skills/rev-1");
   assert.deepEqual(view.entries.find((entry) => entry.name === "lark-shared").sourceFromLocks.sourceType, "well-known");
   // Codex reads the library natively; its identical own copy shows twice.

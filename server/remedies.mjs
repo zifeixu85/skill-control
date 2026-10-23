@@ -336,23 +336,47 @@ export function remedyForVersion(row, { homes = [] } = {}) {
   const versions = latest ? `${installed.version} → ${latest.version}` : installed.version;
   const where = [`${row.name}（${installed.path || "位置未知"}）`];
   if (row.status === "update-available") {
-    if (installed.source === "npm" && row.feed?.kind === "npm") {
+    if (row.agentId === "openclaw" && installed.source === "npm") {
+      // OpenClaw docs (install/updating): "Recommended: openclaw update".
+      return remedy(
+        buildPrompt(
+          {
+            problem: `${row.name} 有新版本（${versions}）`,
+            where,
+            goal: `OpenClaw 升级到 ${latest.version}，配置和登录状态不变。`,
+            steps: ["用 OpenClaw 官方推荐的更新命令：openclaw update（它会识别安装方式、更新并运行 openclaw doctor）。", "Gateway 会被重启，正在进行的对话可能中断。"],
+            verify: `openclaw --version 显示 ${latest.version}`,
+          },
+          homes,
+        ),
+        [
+          { label: "升级", command: "openclaw update" },
+          { label: "检查版本", command: "openclaw --version" },
+        ],
+      );
+    }
+    if ((installed.source === "npm" || (installed.source === "bundled" && internal.npm)) && row.feed?.kind === "npm") {
       const npm = (internal.npm && shellPath(internal.npm)) || "npm";
       const pkg = row.feed.package;
+      const prefix = internal.prefix ? ` --prefix ${shellPath(internal.prefix)}` : "";
       return remedy(
         buildPrompt(
           {
             problem: `${row.name} 有新版本（${versions}）`,
             where,
             goal: `${row.name} 升级到 ${latest.version}，原有配置和登录状态不变。`,
-            steps: [`先记录当前版本以便回退：${npm} ls -g ${pkg} --depth=0。`, `用安装它的同一个 npm 升级：${npm} install -g ${pkg}@latest。`, "升级时不要改动它的配置目录。"],
-            verify: `${npm} ls -g ${pkg} --depth=0 显示 ${latest.version}`,
+            steps: [
+              `先记录当前版本以便回退：${npm} ls -g${prefix} ${pkg} --depth=0。`,
+              `用安装它的同一个 npm 升级${internal.bundledWith ? `（${internal.bundledWith} 自带的 node，不是系统的 npm）` : ""}：${npm} install -g${prefix} ${pkg}@latest。`,
+              "升级时不要改动它的配置目录。",
+            ],
+            verify: `${npm} ls -g${prefix} ${pkg} --depth=0 显示 ${latest.version}`,
           },
           homes,
         ),
         [
-          { label: "升级", command: `${npm} install -g ${pkg}@latest` },
-          { label: "检查版本", command: `${npm} ls -g ${pkg} --depth=0` },
+          { label: "升级", command: `${npm} install -g${prefix} ${pkg}@latest` },
+          { label: "检查版本", command: `${npm} ls -g${prefix} ${pkg} --depth=0` },
         ],
       );
     }
@@ -403,4 +427,42 @@ export function remedyForVersion(row, { homes = [] } = {}) {
     return remedy(buildPrompt({ problem: `无法自动查询 ${row.name} 的最新版本`, where, detail: row.reason || "", goal: "确认应用是最新版本。", steps: ["打开应用，在菜单里选“检查更新”。"], verify: "在“关于”里确认版本" }, homes));
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Secrets inventory
+
+const SECRET_GOALS = {
+  plaintext: "明文改为环境变量引用（如 ${NAME}）或交给系统钥匙串，配置文件里不再出现密钥本身。",
+  "env-ref": "确认这个环境变量在需要它的地方已设置，配置里保持只写变量名。",
+  keychain: "密钥留在系统钥匙串里；如需更换，用这个工具自己的登录或配置命令。",
+  "credential-file": "凭据文件只有自己可读（权限 600），不被提交到任何仓库；不再使用的凭据作废后从文件中移除。",
+  oauth: "登录令牌由工具自己维护；不再使用时用工具的退出登录命令撤销，而不是手动编辑文件。",
+};
+
+/** Remedy for one secrets-inventory item: how to keep or move it, never its value. */
+export function remedyForSecret(item, { homes = [] } = {}) {
+  const users = (item.usedBy || []).map((user) => `${user.kind === "mcp" ? "MCP" : user.kind === "skill" ? "技能" : "命令行"} ${user.name}`);
+  const steps =
+    item.storage === "plaintext"
+      ? [
+          "先备份这个文件。",
+          `把 ${item.keyName} 的值移到环境变量（或系统钥匙串），配置里改为引用，例如 \${${/^[A-Za-z_]\w{0,63}$/u.test(item.keyName) ? item.keyName : "MY_SECRET"}}；新值由我自己填写，不要在对话里显示。`,
+          "确认使用它的 Agent / MCP 能读到这个环境变量（从程序坞启动的应用可能读不到 shell 里的变量）。",
+        ]
+      : item.storage === "credential-file"
+        ? [`检查文件权限是否为 600（ls -l），不对时改为 chmod 600；不要打开或打印文件内容。`, "确认这个文件不在任何 git 仓库里。"]
+        : ["不需要改动文件；需要更换时用工具自己的登录命令，旧凭据在服务商后台作废。"];
+  return remedy(
+    buildPrompt(
+      {
+        problem: `${item.service} 的密钥 ${item.keyName}（${item.storage === "plaintext" ? "明文保存" : item.storage}）`,
+        where: [item.location, users.length ? `使用者：${users.join("、")}` : ""],
+        goal: SECRET_GOALS[item.storage] || SECRET_GOALS.plaintext,
+        steps,
+        verify: "重启相关 Agent 后确认功能正常，然后在 Skill Control 的“密钥”页面重新查看",
+      },
+      homes,
+    ),
+  );
 }

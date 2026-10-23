@@ -1,4 +1,6 @@
+import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
+import { createdAtOf } from "./fs-safe.mjs";
 import { scanClaudePlugins, scanWorkBuddyPlugins } from "./installed-plugins.mjs";
 import { scanHermesPlugins } from "./hermes.mjs";
 import { scanOpenClawPlugins } from "./openclaw.mjs";
@@ -48,6 +50,36 @@ async function isolate(task, fallback, label) {
   }
 }
 
+/** installedAt / updatedAt of each plugin's folder (sort keys; the folder itself stays server-side). */
+async function withFolderTimes(plugins, roots) {
+  return Promise.all(
+    plugins.map(async (plugin) => {
+      const root = roots.get(plugin.key || `codex:${plugin.id}`);
+      const info = root ? await stat(root).catch(() => null) : null;
+      return info ? { ...plugin, installedAt: createdAtOf(info), updatedAt: new Date(info.mtimeMs).toISOString() } : { ...plugin, installedAt: null, updatedAt: null };
+    }),
+  );
+}
+
+/**
+ * Connectors for the connectors page: the providing plugins' names and icon, and an auth
+ * status. Codex caches a connector's tools only after the app was connected, so cached
+ * tools mean "connected"; nothing else about the account is read.
+ */
+function withConnectorDetails(connectors, plugins) {
+  const byId = new Map(plugins.filter((plugin) => plugin.agentId === "codex").map((plugin) => [plugin.id, plugin]));
+  return connectors.map((connector) => {
+    const providers = connector.providedByPlugins.map((id) => byId.get(id)).filter(Boolean);
+    const icon = providers.find((plugin) => plugin.logo)?.logo || null;
+    return {
+      ...connector,
+      providers: providers.map((plugin) => ({ id: plugin.id, name: plugin.displayName || plugin.id })),
+      iconAssetId: icon,
+      auth: connector.toolCount > 0 ? { status: "connected", basis: "Codex 已缓存它的工具列表（只有连接过的应用才会有）" } : { status: "unknown", basis: "没有缓存的工具列表" },
+    };
+  });
+}
+
 export async function scanIntegrations(
   homeDirectory = homedir(),
   overrides = {},
@@ -86,13 +118,14 @@ export async function scanIntegrations(
     ...[...(codexPlugins.roots || new Map())].map(([id, root]) => [`codex:${id}`, root]),
     ...installed.flatMap((result) => [...(result.roots || new Map())]),
   ]);
+  const plugins = await withFolderTimes([...codexPlugins.plugins, ...installed.flatMap((result) => result.plugins)], roots);
   return {
     assets: codexPlugins.assets,
     roots,
     codexConnectors,
     payload: {
-      plugins: [...codexPlugins.plugins, ...installed.flatMap((result) => result.plugins)],
-      connectors: codexConnectors.connectors,
+      plugins,
+      connectors: withConnectorDetails(codexConnectors.connectors, plugins),
       mcpServers: mcp.servers,
       mcpMatrix: mcp.matrix,
       relatedProducts,

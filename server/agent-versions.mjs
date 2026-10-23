@@ -1,7 +1,11 @@
-import { mkdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { appendFile, mkdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { applicationDirectoriesFor, parseYamlSafe, readAppBundle } from "./config-files.mjs";
-import { compactHomePath, exists, homeVariants, object, readBoundedJson, readBoundedText, text } from "./fs-safe.mjs";
+import { compactHomeInText, compactHomePath, exists, homeVariants, object, readBoundedJson, readBoundedText, scrubTokens, text } from "./fs-safe.mjs";
+import { CodedError, createPlanStore } from "./plan-store.mjs";
+import { runCommand } from "./update-apply.mjs";
 import { defaultSearchDirectories } from "./path-lookup.mjs";
 import { remedyForVersion } from "./remedies.mjs";
 
@@ -35,7 +39,7 @@ export const VERSION_TARGETS = [
   { id: "codex-cli", agentId: "codex", name: "Codex CLI", kind: "npm", command: "codex", npmPackage: "@openai/codex" },
   { id: "codex-app", agentId: "codex", name: "Codex 桌面应用", kind: "app", apps: ["Codex.app"], bundleIds: ["com.openai.codex"] },
   { id: "claude-cli", agentId: "claude", name: "Claude Code", kind: "claude", command: "claude", npmPackage: "@anthropic-ai/claude-code" },
-  { id: "claude-app", agentId: "claude", name: "Claude 桌面应用", kind: "app", apps: ["Claude.app"], bundleIds: ["com.anthropic.claudefordesktop"] },
+  { id: "claude-app", agentId: "claude", name: "Claude 桌面应用", kind: "app", apps: ["Claude.app"], bundleIds: ["com.anthropic.claudefordesktop"], downloadUrl: "https://claude.com/download" },
   { id: "gemini-cli", agentId: "gemini", name: "Gemini CLI", kind: "npm", command: "gemini", npmPackage: "@google/gemini-cli" },
   { id: "openclaw-cli", agentId: "openclaw", name: "OpenClaw", kind: "npm", command: "openclaw", npmPackage: "openclaw" },
   { id: "hermes-cli", agentId: "hermes", name: "Hermes Agent", kind: "hermes" },
@@ -80,12 +84,23 @@ export function compareVersions(left, right) {
 // Installed (files only)
 
 async function resolveCommand(command, searchDirectories) {
+  return (await resolveAll(command, searchDirectories))[0] || null;
+}
+
+/** Every copy of a command on the search path, in PATH order (the first one is what runs). */
+async function resolveAll(command, searchDirectories) {
+  const found = [];
+  const seen = new Set();
   for (const { directory } of searchDirectories) {
     const candidate = path.join(directory, command);
     const info = await stat(candidate).catch(() => null);
-    if (info?.isFile()) return { file: candidate, real: await realpath(candidate).catch(() => candidate) };
+    if (!info?.isFile()) continue;
+    const real = await realpath(candidate).catch(() => candidate);
+    if (seen.has(real)) continue;
+    seen.add(real);
+    found.push({ file: candidate, real });
   }
-  return null;
+  return found;
 }
 
 /** Walks up from a resolved binary to the package.json of `npmPackage`. */
@@ -102,11 +117,17 @@ async function packageOf(realFile, npmPackage) {
 }
 
 /** The npm executable of the prefix a global package lives in (…/lib/node_modules/…). */
-async function npmFor(packageRoot) {
+/** <prefix>/lib/node_modules/<pkg> → <prefix> (npm's global folder layout on Unix). */
+export function npmPrefixOf(packageRoot) {
   const marker = `${path.sep}lib${path.sep}node_modules${path.sep}`;
-  const index = packageRoot.indexOf(marker);
-  if (index < 0) return null;
-  const npm = path.join(packageRoot.slice(0, index), "bin", "npm");
+  const index = typeof packageRoot === "string" ? packageRoot.indexOf(marker) : -1;
+  return index > 0 ? packageRoot.slice(0, index) : null;
+}
+
+async function npmFor(packageRoot) {
+  const prefix = npmPrefixOf(packageRoot);
+  if (!prefix) return null;
+  const npm = path.join(prefix, "bin", "npm");
   return (await exists(npm)) ? npm : null;
 }
 
@@ -177,41 +198,47 @@ async function installedRow(target, context) {
       return {
         installed: { version: pkg.version, source: "npm", path: display(pkg.root) },
         feed: { kind: "npm", package: target.npmPackage },
-        internal: { npm: npm ? display(npm) : null },
+        internal: { npm: npm ? display(npm) : null, npmAbs: npm, prefix: display(npmPrefixOf(pkg.root)), program: found.file, packageRoot: pkg.root },
       };
     }
     case "claude": {
-      const found = await resolveCommand(target.command, searchDirectories);
-      if (!found) return null;
-      const pkg = await packageOf(found.real, target.npmPackage);
-      if (pkg?.version) {
-        const npm = await npmFor(pkg.root);
-        return { installed: { version: pkg.version, source: "npm", path: display(pkg.root) }, feed: { kind: "npm", package: target.npmPackage }, internal: { npm: npm ? display(npm) : null } };
+      // Every copy (native installer, npm, …); the first on the PATH is the one that runs.
+      const rows = [];
+      for (const found of await resolveAll(target.command, searchDirectories)) {
+        const pkg = await packageOf(found.real, target.npmPackage);
+        if (pkg?.version) {
+          const npm = await npmFor(pkg.root);
+          rows.push({ installed: { version: pkg.version, source: "npm", path: display(pkg.root) }, feed: { kind: "npm", package: target.npmPackage }, internal: { npm: npm ? display(npm) : null, npmAbs: npm, prefix: display(npmPrefixOf(pkg.root)), packageRoot: pkg.root } });
+          continue;
+        }
+        // Native installer: ~/.local/bin/claude → ~/.local/share/claude/versions/<version>.
+        const version = path.basename(path.dirname(found.real)) === "versions" ? cleanVersion(path.basename(found.real)) : null;
+        if (version) rows.push({ installed: { version, source: "cli", path: display(found.real) }, feed: { kind: "npm", package: target.npmPackage }, internal: { native: true, program: found.file } });
       }
-      // Native installer: ~/.local/bin/claude → ~/.local/share/claude/versions/<version>.
-      const version = path.basename(path.dirname(found.real)) === "versions" ? cleanVersion(path.basename(found.real)) : null;
-      if (!version) return null;
-      return { installed: { version, source: "cli", path: display(found.real) }, feed: { kind: "npm", package: target.npmPackage }, internal: { native: true } };
+      return rows.length ? rows : null;
     }
     case "hermes": {
-      // Hermes' GitHub release tags are calendar versions (v2026.9.24) = __release_date__ in
-      // hermes_cli/__init__.py; install-stamp.json's baseVersion (0.20.x) is another scheme,
-      // used only when there is no release date.
+      // Hermes has two version schemes: install-stamp.json's baseVersion (0.21.x, what its
+      // GitHub release tags use since v0.22) and __release_date__ in hermes_cli/__init__.py
+      // (calendar, what older tags used). Both are kept; the one in the latest tag's scheme
+      // is compared and shown (see publicRow).
       const checkout = path.join(homeDirectory, ".hermes", "hermes-agent");
       if (!(await exists(path.join(checkout, "pyproject.toml")))) return null;
       const stamp = await readBoundedJson(path.join(checkout, "install-stamp.json"), 64_000);
       const init = await readBoundedText(path.join(checkout, "hermes_cli", "__init__.py"), 64_000);
       const pyproject = await readBoundedText(path.join(checkout, "pyproject.toml"), 256_000);
       const candidates = [
-        init.status === "ok" ? init.text.match(/^__release_date__\s*=\s*"([^"]{1,40})"/mu)?.[1] : null,
         object(stamp.value).baseVersion,
+        init.status === "ok" ? init.text.match(/^__release_date__\s*=\s*"([^"]{1,40})"/mu)?.[1] : null,
         pyproject.status === "ok" ? pyproject.text.match(/^version\s*=\s*"([^"]{1,40})"/mu)?.[1] : null,
       ];
-      const version = candidates.map((value) => cleanVersion(String(value || ""))).find((value) => value && value !== "0.0.0") || null;
+      const versions = [...new Set(candidates.map((value) => cleanVersion(String(value || ""))).filter((value) => value && value !== "0.0.0"))];
+      const version = versions[0] || null;
       const remote = await hermesRemote(checkout);
       return {
         installed: { version, source: "cli", path: display(checkout) },
         feed: remote ? { kind: "github", owner: remote.owner, repo: remote.repo } : { kind: "none", reason: "Hermes 的 git 远端不是 GitHub，无法查询最新版本；可运行 hermes update。" },
+        internal: { versions },
       };
     }
     case "bundled": {
@@ -219,13 +246,18 @@ async function installedRow(target, context) {
       const real = await realpath(file).catch(() => null);
       const pkg = real ? await packageOf(real, target.npmPackage) : null;
       if (!pkg?.version) return null;
-      return { installed: { version: pkg.version, source: "bundled", path: display(pkg.root) }, feed: { kind: "npm", package: target.npmPackage }, internal: { bundledWith: target.bundledWith } };
+      const npm = await npmFor(pkg.root);
+      return {
+        installed: { version: pkg.version, source: "bundled", path: display(pkg.root) },
+        feed: { kind: "npm", package: target.npmPackage },
+        internal: { bundledWith: target.bundledWith, npm: npm ? display(npm) : null, npmAbs: npm, prefix: display(npmPrefixOf(pkg.root)), packageRoot: pkg.root },
+      };
     }
     case "app": {
       const app = await appBundle(target, applicationDirectories);
       const version = cleanVersion(app?.bundle.version || "");
       if (!app || !version) return null;
-      return { installed: { version, source: "app", path: display(app.appPath) }, feed: await appFeed(app.appPath, app.bundle) };
+      return { installed: { version, source: "app", path: display(app.appPath) }, feed: await appFeed(app.appPath, app.bundle), internal: { bundleId: app.bundle.bundleId, downloadUrl: target.downloadUrl || null } };
     }
     default:
       return null;
@@ -237,7 +269,18 @@ export async function detectInstalledVersions(context) {
   const rows = [];
   for (const target of VERSION_TARGETS) {
     const found = await installedRow(target, context).catch(() => null);
-    if (found) rows.push({ id: target.id, agentId: target.agentId, name: target.name, ...found });
+    const list = Array.isArray(found) ? found : found ? [found] : [];
+    list.forEach((item, index) =>
+      rows.push({
+        id: index ? `${target.id}-${index + 1}` : target.id,
+        agentId: target.agentId,
+        name: list.length > 1 ? `${target.name}（${item.installed.source === "npm" ? "npm" : "原生安装"}）` : target.name,
+        kind: target.kind,
+        // With several copies, the first on the PATH is the one that runs.
+        active: index === 0,
+        ...item,
+      }),
+    );
   }
   return rows;
 }
@@ -347,6 +390,75 @@ async function inParallel(items, limit, task) {
 
 const feedKey = (feed) => (feed.kind === "npm" ? `npm:${feed.package}` : feed.kind === "github" ? `github:${feed.owner}/${feed.repo}` : feed.url ? `${feed.kind}:${feed.url}` : `none`);
 
+/** Calendar (2026.9.24) or semantic (0.22.5) version. */
+const versionScheme = (value) => (Number.parseInt(String(value), 10) >= 2000 ? "calendar" : "semver");
+
+/** With several installed versions in different schemes, the one in the latest version's scheme. */
+function withComparableVersion(row, latest) {
+  const versions = row.internal?.versions;
+  if (!latest || !Array.isArray(versions) || versions.length < 2) return row;
+  const match = versions.find((value) => versionScheme(value) === versionScheme(latest.version));
+  return match && match !== row.installed.version ? { ...row, installed: { ...row.installed, version: match } } : row;
+}
+
+// ---------------------------------------------------------------------------
+// One-click updates: only official, verified commands, run without a shell
+
+/** npm packages whose official upgrade is `npm install -g <package>@latest` with the npm that owns the install. */
+const NPM_ONE_CLICK = new Set(["@openai/codex", "@anthropic-ai/claude-code", "@google/gemini-cli", "@larksuite/cli"]);
+const STEP_TIMEOUT_MS = 5 * 60_000;
+const OUTPUT_LIMIT = 4 * 1024;
+const PLAN_TTL_MS = 10 * 60_000;
+
+/**
+ * The verified update steps for an installed copy, or null (AI prompt only):
+ * - npm global packages: `<that install's npm> install -g <pkg>@latest` (npm documents @latest
+ *   for upgrades; Claude Code's docs say the same and warn against `npm update -g`);
+ * - Claude Code native install: `claude update` (code.claude.com/docs/en/setup, "Update manually");
+ * - OpenClaw: `openclaw update` (its docs, install/updating.md "Recommended: openclaw update").
+ */
+export function updateStepsFor(row, display = (value) => value) {
+  const internal = row.internal || {};
+  const pkg = row.feed?.package;
+  if (row.agentId === "openclaw" && row.installed?.source === "npm" && internal.program) {
+    return {
+      steps: [{ program: internal.program, args: ["update"] }],
+      effects: ["运行 OpenClaw 自带的更新命令 openclaw update（官方文档推荐的更新方式）", "它会检测安装方式、更新并自动运行 Doctor；正在运行的 Gateway 可能会被重启", "需要联网"],
+    };
+  }
+  const prefix = npmPrefixOf(internal.packageRoot);
+  if ((row.installed?.source === "npm" || row.installed?.source === "bundled") && NPM_ONE_CLICK.has(pkg) && internal.npmAbs && prefix) {
+    return {
+      // --prefix pins the global folder that owns this copy (an npmrc prefix cannot redirect it).
+      steps: [{ program: internal.npmAbs, args: ["install", "-g", "--prefix", prefix, `${pkg}@latest`] }],
+      effects: [
+        `用 ${display(internal.npmAbs)} 把 ${pkg} 升级到最新版`,
+        `安装位置：${row.installed.path}${internal.bundledWith ? `（${internal.bundledWith} 自带的这一份）` : ""}`,
+        "只改这个 npm 全局目录里的这个包，不改配置和登录状态",
+        "需要联网，可能要几分钟",
+      ],
+    };
+  }
+  if (row.agentId === "claude" && internal.native && internal.program) {
+    return {
+      steps: [{ program: internal.program, args: ["update"] }],
+      effects: ["运行 Claude Code 自带的更新命令 claude update（官方文档的手动更新方式）", "新版本装到 ~/.local/share/claude/versions/，启动器指向新版本", "正在运行的会话不受影响，下次启动生效", "需要联网"],
+    };
+  }
+  return null;
+}
+
+const inside = (directory, file) => {
+  const relative = path.relative(directory, file);
+  return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative);
+};
+
+function pinnedCommandDirectories(env = process.env) {
+  return String(env.SKILL_MANAGER_COMMAND_DIRS || "")
+    .split(path.delimiter)
+    .filter((entry) => entry && path.isAbsolute(entry));
+}
+
 // ---------------------------------------------------------------------------
 // Service
 
@@ -361,7 +473,13 @@ export function createAgentVersionService({
   now = () => Date.now(),
   intervalMs = VERSION_CHECK_INTERVAL_MS,
   timeoutMs = REQUEST_TIMEOUT_MS,
+  historyFile = path.join(stateDirectory, "history.jsonl"),
+  run = runCommand,
+  launch = null,
+  platform = process.platform,
+  pinnedDirectories = pinnedCommandDirectories(),
 }) {
+  const plans = createPlanStore({ ttlMs: PLAN_TTL_MS, now, label: "更新计划" });
   const cacheFile = path.join(stateDirectory, "agent-versions.json");
   const get = createHttp(fetchImpl, timeoutMs);
   let running = null;
@@ -392,10 +510,11 @@ export function createAgentVersionService({
     await rename(temporary, cacheFile);
   }
 
-  function publicRow(row, cached) {
-    const sameFeed = cached && cached.feed === feedKey(row.feed);
+  function publicRow(source, cached) {
+    const sameFeed = cached && cached.feed === feedKey(source.feed);
     const latest = sameFeed ? cached.latest || null : null;
     const error = sameFeed ? cached.error || null : null;
+    const row = withComparableVersion(source, latest);
     let status = "unknown";
     if (row.feed.kind === "none") status = "unknown";
     else if (error) status = "error";
@@ -404,6 +523,7 @@ export function createAgentVersionService({
       agentId: row.agentId,
       id: row.id,
       name: row.name,
+      active: row.active !== false,
       installed: row.installed,
       latest,
       status,
@@ -416,8 +536,13 @@ export function createAgentVersionService({
             ? { reason: "还没有检查过。" }
             : {}),
     };
+    const oneClick = status === "update-available" && Boolean(updateStepsFor(row));
     const remedy = remedyForVersion({ ...result, feed: row.feed, internal: row.internal || {} }, { homes: displayHomes });
-    return remedy ? { ...result, remedy } : result;
+    return {
+      ...result,
+      ...(row.kind === "app" && row.internal?.bundleId ? { openApp: { bundleId: row.internal.bundleId }, ...(row.internal.downloadUrl ? { downloadUrl: row.internal.downloadUrl } : {}) } : {}),
+      ...(remedy ? { remedy: oneClick ? { ...remedy, action: { kind: "agent-update", id: row.id } } : remedy } : {}),
+    };
   }
 
   let displayHomes = homes;
@@ -482,5 +607,113 @@ export function createAgentVersionService({
     timer = null;
   }
 
-  return { view, check, start, stop, cacheFile };
+  const display = (value) => compactHomePath(value, displayHomes);
+
+  /** The program must still be the resolved one, and inside the pinned folders when commands are pinned. */
+  async function assertRunnable(program) {
+    const info = await stat(program).catch(() => null);
+    if (!info?.isFile()) throw new CodedError(409, "更新命令已不存在，请重新检查版本。", "stale-plan");
+    const pinned = pinnedDirectories;
+    if (pinned.length) {
+      const real = await realpath(program).catch(() => program);
+      if (!pinned.some((directory) => inside(directory, program) || inside(directory, real))) throw new CodedError(403, "这个命令不在允许执行的目录中，已拒绝执行。", "command-not-allowed");
+    }
+  }
+
+  async function findRow(id) {
+    displayHomes = await allHomes;
+    const [rows, cache] = await Promise.all([detectInstalledVersions(await context()), loadCache()]);
+    const row = rows.find((item) => item.id === id);
+    if (!row) throw new CodedError(404, "没有找到这个已安装的产品。", "not-found");
+    return { row, view: publicRow(row, cache.results[row.id]) };
+  }
+
+  /** POST /api/agent-versions/plan { id } */
+  async function plan({ id } = {}) {
+    if (typeof id !== "string" || !/^[\w-]{1,60}$/u.test(id)) throw new CodedError(400, "缺少产品 id。", "invalid-request");
+    const { row, view: current } = await findRow(id);
+    if (current.status === "up-to-date") throw new CodedError(409, "已经是最新版本。", "up-to-date");
+    if (current.status !== "update-available") throw new CodedError(409, "请先检查版本，确认有新版本后再更新。", "check-required");
+    const spec = updateStepsFor(row, display);
+    if (!spec) throw new CodedError(409, "这个产品没有已核实的一键更新命令，请用 AI 指令或在应用里更新。", "refused");
+    for (const step of spec.steps) await assertRunnable(step.program);
+    const shown = (arg) => (path.isAbsolute(arg) ? display(arg) : arg);
+    const steps = spec.steps.map((step) => ({ display: [step.program, ...step.args].map(shown).join(" "), program: step.program, args: step.args }));
+    const title = `把 ${row.name} 从 ${row.installed.version} 更新到 ${current.latest.version}`;
+    const planId = plans.remember({ id, agentId: row.agentId, title, steps, before: row.installed.version, latest: current.latest.version });
+    return {
+      planId,
+      expiresAt: new Date(now() + PLAN_TTL_MS).toISOString(),
+      title,
+      steps: steps.map((step) => ({ display: step.display })),
+      effects: spec.effects,
+      afterCheck: { kind: "version", id },
+    };
+  }
+
+  /** POST /api/agent-versions/apply { planId, confirm: true } (confirm header checked by the route). */
+  async function apply({ planId, confirm } = {}) {
+    if (confirm !== true) throw new CodedError(400, "需要明确确认后才能执行更新。", "confirm-required");
+    if (offline) throw new CodedError(409, "离线模式下不执行会联网的更新命令。", "updates-offline");
+    const stored = plans.take(planId);
+    const results = [];
+    let ok = true;
+    for (const step of stored.steps) {
+      await assertRunnable(step.program);
+      // No shell, no inherited secrets: PATH holds the program's own folder (npm needs its node).
+      const env = {
+        PATH: [...new Set([path.dirname(step.program), path.dirname(await realpath(step.program).catch(() => step.program)), "/usr/bin", "/bin", "/usr/sbin", "/sbin"])].join(path.delimiter),
+        HOME: homeDirectory,
+        LANG: "en_US.UTF-8",
+      };
+      const outcome = await run(step.program, step.args, { cwd: homeDirectory, timeoutMs: STEP_TIMEOUT_MS, env });
+      const output = scrubTokens(compactHomeInText(`${outcome.stdout || ""}${outcome.stderr ? `\n${outcome.stderr}` : ""}`, displayHomes)).trim();
+      results.push({ display: step.display, exitCode: outcome.exitCode, output: output.length > OUTPUT_LIMIT ? `…${output.slice(-OUTPUT_LIMIT)}` : output });
+      if (outcome.exitCode !== 0) {
+        ok = false;
+        break;
+      }
+    }
+    const after = (await detectInstalledVersions(await context()).catch(() => [])).find((item) => item.id === stored.id)?.installed.version || null;
+    const record = {
+      id: createHash("sha1").update(`${now()}:agent-update:${stored.id}`).digest("hex").slice(0, 12),
+      type: "agent-update",
+      title: stored.title,
+      productId: stored.id,
+      agentId: stored.agentId,
+      ok,
+      steps: results.map(({ display: shown, exitCode }) => ({ display: shown, exitCode })),
+      version: { before: stored.before, after },
+      restorable: false,
+      createdAt: new Date(now()).toISOString(),
+    };
+    await mkdir(path.dirname(historyFile), { recursive: true });
+    await appendFile(historyFile, `${JSON.stringify(record)}\n`, "utf8");
+    return { ok, steps: results, version: { before: stored.before, after }, historyEntry: record };
+  }
+
+  /** POST /api/agent-versions/open { id }: `open -b <bundle id>` so the app can check for updates itself. */
+  async function openApp({ id } = {}) {
+    const { row } = await findRow(String(id || ""));
+    if (row.kind !== "app" || !row.internal?.bundleId || !/^[\w.-]{1,200}$/u.test(row.internal.bundleId)) throw new CodedError(409, "这个产品不是桌面应用。", "refused");
+    if (platform !== "darwin") throw new CodedError(409, "只在 macOS 上支持打开应用。", "unsupported");
+    // Sandboxes and tests pin commands: the real `open` runs only when nothing is pinned.
+    if (!launch && pinnedDirectories.length) throw new CodedError(403, "当前环境限制了可执行的命令，未打开应用。", "command-not-allowed");
+    await (launch || launchApp)(row.internal.bundleId);
+    return { opened: true, bundleId: row.internal.bundleId };
+  }
+
+  return { view, check, start, stop, cacheFile, plan, apply, openApp };
+}
+
+/** Starts an app by bundle id (macOS `open -b`, detached, no shell). */
+function launchApp(bundleId) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("/usr/bin/open", ["-b", bundleId], { detached: true, stdio: "ignore" });
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
+    });
+  });
 }

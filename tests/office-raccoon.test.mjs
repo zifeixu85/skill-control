@@ -61,6 +61,8 @@ test("experts and teams with their skill dependencies; backups ignored; prompts 
   const expert = product.items.find((item) => item.kind === "expert");
   assert.deepEqual(expert.skillDependencies, { required: ["opc-alpha", "opc-missing"], default: [], optional: ["docx"], missing: ["opc-missing"] });
   assert.equal(expert.displayName, "市场分析师");
+  // Sort fields: the profile's own times (null when the profile has none).
+  assert.deepEqual([expert.createdAt, expert.updatedAt], [null, "2026-09-05T00:00:00.000Z"]);
   const team = product.items.find((item) => item.kind === "expert-team");
   assert.deepEqual(team.members.map((member) => [member.displayName, member.skills]), [["负责人", ["opc-alpha"]], ["研究员", ["opc-beta"]]]);
   const profile = expert.virtualFiles.get("profile.md");

@@ -2,93 +2,104 @@
 
 [简体中文](./README.md) · [English](./README_EN.md)
 
-本地优先的 Agent Skill 可视化管理器。Skill Control 扫描你电脑上的
-`SKILL.md` 技能目录，在一个界面中完成检索、详情预览、差异检查、跨工具同步，
-以及 `.skill` 技能包的导入、`.skill` 与通用 ZIP 压缩包的导出。
+本地优先的 Agent 工作台。Skill Control 扫描你电脑上的 Codex、Claude Code、WorkBuddy、
+Hermes、OpenClaw 等 Agent，把技能、插件、专家、连接器与 MCP、密钥位置、更新、用量和
+预估费用放进同一个界面，并围绕你常用的 Agent 判断哪里需要处理。
 
-![Skill Control 技能总览](./docs/images/overview.png)
+<!-- TODO(v0.2.0): 用临时 HOME 下的示例数据重新截图（概览、技能、数据），替换 docs/images/ 中 v0.1 的旧截图后在此引用。不要使用真实用户数据。 -->
 
-> 已发布版本：`v0.1.0`。当前 `main` 源码包含尚未发布的后续功能与修复；
-> 可下载桌面产物和真实平台验证状态以 [Releases](../../releases) 为准。
+> 最新版本：`v0.2.0`。可下载的桌面产物和各平台的验证状态以 [Releases](../../releases)
+> 为准。
 
 ## 为什么需要 Skill Control
 
-同一个 Skill 经常需要同时安装到 Codex、Claude Code 或其他 Agent 工具中。
-手动复制目录很容易产生漏装、版本不一致和覆盖错误。Skill Control 以 Skill
-名称聚合各处的本地安装，并在写入前展示计划：
+同一个技能经常同时装在好几个 Agent 里，插件、MCP 服务、密钥和用量也分散在各自的
+配置目录。手动维护很容易漏装、版本不一致、覆盖错误，也很难说清楚“这个月到底用了多少”。
+Skill Control 把这些信息读到一起：
 
-- 哪些工具尚未安装；
-- 同名 Skill 的内容是否一致；
-- 本次操作会新增、替换还是跳过；
-- 原版本会备份到哪里。
+- 你常用的 Agent 里，哪些技能内容不一致、哪边较新；
+- 哪些技能、插件和 Agent 本身有新版本；
+- 每个 Agent、技能、项目用了多少 token，按官方价格大约值多少钱；
+- 哪些配置有问题，怎么修。
 
-所有核心扫描和同步均在本机完成，不需要把 Skill 内容上传到远程服务。
+所有扫描都在本机完成；任何写入都先展示计划，确认后才执行，并可以撤销。
 
 ## 功能
 
-### 管理本地 Skills
+### 围绕常用 Agent
 
-- 扫描兼容 `SKILL.md` 的本地目录，并按 frontmatter `name` 聚合同名 Skill；
-- 在 Agent 之间切换，查看各工具已安装的 Skills；
-- 按名称、中文名称、介绍和标签搜索，并按状态筛选；
-- 大型技能列表和同步任务列表采用渐进显示，避免首屏一次渲染全部条目；
-- 显示安装覆盖、内容指纹、更新时间、文件数量、体积和软链接状态；
-- 识别“已对齐”“覆盖不完整”“仅单端安装”和“版本冲突”；
-- `SKILL.md` 存在中文名称或中文介绍时，优先显示中文信息。
+- 在设置里选出你主要使用的 Agent（最多 4 个），技能状态只针对它们判断；没有选择时
+  按近 30 天的会话活跃度给出建议；
+- 检测到新的 Agent 时在概览和设置里提示，可以加入常用或标为已知；也能找出用户目录里
+  含 `skills/*/SKILL.md` 的未知目录，添加为自定义 Agent；
+- 每个 Agent 一页：技能、指令 / 记忆 / 规则等文件（敏感内容脱敏）、工具与权限、用量。
 
-### 查看与交换
+### 技能与技能库
 
-- 浏览 Skill 文件树（超大目录会按安全上限截断），已安装 Skill 详情中的文件夹
-  默认折叠；
-- 默认选择 `SKILL.md`；
-- Markdown 文件支持渲染预览和原始内容切换；
-- PNG、JPEG、GIF、WebP、AVIF、BMP、ICO 和 SVG 图片可直接预览；
-- SVG 同时支持渲染效果与安全过滤后的原始内容切换；
-- 其他文本文件可直接预览，暂不支持的二进制文件只显示元数据；
-- 从详情中使用系统文件管理器定位 Skill 目录；
-- 把本地 Skill 导出为可移植的 `.skill` 文件或通用 `.zip` 压缩包；
-- 拖放或选择 `.skill` 文件，先检查包结构和内容，再选择安装目标；
-- `.skill` 导入预览同样支持文件夹折叠、Markdown、图片和 SVG 预览。
+- 按常用 Agent 显示技能是否一致、哪边较新、重复副本和共享目录；
+- 浏览技能文件树，Markdown 渲染与原文切换，常见图片与安全过滤后的 SVG 预览；
+- 近 90 天的技能使用次数（标明精确或推算）；
+- 冲突版本可以分别打开查看，文件级变化、逐行差异和图片并排比较，然后选定权威来源；
+- 同步支持“复制”和“软链接”两种方式，替换前自动备份；
+- 导入、预览、安装和导出 `.skill` 技能包，也可以导出通用 `.zip`；
+- **技能库**：统一管理 `~/.agents/skills` 共享技能库，按每个 Agent 自己的读取规则模拟它
+  实际能看到哪些技能；收编副本、改为链接、停用、卸载到废纸篓都先出计划、确认后执行；
+- 技能、插件、专家、MCP 和技能库列表可以按最近使用、最新安装、最常用或名称排序。
 
-![Skill Control Skill 详情与 Markdown 预览](./docs/images/skill-detail.png)
+### 更新
 
-### 识别专家与 Agent 配置
+- **技能与插件**：识别每个技能和插件的来源（skills CLI、Claude / Codex 插件、WorkBuddy、
+  SkillHub、ClawHub、git 等），检查上游新版本；本地改过的内容需要你选择保留还是覆盖；
+- **Agent 软件**：每天检查一次各 Agent 有没有新版本，只读取官方来源；有官方更新命令的
+  命令行工具可以“一键更新”，执行前先显示命令和影响；
+- **Skill Control 自身**：应用内更新，见下文“应用更新”。
 
-- 识别 WorkBuddy 已安装的专家与专家团，显示中文名称、职责、版本、标签和成员分工；
-- 展开专家团成员，查看每个成员的角色说明、最大执行轮次和 Markdown 配置；
-- 识别 Hermes Agent 的默认 Agent 与本地 Profiles，展示 `SOUL.md`、模型、技能数量
-  和任务委派参数；
-- 以文件浏览器查看专家包内的规则、技能、参考资料、图片和插件清单；
-- 专家配置只读展示；`.env`、API Key、Token、认证、凭据和会话文件不会开放预览。
+### 数据与预估费用
 
-当前专家配置识别支持 WorkBuddy 与 Hermes Agent。普通 Skill 目录支持的工具范围
-仍以“支持的 Agent 工具”表格为准，两个能力范围彼此独立。
+- 汇总 Claude Code、Codex、WorkBuddy、Hermes、OpenClaw、QClaw 和办公小浣熊的 token、会话、
+  技能调用与项目，支持今天、近 7 天、近 30 天、近 90 天和所有时间；
+- 每个数字标明是精确、推算还是产品自报；只保存计数，不保存对话内容；
+- **预估费用**按各厂商官方 API 价格计算（含长上下文、缓存读写、错峰价），订阅内的用量也按
+  API 等价估算，不等于实际账单；
+- **模型价格表**列出全部已定价模型、官方来源和核对日期，价格可能过期时会提示。
 
-### 安全地同步
+### 体检与 AI 指令
 
-- 冲突界面可分别打开每个 Agent 的完整 Skill 版本查看文件和内容；
-- 文件级变化、文本逐行差异和图片并排比较收纳在“高级比较”中；
-- 查看差异后可以直接选择任一 Agent 版本作为权威来源；
-- 同步前生成新增、替换和跳过计划；
-- 支持独立副本的“复制”模式；
-- 支持一处修改、多端生效的“软链接”模式；
-- 替换已有目录前自动备份；
-- 只有在预览并明确确认后才会写入目标目录；
-- 同步与导入记录只保存在本机。
+- 检查失效链接、缺失或无效的 `SKILL.md`、过大的技能、不一致的副本、缺少的命令与环境变量、
+  配置里的明文密钥、插件状态和技能库问题；
+- 每个问题都有“复制 AI 指令”：只复制一段说明，交给你自己的 AI 处理，不改任何东西；
+- 能安全自动修复的问题提供“预览修复”：先列出将改动的文件，确认后执行，可以从历史撤销。
 
-Windows 创建目录软链接时可能需要启用“开发人员模式”或使用具备相应权限的账户；
-不确定时建议使用默认的“复制”模式。
+### 专家、插件、连接器与密钥
 
-## 支持的 Agent 工具
+- **专家与 Agent**：WorkBuddy 的“我的专家”、市场专家与专家团，Hermes Profile，OpenClaw
+  Agent，办公小浣熊的专家与团队，按产品分组；
+- **插件**：Codex、Claude Code、WorkBuddy、Hermes、OpenClaw 与 QClaw 的插件、启用状态和组件；
+- **连接器与 MCP**：跨 Agent 的 MCP 服务清单与连接器，配置只读、密钥打码；
+- **密钥**：哪些服务的密钥存在哪里、谁在用、最近有没有变化。只显示名称和位置，从不读取或
+  显示密钥的值。
 
-内置目录规则如下。应用只会把本机检测到或由你手动配置的工具加入数据源。
-默认技能列表仅展示 Codex 和 Claude Code，可以在“产品与目录”中修改。
+### 历史、恢复与卸载
 
-| 工具 | 默认扫描目录 |
+- 同步、导入、更新、技能库和修复都有操作记录，可以从历史恢复；
+- 从某个 Agent 卸载技能会先移到 Skill Control 的废纸篓，可以还原。
+
+Windows 创建目录软链接时可能需要开启“开发人员模式”；不确定时请使用默认的“复制”方式。
+
+## 支持的 Agent
+
+应用只会把本机检测到或你手动添加的 Agent 加入数据源；检测到的 Agent 默认都会显示，
+可以在“设置 → 常用 Agent”中调整。
+
+| Agent | 默认技能目录 |
 | --- | --- |
 | Codex | `~/.codex/skills`、`~/.agents/skills`、`~/.codex/vendor_imports/skills` |
 | Claude Code | `~/.claude/skills` |
 | WorkBuddy | `~/.workbuddy/skills`、`~/.workbuddy/connectors/skills` |
+| Hermes Agent | `~/.hermes/skills`（按 Hermes 的规则递归，含 Profile 和外部目录） |
+| OpenClaw | `~/.openclaw/skills` 等 OpenClaw 的六个技能来源 |
+| QClaw | `~/.qclaw/skills`（只读） |
+| 办公小浣熊 | `~/.box-agent/skills`（只复制，不使用软链接） |
 | 订单来了（SmartOrder） | `~/.smartorder/skills`，以及配置中已启用插件的技能目录 |
 | Cursor | `~/.cursor/skills` |
 | Gemini CLI | `~/.gemini/skills` |
@@ -102,47 +113,57 @@ Windows 创建目录软链接时可能需要启用“开发人员模式”或使
 | Qwen Code | `~/.qwen/skills`、`~/.qwen-code/skills` |
 | GitHub Copilot | `~/.copilot/skills`、`~/.github/copilot/skills` |
 
-不在表中的工具也可以通过名称、简称、颜色和一个或多个 Skill 目录手动添加。
-从管理器中移除工具只会删除这项配置，不会删除对应目录里的 Skill 文件；
-已移除的自动检测工具会保持忽略，直到你再次手动添加。
+不在表中的工具可以通过名称、简称、颜色和一个或多个技能目录手动添加。移除一个 Agent
+只会删除这项配置，不会删除目录里的技能文件。LumiClaw、MotiClaw 和 Clawith 只读显示
+是否安装、版本和数量。
 
 ### 订单来了：技能与连接器
 
-自动检测当前用户目录下的 `.smartorder`，Windows 与 Mac 使用相同相对目录规则。
-在“产品与目录”中显示“订单来了”后，可在 Skills 中查看本地技能、内置技能和
-已启用插件内的技能。遵循 `skills.config` 的停用项；市场清单、未登记缓存和历史
-版本不会混入已安装列表。多个缓存版本且配置未指明当前版本时，会提示版本待确认。
-插件与系统内置技能只读，不允许通过普通安装或同步覆盖。
-
-“其他 → 连接器”展示 `config.toml` 的 MCP 配置，以及已启用插件的 `.mcp.json`
-摘要：名称、配置启停、连接方式、服务域名、工具清单和超时。不会访问远程服务、
-执行连接器命令、检测登录状态，也不会展示凭据、环境变量值、启动参数或 URL 的
-路径/查询部分。连接器修改和认证请在订单来了客户端完成。
+自动检测当前用户目录下的 `.smartorder`，Windows 与 Mac 使用相同的相对目录规则。
+可以查看本地技能、内置技能和已启用插件内的技能；遵循 `skills.config` 的停用项，市场清单、
+未登记缓存和历史版本不会混入已安装列表。插件与系统内置技能只读，不允许通过普通安装或
+同步覆盖。连接器只展示配置摘要，不访问远程服务、不执行连接器命令，也不展示凭据、
+环境变量值、启动参数或 URL 的路径 / 查询部分。
 
 ## 获取与运行
 
 ### 桌面版
 
-`v0.1.0` 桌面版提供 macOS、Windows 和 Linux 安装产物。打包与签名状态以
-[Releases](../../releases) 页面为准；没有对应平台产物时，请使用下面的源码方式。
+从 [Releases](../../releases) 下载与你的系统对应的文件：
 
 | 你的系统 | 应选择的文件 |
 | --- | --- |
-| Apple Silicon Mac（M1/M2/M3/M4/M5…） | `Skill-Control-0.1.0-mac-arm64.dmg` |
-| Intel Mac | `Skill-Control-0.1.0-mac-x64.dmg` |
-| Windows x64 | 文件名含 `win-x64-setup`；免安装版含 `portable` |
-| Linux x64 | `.AppImage` 或 `.deb` |
+| Apple Silicon Mac（M1/M2/M3/M4/M5…） | `Skill-Control-0.2.0-mac-arm64.dmg` |
+| Intel Mac | `Skill-Control-0.2.0-mac-x64.dmg` |
+| Windows x64 | `Skill-Control-0.2.0-win-x64-setup.exe`（安装版）或 `…-portable.exe`（便携版） |
+| Linux x64 | `Skill-Control-0.2.0-linux-x86_64.AppImage` 或 `…-linux-amd64.deb` |
 
-Apple Silicon 用户不要选择 `mac-x64`，否则 macOS 会把它当作 Intel 应用并显示
-兼容性提示。首版尚未签名或公证，具体系统提示见 Release notes。
+Apple Silicon 用户不要选择 `mac-x64`，否则 macOS 会把它当作 Intel 应用。Release 中的
+`*.zip`、`latest*.yml` 和 `*.blockmap` 供应用内更新使用，不需要手动下载；
+`SHA256SUMS.txt` 提供全部文件的校验值。
+
+安装包尚未使用商业代码签名证书或公证：macOS 首次打开时可能需要在“系统设置 → 隐私与
+安全性”中确认，Windows SmartScreen 可能提示“未知发布者”，Linux AppImage 需要先赋予
+执行权限。
+
+### 应用更新
+
+从 v0.2.0 开始，Skill Control 会检查 GitHub Releases 上的新版本：启动后（距上次检查超过
+24 小时时）和之后每天一次，也可以在“设置 → 关于”里手动检查。
+
+- **macOS**：校验 sha512 并确认新应用的标识和版本后替换当前应用，旧版本移到废纸篓，
+  然后自动重启；任何一步失败都会恢复原来的版本。请把应用放在“应用程序”文件夹里，
+  从 DMG 直接运行或放在不可写的位置时会改为打开下载页；
+- **Windows**：安装版可以应用内下载并安装（安装包未签名，SmartScreen 可能提示）；
+  便携版需要手动下载替换；
+- **Linux**：AppImage 可以应用内更新；`.deb` 请手动下载新的安装包；
+- 只提供正式版本，不提供预发布版本；离线模式和从源码运行时不检查。
+
+v0.1.0 没有应用内更新，请手动下载 v0.2.0 替换。
 
 ### 从源码运行
 
-需要：
-
-- Node.js `22.13.0` 或更高版本；
-- npm；
-- Git。
+需要 Node.js `22.13.0` 或更高版本、npm 和 Git。
 
 ```bash
 git clone https://github.com/zifeixu85/skill-control.git
@@ -151,103 +172,81 @@ npm install
 npm run dev
 ```
 
-打开 [http://localhost:3000](http://localhost:3000)。`npm run dev` 会同时启动
-界面和只监听 `127.0.0.1:43110` 的本地管理服务。
-
-构建后运行：
+打开 [http://localhost:3000](http://localhost:3000)。`npm run dev` 会同时启动界面和只监听
+`127.0.0.1:43110` 的本地管理服务。
 
 ```bash
-npm run build
-npm start
+npm run build && npm start   # 构建后运行
+npm run desktop:dev          # Electron 开发窗口
 ```
 
-开发桌面壳：
-
-```bash
-npm run desktop:dev
-```
-
-这个命令会启动 Electron 开发窗口，并连接本机的开发界面和管理服务。桌面打包命令
-列在 `package.json` 中；发布维护者应只在对应平台构建并验证产物。
+桌面打包命令列在 `package.json` 中；发布维护者应只在对应平台构建并验证产物，
+见 [发布指南](./docs/RELEASING.md)。
 
 ## `.skill` 与 ZIP 导出
 
-Skill Control 使用 ZIP 容器作为 `.skill` 格式，包内必须包含一个
-`SKILL.md`。Skill 可以位于压缩包根目录，也可以位于单一顶层文件夹中。
-导出时可以保留 `.skill` 扩展名，也可以选择通用 `.zip`；两者内容结构一致。
-对于不支持 `.skill` 导入的 Agent，可以解压 ZIP 后把其中的技能文件夹复制到
-该 Agent 的技能目录。
-
-导入时会进行以下限制：
-
-- 压缩包不超过 25 MB；
-- 最多 1,500 个条目；
-- 单个文件不超过 25 MB；
-- 解压后总大小不超过 100 MB；
-- 拒绝路径穿越和包含多个 Skill 根目录的包。
-
-导入文件会先解压到本机预览区，不会因为选择文件而直接修改任何 Agent 目录。
-导出沿用相同的单文件、总大小和条目上限；压缩结果超过 25 MB 时会停止，
-避免把超大目录一次性载入桌面进程。
+Skill Control 使用 ZIP 容器作为 `.skill` 格式，包内必须包含一个 `SKILL.md`，可以位于
+压缩包根目录或单一顶层文件夹中。导出时可以保留 `.skill` 扩展名，也可以选择通用 `.zip`。
+导入时的限制：压缩包和单个文件不超过 25 MB、最多 1,500 个条目、解压后总大小不超过
+100 MB，拒绝路径穿越和包含多个技能根目录的包。导入文件先解压到本机预览区，选择文件
+不会直接修改任何 Agent 目录。
 
 ## 数据与隐私
 
-配置、操作记录、导入预览和覆盖前备份位于：
+Skill Control 的数据位于：
 
 ```text
 ~/.agent-skill-manager/
-├── config.json
-├── fingerprint-cache.json
-├── history.jsonl
-├── imports/
-└── backups/
+├── config.json            配置（常用 Agent、显示的 Agent、自定义目录等）
+├── history.jsonl          操作记录
+├── backups/               替换前的备份
+├── trash/                 卸载和清理移出的技能
+├── imports/               .skill 导入预览
+├── usage-index.json       用量索引（只有计数，不含对话内容）
+├── fingerprint-cache.json 内容指纹缓存
+└── …                      更新检查、Agent 版本、密钥变化快照等缓存
 ```
 
-Skill Control 不包含遥测服务，也不会将 Skill 内容上传到项目维护者的服务器。
-完整的数据范围、删除方式和网络边界见 [PRIVACY.md](./PRIVACY.md)。
+应用更新的检查结果保存在桌面应用的用户数据目录（macOS 为
+`~/Library/Application Support/Skill Control/app-update.json`）；下载的更新包放在系统临时
+目录，安装或失败后删除。
+
+Skill Control 没有遥测，也不会上传技能内容。会联网的只有：应用更新检查（本项目在
+`api.github.com` / `github.com` 上的 Release）、Agent 版本检查与技能 / 插件更新检测
+（npm registry、GitHub 和各产品自己的更新源），以及你确认执行的一键更新命令。设置
+`SKILL_MANAGER_UPDATES_OFFLINE=1` 会关闭全部检查。完整说明见 [PRIVACY.md](./PRIVACY.md)。
 
 ## 开发
 
-常用命令：
-
 ```bash
-npm run dev      # 本地管理服务 + 开发界面
-npm run build    # 构建界面
-npm start        # 运行构建产物 + 本地管理服务
+npm run dev         # 本地管理服务 + 开发界面
+npm run dev:ui      # 在旁路端口启动界面开发环境
+npm run build       # 构建界面
+npm start           # 运行构建产物 + 本地管理服务
 npm run desktop:dev # Electron 开发窗口
-npm test         # 构建并运行 Node 测试
-npm run lint     # ESLint
-npm run typecheck # TypeScript 类型检查
+npm test            # 构建并运行 Node 测试
+npm run lint        # ESLint
+npm run typecheck   # TypeScript 类型检查
 ```
-
-当前主要目录：
 
 ```text
-app/                     React 界面
-desktop/                 Electron 主进程、预加载脚本和开发启动器
-server/local-server.mjs  本地扫描、文件预览、导入导出与同步服务
-scripts/                 本地开发/运行编排
-tests/                   本地服务和渲染测试
-resources/               桌面图标与平台资源
-worker/                  Web 构建入口
+app/       React 界面
+desktop/   Electron 主进程、预加载脚本、应用更新和开发启动器
+server/    本地扫描、预览、同步、更新、用量与体检服务
+scripts/   开发、打包与发布脚本
+tests/     Node 测试
+resources/ 桌面图标、许可证与平台资源
+worker/    Web 构建入口
 ```
 
-本地服务默认仅接受 `http://localhost:3000` 和 `http://127.0.0.1:3000`
-来源的请求。开发时如需改变端口或来源，可使用：
-
-```bash
-SKILL_MANAGER_PORT=43110 \
-SKILL_MANAGER_ORIGINS=http://localhost:3000 \
-npm run manager
-```
-
-修改涉及文件写入、压缩包解析或路径解析的代码时，请先阅读
-[CONTRIBUTING.md](./CONTRIBUTING.md) 中的安全约束。
+本地服务默认只接受 `http://localhost:3000` 和 `http://127.0.0.1:3000` 来源的请求。
+修改涉及文件写入、压缩包解析或路径解析的代码前，请先阅读
+[CONTRIBUTING.md](./CONTRIBUTING.md) 中的安全约束；架构说明见
+[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
 
 ## 路线图
 
-- 应用签名、公证与安全的自动更新；
-- 更细粒度的备份浏览与恢复；
+- 应用签名与公证；
 - 可选 CLI，供自动化和高级用户使用；
 - 可审计的 Agent 目录规则扩展机制。
 
@@ -255,7 +254,7 @@ npm run manager
 
 ## 参与贡献
 
-欢迎提交 Bug、交互改进、Agent 目录适配和安全修复：
+欢迎提交 Bug、交互改进、Agent 适配和安全修复：
 
 - [贡献指南](./CONTRIBUTING.md)
 - [行为准则](./CODE_OF_CONDUCT.md)
@@ -265,6 +264,15 @@ npm run manager
 - [架构说明](./docs/ARCHITECTURE.md)
 - [发布指南](./docs/RELEASING.md)
 - [GitHub 仓库配置](./docs/REPOSITORY_SETUP.md)
+
+## 作者
+
+由 A梦 开发和维护。
+
+- 仓库：[github.com/zifeixu85/skill-control](https://github.com/zifeixu85/skill-control)
+- 网站：[ameng.blog](https://ameng.blog)
+
+问题与建议请提交到 [GitHub Issues](https://github.com/zifeixu85/skill-control/issues)。
 
 ## 许可证
 

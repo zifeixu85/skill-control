@@ -105,6 +105,24 @@ jobs:
       - name: Run packaged desktop smoke test
         run: ${{ matrix.smoke }}
 
+      # Each macOS build writes its own latest-mac.yml; they are merged in update-manifests.
+      - name: Check update metadata
+        shell: bash
+        run: |
+          case "${RUNNER_OS}" in
+            macOS)
+              arch="$(node -p process.arch)"
+              grep -q -- "-mac-${arch}.zip" release/latest-mac.yml
+              mv release/latest-mac.yml "release/latest-mac-${arch}.yml"
+              ;;
+            Windows)
+              grep -q -- "-setup.exe" release/latest.yml
+              ;;
+            Linux)
+              grep -q -- ".AppImage" release/latest-linux.yml
+              ;;
+          esac
+
       - name: Upload platform artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
@@ -115,8 +133,59 @@ jobs:
             release/*.exe
             release/*.AppImage
             release/*.deb
+            release/*.blockmap
+            release/latest*.yml
+            !release/latest-mac-*.yml
           if-no-files-found: error
           compression-level: 0
+          retention-days: 14
+
+      - name: Upload macOS update manifest
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: update-manifest-${{ matrix.artifact }}
+          path: release/latest-mac-*.yml
+          if-no-files-found: error
+          retention-days: 14
+
+  update-manifests:
+    name: Merge macOS update manifests
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.13.0
+          cache: npm
+
+      - name: Install runtime dependencies
+        run: npm ci --omit=dev --ignore-scripts
+
+      - name: Download macOS update manifests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: update-manifest-*
+          path: mac-manifests
+          merge-multiple: true
+
+      - name: Merge latest-mac.yml
+        run: node scripts/merge-mac-update-manifests.mjs mac-manifests update-manifests/latest-mac.yml
+
+      - name: Upload merged manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: desktop-update-manifests
+          path: update-manifests/latest-mac.yml
+          if-no-files-found: error
           retention-days: 14
 
   publish:
@@ -126,6 +195,7 @@ jobs:
     needs:
       - verify
       - build
+      - update-manifests
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -135,12 +205,29 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.13.0
+
       - name: Download platform artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: desktop-*
           path: release-artifacts
           merge-multiple: true
+
+      - name: Check update metadata
+        working-directory: release-artifacts
+        shell: bash
+        run: |
+          for file in latest-mac.yml latest.yml latest-linux.yml; do
+            test -s "${file}"
+          done
+          if compgen -G "latest-mac-*.yml" > /dev/null; then
+            echo "Per-architecture macOS manifests must not be published." >&2
+            exit 1
+          fi
 
       - name: Generate SHA-256 checksums
         working-directory: release-artifacts
@@ -151,20 +238,33 @@ jobs:
             | xargs -0 sha256sum > SHA256SUMS.txt
           test -s SHA256SUMS.txt
 
+      # docs/releases/vX.Y.Z.md may start with front matter `prerelease: true`.
+      - name: Prepare release notes
+        id: notes
+        shell: bash
+        run: |
+          node scripts/release-notes.mjs \
+            "docs/releases/${GITHUB_REF_NAME}.md" \
+            "${RUNNER_TEMP}/release-notes.md" >> "${GITHUB_OUTPUT}"
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
+          NOTES_FOUND: ${{ steps.notes.outputs.found }}
+          PRERELEASE: ${{ steps.notes.outputs.prerelease }}
         shell: bash
         run: |
-          notes_file="docs/releases/${GITHUB_REF_NAME}.md"
           release_args=(
             --verify-tag
             --title "Skill Control ${GITHUB_REF_NAME}"
           )
-          if test -f "${notes_file}"; then
-            release_args+=(--notes-file "${notes_file}")
+          if test "${NOTES_FOUND}" = "true"; then
+            release_args+=(--notes-file "${RUNNER_TEMP}/release-notes.md")
           else
             release_args+=(--generate-notes)
+          fi
+          if test "${PRERELEASE}" = "true"; then
+            release_args+=(--prerelease)
           fi
           gh release create "${GITHUB_REF_NAME}" \
             release-artifacts/* \

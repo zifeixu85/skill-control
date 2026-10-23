@@ -154,6 +154,7 @@ export async function raccoonSkillSources(homeDirectory = homedir()) {
 // ---------------------------------------------------------------------------
 // Experts and teams (config/expert-profiles.json; *.bak-* backups are ignored)
 
+const isoOrNull = (value) => (typeof value === "string" && !Number.isNaN(Date.parse(value)) ? new Date(value).toISOString() : null);
 const list = (value, limit = 100) => (Array.isArray(value) ? value.filter((item) => typeof item === "string").slice(0, limit) : []);
 const skillNames = (...lists) => [...new Set(lists.flat().filter((name) => SKILL_NAME.test(name)))].slice(0, 100);
 const clean = (value, homes, limit) => text(scrubTokens(compactHomeInText(String(value ?? ""), homes)), limit);
@@ -247,6 +248,8 @@ function expertItem(profile, { isTeam, install, homes, available, profilesPath }
     used: null,
     model: "",
     sourcePath: compactHomePath(profilesPath, homes),
+    createdAt: isoOrNull(profile.createdAt),
+    updatedAt: isoOrNull(profile.updatedAt),
     primaryFilePath: "profile.md",
     modifiedAt: typeof profile.updatedAt === "string" && !Number.isNaN(Date.parse(profile.updatedAt)) ? new Date(profile.updatedAt).toISOString() : new Date().toISOString(),
     rootPath: install.configDir,

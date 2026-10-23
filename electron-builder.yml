@@ -80,4 +80,10 @@ linux:
       arch:
         - x64
 
-publish: null
+# Update metadata only. Builds run with `--publish never`; the release workflow uploads
+# the files. This makes electron-builder write latest-mac.yml / latest.yml /
+# latest-linux.yml and the app-update.yml that electron-updater reads (Windows, Linux).
+publish:
+  - provider: github
+    owner: zifeixu85
+    repo: skill-control

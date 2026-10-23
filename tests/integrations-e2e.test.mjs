@@ -58,6 +58,15 @@ test("serves plugins, connectors, MCP inventory, activity and primary config ove
   assert.equal(mcp.servers.length, integrations.mcpServers.length);
 
   const github = integrations.plugins.find((plugin) => plugin.id === "github@openai-curated");
+  // v0.2 §3/§5: folder times for sorting; connector providers, icon, auth basis and tools.
+  assert.ok(Date.parse(github.installedAt) && Date.parse(github.updatedAt));
+  assert.ok(integrations.mcpServers.every((server) => server.updatedAt === null || Date.parse(server.updatedAt)));
+  assert.ok(integrations.mcpServers.some((server) => Date.parse(server.updatedAt)));
+  const connector = integrations.connectors.find((item) => item.id === "connector_github123");
+  assert.deepEqual(connector.providers.map((provider) => provider.id).sort(), ["github@openai-curated", "github@openai-curated-remote"]);
+  assert.equal(connector.iconAssetId, github.logo);
+  assert.equal(connector.auth.status, "connected");
+  assert.deepEqual(connector.tools.map((tool) => [tool.name, tool.description, tool.readOnly]), [["List pull requests", "desc", false], ["Get issue", "desc", false], ["search", "desc", false]]);
   const logo = await request(`/api/plugin-asset?id=${github.logo}`);
   assert.equal(logo.status, 200);
   assert.equal(logo.headers.get("content-type"), "image/png");

@@ -16,6 +16,7 @@ import {
   realpathOrNull,
   resolveInside,
   safeSegment,
+  scrubTokens,
   splitPluginKey,
   text,
 } from "./fs-safe.mjs";
@@ -31,6 +32,7 @@ const COMPONENT_LIMIT = 200;
 const PLUGIN_LIMIT = 300;
 const TOOLS_CACHE_LIMIT = 20_000_000;
 const TOOL_NAME_LIMIT = 20;
+const TOOL_DETAIL_LIMIT = 200;
 const ASSET_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".svg"]);
 const ASSET_FIELDS = ["logo", "logoDark", "composerIcon"];
 
@@ -382,6 +384,7 @@ export async function scanCodexConnectors(homeDirectory = homedir(), { plugins =
       description: text(tool.namespace_description, 600),
       toolCount: 0,
       toolNames: [],
+      tools: [],
       providedByPlugins: [...new Set(providers.get(id) || [])],
       source: "codex-cache",
       cachedAt: result.cachedAt,
@@ -390,6 +393,14 @@ export async function scanCodexConnectors(homeDirectory = homedir(), { plugins =
     const inner = object(tool.tool);
     const toolName = text(inner.title, 80) || text(inner.name, 80) || text(tool.tool_name, 80);
     if (toolName && connector.toolNames.length < TOOL_NAME_LIMIT) connector.toolNames.push(toolName);
+    // The connector detail lists its tools (name, short description, read-only hint).
+    if (toolName && connector.tools.length < TOOL_DETAIL_LIMIT) {
+      connector.tools.push({
+        name: toolName,
+        description: text(scrubTokens(String(inner.description || "")), 200),
+        readOnly: object(inner.annotations).readOnlyHint === true,
+      });
+    }
     connectors.set(id, connector);
   }
   result.connectors = [...connectors.values()].sort(

@@ -26,9 +26,13 @@ import { scanSmartOrder, scanSmartOrderConnectors } from "./smartorder.mjs";
 import { containsChinese } from "./skill-metadata.mjs";
 import { parseFrontmatter } from "./frontmatter.mjs";
 import { ACTIVITY_WINDOW_DAYS, scanAgentActivity } from "./agents-activity.mjs";
-import { defaultApplicationDirectories, hasAgentIcon } from "./agent-icons.mjs";
+import { AGENT_APPS, defaultApplicationDirectories, hasAgentIcon } from "./agent-icons.mjs";
 import { contentHash } from "./fs-links.mjs";
 import { createInsightRoutes, INSIGHT_ROUTES } from "./insight-routes.mjs";
+import { discoverAgents } from "./agent-discovery.mjs";
+import { remedyForSecret } from "./remedies.mjs";
+import { buildSecretsInventory } from "./secrets-inventory.mjs";
+import { skillUsageStats } from "./usage-query.mjs";
 import { createManageRoutes, MANAGE_ROUTES } from "./manage-routes.mjs";
 import { applyPrecedence, detectionPaths, SKILL_ADAPTERS } from "./agent-adapters.mjs";
 import { isSensitiveCapabilityPath, scanWorkBuddyExperts } from "./workbuddy-experts.mjs";
@@ -39,6 +43,7 @@ import { scanRaccoonExperts } from "./office-raccoon.mjs";
 import {
   compactHomeInText,
   compactHomePath,
+  createdAtOf,
   homeVariants,
   isWithin,
 } from "./fs-safe.mjs";
@@ -138,7 +143,7 @@ const IMAGE_MIME_TYPES = new Map([
   [".webp", "image/webp"],
 ]);
 
-const AGENT_CATALOG = [
+export const AGENT_CATALOG = [
   {
     id: "codex",
     name: "Codex",
@@ -382,6 +387,22 @@ async function getCapabilityProducts(force = false) {
   return products;
 }
 
+/** createdAt / updatedAt / lastUsedAt for sorting experts and profiles (folder times as fallback). */
+async function withItemTimes(product) {
+  const items = await Promise.all(
+    product.items.map(async (item) => {
+      const info = !item.createdAt || !item.updatedAt ? await lstat(item.rootPath).catch(() => null) : null;
+      return {
+        ...item,
+        createdAt: item.createdAt || createdAtOf(info),
+        updatedAt: item.updatedAt || (info ? new Date(info.mtimeMs).toISOString() : null),
+        lastUsedAt: item.lastUsedAt || item.used?.lastUsedAt || null,
+      };
+    }),
+  );
+  return { ...product, items };
+}
+
 function publicProduct(product) {
   const publicValue = { ...product, items: product.items.map(publicCapability) };
   delete publicValue.assets;
@@ -402,7 +423,7 @@ export async function scanCapabilityCatalog(
           scanOpenClawAgents("qclaw", homeDirectory),
           scanRaccoonExperts(homeDirectory),
         ]);
-  const availableProducts = products.filter((product) => product.available);
+  const availableProducts = await Promise.all(products.filter((product) => product.available).map(withItemTimes));
   return {
     products: availableProducts.map(publicProduct),
     totals: {
@@ -418,6 +439,80 @@ export async function scanCapabilityCatalog(
     },
     scannedAt: new Date().toISOString(),
   };
+}
+
+/** GET /api/secrets: names, locations and storage of credentials (never values). */
+async function secretsInventory() {
+  const scan = await getScan().catch(() => null);
+  const directories = new Map();
+  for (const skill of scan?.skills || []) {
+    for (const instance of skill.instances) {
+      const directory = expandHome(instance.path);
+      const entry = directories.get(directory) || { directory, name: skill.name, agentIds: [] };
+      if (!entry.agentIds.includes(instance.agentId)) entry.agentIds.push(instance.agentId);
+      directories.set(directory, entry);
+    }
+  }
+  const homes = [HOME_DIRECTORY, REAL_HOME_DIRECTORY];
+  const inventory = await buildSecretsInventory({ homeDirectory: HOME_DIRECTORY, homes, stateDirectory: STATE_DIRECTORY, skillDirectories: [...directories.values()] });
+  return { ...inventory, items: inventory.items.map((item) => ({ ...item, remedy: remedyForSecret(item, { homes }) })) };
+}
+
+/** Detected Agents the user has not acknowledged yet carry `isNew`. */
+function withNewAgents(scan, config) {
+  const known = new Set(config.knownAgentIds || []);
+  return { ...scan, agents: scan.agents.map((agent) => ({ ...agent, isNew: Boolean(agent.available && config.knownAgentIds && !known.has(agent.id)) })) };
+}
+
+/** Everything that already belongs to a known Agent: skill roots, ids and app bundles. */
+export function knownAgentLocations(config, scan) {
+  const roots = [
+    ...AGENT_CATALOG.flatMap((agent) => agent.paths),
+    ...config.agents.flatMap((agent) => agent.paths),
+    ...(scan?.agents || []).flatMap((agent) => (agent.roots || []).map((root) => root.path)),
+    "~/.agents/skills",
+    // Adapter-backed products keep skills in more places than their default folder.
+    "~/.hermes/skills",
+    "~/.openclaw/skills",
+    "~/.qclaw/skills",
+    "~/.box-agent/skills",
+  ].filter(Boolean).map(expandHome);
+  const apps = Object.values(AGENT_APPS);
+  return {
+    roots: [...new Set(roots)],
+    ids: new Set([...AGENT_CATALOG.map((agent) => agent.id), ...config.agents.map((agent) => agent.id), "lumiclaw", "moticlaw"]),
+    apps: { names: new Set(apps.flatMap((app) => app.names)), bundleIds: new Set(apps.flatMap((app) => app.bundleIds)) },
+  };
+}
+
+/** Skill usage from the usage index (sort keys); empty while the index is being built. */
+async function skillUsage() {
+  try {
+    return skillUsageStats(await getInsightRoutes().usage.getIndex());
+  } catch {
+    return new Map();
+  }
+}
+
+const usageOf = (stats, ...names) => names.map((name) => stats.get(String(name || "").toLowerCase())).find(Boolean) || null;
+
+/** Skills with lastUsedAt / uses30d / usesAll for sorting (any Agent, from the usage index). */
+function withSkillUsage(scan, stats) {
+  return {
+    ...scan,
+    skills: scan.skills.map((skill) => {
+      const usage = usageOf(stats, skill.name, skill.instances?.[0]?.directoryName);
+      return { ...skill, lastUsedAt: usage?.lastUsedAt || null, uses30d: usage?.uses30d || 0, usesAll: usage?.usesAll || 0 };
+    }),
+  };
+}
+
+/** A plugin was last used when any of its skills was. */
+function withPluginUsage(plugins, stats) {
+  return plugins.map((plugin) => {
+    const days = (plugin.components?.skills || []).map((name) => usageOf(stats, name)?.lastUsedAt).filter(Boolean).sort();
+    return { ...plugin, lastUsedAt: days.at(-1) || null };
+  });
 }
 
 async function resolveCapability(capabilityIdValue) {
@@ -555,7 +650,7 @@ async function readJsonFile(filePath, fallback) {
 }
 
 export function sanitizeConfig(input) {
-  const rawAgents = Array.isArray(input?.agents) ? input.agents.slice(0, 24) : [];
+  const rawAgents = Array.isArray(input?.agents) ? input.agents.slice(0, 48) : [];
   const inputVersion = Number(input?.version) || 1;
   const catalogById = new Map(AGENT_CATALOG.map((agent) => [agent.id, agent]));
   const seenIds = new Set();
@@ -673,6 +768,14 @@ export function sanitizeConfig(input) {
     visibleCustomized: input?.visibleCustomized === true,
     // Update checks may read `gh auth token` only after the user turned this on.
     updates: { useGhAuth: input?.updates?.useGhAuth === true },
+    // Agents the user has seen; a detected Agent outside this list is "new". null: not set yet.
+    knownAgentIds: Array.isArray(input?.knownAgentIds)
+      ? [...new Set(input.knownAgentIds.filter((id) => typeof id === "string" && /^[a-z0-9-]{1,32}$/u.test(id)))].slice(0, 200)
+      : null,
+    // Discovery candidates the user chose to ignore ("~/…" paths).
+    ignoredDiscoveries: Array.isArray(input?.ignoredDiscoveries)
+      ? [...new Set(input.ignoredDiscoveries.filter((item) => typeof item === "string" && item.length < 1024 && !item.includes("\0") && (item.startsWith("~/") || path.isAbsolute(item))))].slice(0, 200)
+      : [],
   };
 }
 
@@ -725,12 +828,37 @@ export async function loadConfig() {
     if (await agentDetected(agent)) newlyDetected.push(agent);
   }
   const agents = [...config.agents, ...newlyDetected];
-  return sanitizeConfig({
+  const loaded = sanitizeConfig({
     ...config,
     agents,
     // Until the user picks, every detected Agent is shown; status still uses primary Agents only.
     visibleAgentIds: config.visibleCustomized ? config.visibleAgentIds : agents.map((agent) => agent.id),
   });
+  // First start with this feature: every Agent detected now is known, so nothing is "new".
+  if (!loaded.knownAgentIds) {
+    loaded.knownAgentIds = loaded.agents.map((agent) => agent.id);
+    await persistConfig(loaded).catch(() => {});
+  }
+  return { ...loaded, newAgentIds: loaded.agents.map((agent) => agent.id).filter((id) => !loaded.knownAgentIds.includes(id)) };
+}
+
+async function persistConfig(config) {
+  const clean = sanitizeConfig(config);
+  await mkdir(STATE_DIRECTORY, { recursive: true });
+  const temporaryFile = `${CONFIG_FILE}.tmp-${process.pid}-${Date.now()}`;
+  await writeFile(temporaryFile, `${JSON.stringify(clean, null, 2)}\n`, "utf8");
+  await rename(temporaryFile, CONFIG_FILE);
+  return clean;
+}
+
+/** POST /api/agents/acknowledge: mark detected Agents as known (no longer "new"). */
+async function acknowledgeAgents(input) {
+  const ids = Array.isArray(input?.ids) ? input.ids.filter((id) => typeof id === "string" && /^[a-z0-9-]{1,32}$/u.test(id)).slice(0, 100) : null;
+  if (!ids) throw new HttpError(400, "需要要标为已知的 Agent 列表（ids）。", "invalid-request");
+  const config = await loadConfig();
+  const saved = await persistConfig({ ...config, knownAgentIds: [...new Set([...config.knownAgentIds, ...ids])] });
+  invalidateScanCache();
+  return { knownAgentIds: saved.knownAgentIds, newAgentIds: saved.agents.map((agent) => agent.id).filter((id) => !saved.knownAgentIds.includes(id)) };
 }
 
 async function saveConfig(input) {
@@ -738,8 +866,13 @@ async function saveConfig(input) {
   const previous = await loadConfig();
   const sameSet = (left, right) => left.length === right.length && left.every((id) => right.includes(id));
   const visibleChanged = Array.isArray(input.visibleAgentIds) && !sameSet([...new Set(input.visibleAgentIds.map(String))], previous.visibleAgentIds);
+  const catalogIds = new Set(AGENT_CATALOG.map((agent) => agent.id));
+  // Custom Agents the user adds are known; catalog Agents stay "new" until acknowledged.
+  const added = (Array.isArray(input.agents) ? input.agents : []).map((agent) => String(agent?.id || "")).filter((id) => id && !catalogIds.has(id));
   const config = sanitizeConfig({
     ...input,
+    knownAgentIds: [...new Set([...(Array.isArray(input.knownAgentIds) ? input.knownAgentIds : previous.knownAgentIds || []), ...added])],
+    ignoredDiscoveries: Array.isArray(input.ignoredDiscoveries) ? input.ignoredDiscoveries : previous.ignoredDiscoveries,
     visibleCustomized: previous.visibleCustomized || input.visibleCustomized === true || visibleChanged,
   });
   await mkdir(STATE_DIRECTORY, { recursive: true });
@@ -1019,6 +1152,8 @@ async function describeSkillDirectory(
     modifiedAt: fingerprint.latestModified
       ? new Date(fingerprint.latestModified).toISOString()
       : null,
+    // When this copy appeared in the Agent's folder (the link itself for linked copies).
+    createdAt: createdAtOf(linkStats),
     isSymlink: linkStats.isSymbolicLink(),
     linkTarget,
     truncated: fingerprint.truncated,
@@ -1291,6 +1426,9 @@ function aggregateSkill(key, instances, { visibleAgents, effectivePrimaryAgentId
       .filter((agentId) => !installedAgentIds.includes(agentId)),
     hashes: [...hashes].map((hash) => hash.slice(0, 8)),
     modifiedAt: newest.modifiedAt,
+    // Sort keys: earliest copy, latest change (usage keys are added per response).
+    installedAt: instances.map((instance) => instance.createdAt).filter(Boolean).sort()[0] || null,
+    updatedAt: instances.map((instance) => instance.modifiedAt).filter(Boolean).sort().at(-1) || null,
     fileCount: Math.max(...instances.map((instance) => instance.fileCount)),
     managed: [
       ...new Set(
@@ -2766,6 +2904,9 @@ const SAME_SITE_ONLY_ROUTES = new Set([
   "/api/import-asset",
   "/api/plugin-asset",
   "/api/expert-avatar",
+  "/api/agents/discover",
+  "/api/agents/acknowledge",
+  "/api/secrets",
   ...INSIGHT_ROUTES,
   ...MANAGE_ROUTES,
 ]);
@@ -3072,7 +3213,32 @@ export async function handleRequest(request, response) {
     }
     if (request.method === "GET" && requestUrl.pathname === "/api/scan") {
       const force = requestUrl.searchParams.get("force") === "1";
-      jsonResponse(response, 200, await getScan(force), origin);
+      const [scan, config] = await Promise.all([getScan(force), loadConfig()]);
+      jsonResponse(response, 200, withNewAgents(withSkillUsage(scan, await skillUsage()), config), origin);
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/api/secrets") {
+      jsonResponse(response, 200, await secretsInventory(), origin);
+      return;
+    }
+    if (request.method === "POST" && requestUrl.pathname === "/api/agents/acknowledge") {
+      jsonResponse(response, 200, await acknowledgeAgents(await readRequestBody(request)), origin);
+      return;
+    }
+    if (request.method === "GET" && requestUrl.pathname === "/api/agents/discover") {
+      const [config, scan] = await Promise.all([loadConfig(), getScan()]);
+      jsonResponse(
+        response,
+        200,
+        await discoverAgents({
+          homeDirectory: HOME_DIRECTORY,
+          homes: [HOME_DIRECTORY, REAL_HOME_DIRECTORY],
+          known: knownAgentLocations(config, scan),
+          ignored: config.ignoredDiscoveries,
+          applicationDirectories: applicationDirectories(),
+        }),
+        origin,
+      );
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/api/connectors") {
@@ -3110,16 +3276,18 @@ export async function handleRequest(request, response) {
     }
     if (request.method === "GET" && requestUrl.pathname === "/api/integrations") {
       const integrations = await integrationsLoader.get(requestUrl.searchParams.get("force") === "1");
-      jsonResponse(response, 200, integrations.payload, origin);
+      const stats = await skillUsage();
+      jsonResponse(response, 200, { ...integrations.payload, plugins: withPluginUsage(integrations.payload.plugins, stats) }, origin);
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/api/plugins") {
       const { payload } = await integrationsLoader.get(requestUrl.searchParams.get("force") === "1");
+      const stats = await skillUsage();
       jsonResponse(
         response,
         200,
         {
-          plugins: payload.plugins,
+          plugins: withPluginUsage(payload.plugins, stats),
           sources: payload.sources,
           warnings: payload.warnings,
           scannedAt: payload.scannedAt,

@@ -72,7 +72,13 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
     }
     if (!actions) {
       const reason =
-        entry.type === "restore" ? "这是一次从回收站的恢复；需要撤销时可再次卸载。" : ["library", "cli-fix"].includes(entry.type) ? "请在技能库或 CLI 工具中处理这类改动。" : "旧记录没有保存恢复所需的路径。";
+        entry.type === "restore"
+          ? "这是一次从回收站的恢复；需要撤销时可再次卸载。"
+          : entry.type === "agent-update"
+            ? "这是一次 Agent 的官方命令更新，无法自动撤销；需要回退时请按官方文档安装指定版本。"
+            : ["library", "cli-fix"].includes(entry.type)
+              ? "请在技能库或 CLI 工具中处理这类改动。"
+              : "旧记录没有保存恢复所需的路径。";
       return { ...base, backups: [], restorable: false, reason };
     }
     const backups = [];

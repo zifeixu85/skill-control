@@ -180,12 +180,12 @@ test("never derives display names from code comments, deeper headings or long ti
       body: ["```bash", "# workbook 定位：--url <workbook-url>", "```", "", "- 列表项不是名称", "", "### sheets"],
     },
     {
-      name: "guizang-ppt-skill",
+      name: "demo-ppt-skill",
       expected: "Magazine Web Ppt",
       body: [
         "# Magazine Web Ppt",
         "",
-        "> 来源识别: guizang-ppt-skill",
+        "> 来源识别: demo-ppt-skill",
         "",
         "## 这个 Skill 做什么",
         "",
@@ -193,10 +193,10 @@ test("never derives display names from code comments, deeper headings or long ti
       ],
     },
     {
-      name: "ameng-skill-scout",
-      expected: "Skill Scout（ameng-skill-scout）",
+      name: "acme-skill-scout",
+      expected: "Skill Scout（acme-skill-scout）",
       body: [
-        "# Skill Scout（ameng-skill-scout）",
+        "# Skill Scout（acme-skill-scout）",
         "",
         "## Phase 1：搜索与下载",
         "",

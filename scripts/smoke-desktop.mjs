@@ -1,12 +1,36 @@
 import { spawn } from "node:child_process";
-import { access } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIRECTORY = path.resolve(SCRIPT_DIRECTORY, "..");
-const RELEASE_DIRECTORY = path.join(PROJECT_DIRECTORY, "release");
+// SKILL_CONTROL_SMOKE_RELEASE_DIR points at another electron-builder output directory.
+const RELEASE_DIRECTORY = path.resolve(
+  PROJECT_DIRECTORY,
+  process.env.SKILL_CONTROL_SMOKE_RELEASE_DIR || "release",
+);
 const SMOKE_TIMEOUT_MS = 60_000;
+
+// Never the default manager port (a running copy may own it) nor 49152.
+const RESERVED_PORTS = new Set([43110, 49152]);
+
+async function freeLoopbackPort() {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const port = await new Promise((resolve, reject) => {
+      const server = createServer();
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        const { port: chosen } = server.address();
+        server.close(() => resolve(chosen));
+      });
+    });
+    if (!RESERVED_PORTS.has(port)) return port;
+  }
+  throw new Error("找不到可用的本机端口。");
+}
 
 function resolveExecutable() {
   if (process.platform === "darwin") {
@@ -43,12 +67,24 @@ async function runSmokeTest() {
   const executable = resolveExecutable();
   await access(executable);
   console.info(`[desktop-smoke-runner] 启动 ${executable}`);
+  // A fresh profile each run; app update checks stay offline.
+  const userDataDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "skill-control-smoke-"),
+  );
 
-  const child = spawn(executable, [], {
+  const managerPort =
+    process.env.SKILL_MANAGER_DESKTOP_MANAGER_PORT || String(await freeLoopbackPort());
+  const webPort =
+    process.env.SKILL_MANAGER_DESKTOP_WEB_PORT || String(await freeLoopbackPort());
+
+  const child = spawn(executable, [`--user-data-dir=${userDataDirectory}`], {
     cwd: PROJECT_DIRECTORY,
     env: {
       ...process.env,
       SKILL_CONTROL_SMOKE_TEST: "1",
+      SKILL_MANAGER_UPDATES_OFFLINE: "1",
+      SKILL_MANAGER_DESKTOP_MANAGER_PORT: managerPort,
+      SKILL_MANAGER_DESKTOP_WEB_PORT: webPort,
       ELECTRON_ENABLE_LOGGING: "1",
     },
     stdio: "inherit",
@@ -78,7 +114,10 @@ async function runSmokeTest() {
       }
       resolve(code ?? 1);
     });
-  }).finally(() => clearTimeout(timeout));
+  }).finally(async () => {
+    clearTimeout(timeout);
+    await rm(userDataDirectory, { recursive: true, force: true }).catch(() => {});
+  });
 
   if (exitCode !== 0) {
     throw new Error(`桌面冒烟测试失败，退出码 ${exitCode}。`);

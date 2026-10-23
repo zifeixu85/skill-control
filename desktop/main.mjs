@@ -1,6 +1,8 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createAppUpdater } from "./app-updater.mjs";
 import { copyTextAllowed } from "./copy-text.mjs";
+import { isOwnTopFrame } from "./ipc-guard.mjs";
 import {
   app,
   BrowserWindow,
@@ -8,6 +10,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  net,
   session,
   shell,
 } from "electron";
@@ -15,12 +18,18 @@ import {
 const DESKTOP_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIRECTORY = path.resolve(DESKTOP_DIRECTORY, "..");
 const MANAGER_HOST = "127.0.0.1";
-const DEFAULT_MANAGER_PORT = 43110;
+// SKILL_MANAGER_DESKTOP_MANAGER_PORT moves the preferred manager port (the packaged smoke
+// test uses a free one so it never touches a running copy on 43110).
+const DEFAULT_MANAGER_PORT = readPort(
+  process.env.SKILL_MANAGER_DESKTOP_MANAGER_PORT,
+  43110,
+);
 const MANAGER_SERVICE_NAME = "Skill Control local service";
 const PRODUCTION_WEB_PORT = readPort(
   process.env.SKILL_MANAGER_DESKTOP_WEB_PORT,
   0,
 );
+const APP_UPDATE_STATE_CHANNEL = "desktop:app-update-state";
 
 let mainWindow = null;
 let managerServer = null;
@@ -28,6 +37,7 @@ let webServer = null;
 let applicationOrigin = null;
 let managerPort = DEFAULT_MANAGER_PORT;
 let quitting = false;
+let appUpdater = null;
 
 app.setName("Skill Control");
 
@@ -236,7 +246,72 @@ function installSessionSecurity(developmentMode) {
   }
 }
 
+function getAppUpdater() {
+  appUpdater ||= createAppUpdater({
+    currentVersion: app.getVersion(),
+    packaged: app.isPackaged,
+    env: process.env,
+    // Chromium's network stack, so system proxy settings apply.
+    fetchImpl: (url, init) => net.fetch(url, init),
+    stateFile: path.join(app.getPath("userData"), "app-update.json"),
+    executablePath: app.getPath("exe"),
+    resourcesPath: process.resourcesPath,
+    openExternal: (url) => shell.openExternal(url),
+    trashItem: (target) => shell.trashItem(target),
+    quit: () => app.quit(),
+    emit: (state) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(APP_UPDATE_STATE_CHANNEL, state);
+      }
+    },
+  });
+  return appUpdater;
+}
+
+/** App-update calls take no arguments and only come from our own window's top frame. */
+function appUpdateRequestAllowed(event, args) {
+  return (
+    args.length === 0 &&
+    isOwnTopFrame(event, mainWindow) &&
+    isTrustedApplicationUrl(event.senderFrame?.url ?? "")
+  );
+}
+
+function installAppUpdateHandlers() {
+  const actions = {
+    "desktop:app-update-status": (updater) => updater.status(),
+    "desktop:app-update-check": (updater) => updater.check(),
+    "desktop:app-update-download": (updater) => updater.download(),
+    "desktop:app-update-install": (updater) => updater.install(),
+  };
+  for (const [channel, run] of Object.entries(actions)) {
+    ipcMain.handle(channel, async (event, ...args) => {
+      if (!appUpdateRequestAllowed(event, args)) {
+        return {
+          status: "error",
+          current: app.getVersion(),
+          canInstall: false,
+          error: "只接受来自应用窗口的更新请求。",
+        };
+      }
+      const updater = getAppUpdater();
+      try {
+        return await run(updater);
+      } catch (error) {
+        console.error("[app-update]", error);
+        return {
+          ...(await updater.status()),
+          status: "error",
+          error: "应用更新出错了，请稍后再试。",
+        };
+      }
+    });
+  }
+}
+
 function installIpcHandlers() {
+  installAppUpdateHandlers();
+
   ipcMain.handle("desktop:get-runtime-info", () => ({
     platform: process.platform,
     arch: process.arch,
@@ -394,6 +469,17 @@ function installSmokeTest(window) {
             probeImage(),
           ]);
           const health = await healthResponse.json();
+          const appUpdateApi = window.skillManagerDesktop.appUpdate;
+          const appUpdateState = await appUpdateApi.status();
+          const unsubscribe = appUpdateApi.onProgress(() => {});
+          const appUpdateWired =
+            typeof appUpdateApi.check === "function" &&
+            typeof appUpdateApi.download === "function" &&
+            typeof appUpdateApi.install === "function" &&
+            typeof unsubscribe === "function" &&
+            appUpdateState.current === runtimeInfo.version &&
+            typeof appUpdateState.status === "string";
+          unsubscribe();
           const csp = pageResponse.headers.get("content-security-policy") || "";
           const checks = {
             title: document.title.includes("技能管理器"),
@@ -413,6 +499,7 @@ function installSmokeTest(window) {
               csp.includes("object-src 'none'") &&
               csp.includes("frame-src 'none'"),
             image: imageProbe.ok === true,
+            appUpdate: appUpdateWired,
           };
           return {
             ok: Object.values(checks).every(Boolean),
@@ -420,6 +507,7 @@ function installSmokeTest(window) {
             runtimeInfo,
             csp,
             imageProbe,
+            appUpdateState,
           };
         })()
       `);
@@ -507,6 +595,11 @@ async function bootstrap() {
   installSessionSecurity(developmentMode);
   createApplicationMenu(developmentMode);
   mainWindow = createWindow(applicationUrl, developmentMode);
+  if (process.env.SKILL_CONTROL_SMOKE_TEST !== "1") {
+    void getAppUpdater()
+      .start()
+      .catch((error) => console.error("[app-update]", error));
+  }
 }
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
@@ -523,6 +616,7 @@ if (!hasSingleInstanceLock) {
 
   app.on("before-quit", () => {
     quitting = true;
+    appUpdater?.stop();
     closeOwnedServers();
   });
   app.on("window-all-closed", () => {

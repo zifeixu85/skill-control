@@ -176,8 +176,8 @@ Electron renderer 使用 `contextIsolation: true`、`nodeIntegration: false` 和
   会抬高文件数和活跃天数），只在已配置的 Agent 中排名后取前 2 个，并去掉不足第一名 2%
   或近 30 天会话少于 3 个的 Agent。遍历从最新开始：Codex 日期目录按名称倒序，项目目录
   按修改时间倒序，先排序再截断；被截断时返回 `warnings`。Codex 恢复的会话会继续追加到
-  原日期目录中的 rollout 文件（本机近 30 天写入的 8.8 GB 中有 3.7 GB 位于 30 天前的
-  日期目录，最早 89 天前），因此日期目录只在超过一年时才剪枝，而不是按 30 天窗口剪枝。
+  原日期目录中的 rollout 文件（近 30 天写入的数据可能有相当一部分位于 30 天前、甚至近
+  三个月前的日期目录），因此日期目录只在超过一年时才剪枝，而不是按 30 天窗口剪枝。
   `/api/agents/activity` 缓存 10 分钟，`?force=1` 刷新（5 秒内重复刷新会被忽略）。
 - 每个 Skill 新增（旧字段 `status` 等保持不变）：
   - `primaryStatus`：`ok` 或 `differs`（常用 Agent 中非托管实例存在 ≥ 2 种内容指纹）；
@@ -717,8 +717,8 @@ Hermes：静态解析的全部工具集（`enabled` 表示配置启用或被其�
 
 每轮索引有 3 秒预算，按修改时间从新到旧处理，每轮至少推进一个文件；服务在后台线程中连续分片执行直到
 完成，此后请求发现索引超过 60 秒未更新时再增量刷新。会话文件被产品删除后其汇总仍保留（保留 400 天）；
-文件被截短或头部变化时重新统计该文件。本机实测：约 2,000 个文件、22.7 GB 首次索引约 38 秒，增量约 0.1 秒，
-索引约 1.4 MB；版本 2（按模型）2,119 个文件首次索引约 47–61 秒，索引约 1.8 MB，按官方价计算 30 天费用约 20–30 ms。
+文件被截短或头部变化时重新统计该文件。量级参考（示例：数千个会话文件、数十 GB）：首次索引在一分钟左右，
+增量刷新约 0.1 秒，索引文件为 MB 级；按官方价计算 30 天费用为数十毫秒。
 Codex 续接 / 压缩后的会话可能在第一条 `turn_context` 之前就有用量：先记为 `unknown`，拿到模型后移到该模型下。
 
 **会话数 = 窗口内活跃的会话**（`server/usage-sessions.mjs`）：会话在某天开始、用了 token 或调用 / 读取了技能，就算
@@ -754,11 +754,11 @@ Codex 续接 / 压缩后的会话可能在第一条 `turn_context` 之前就有�
   结束小时不含），然后补缺：缓存读、缓存写缺失按输入价，1 小时缓存写缺失按缓存写价；最后 `:fast` 乘 `fast`
   （只有带 `fast` 的模型）。
 - 费用 = 未缓存输入 × 输入价 + 输出 × 输出价 + 缓存读 × 缓存读价 + 缓存写 × 缓存写价 + 1 小时缓存写 × 1 小时
-  缓存写价。输出含思考 token。Batch、区域加价（Claude `inference_geo`，本机均为 not_available）、缓存存储费、
+  缓存写价。输出含思考 token。Batch、区域加价（Claude `inference_geo`，通常为 not_available）、缓存存储费、
   服务档位都不计。订阅内的用量同样按 API 等价估算，不等于实际支出。
 - `@agent-average`（WorkBuddy `auto`）：每种 token 按同一窗口内该 Agent 其他已定价模型的 token 加权平均单价计
   （缓存读 / 写没有样本时按平均输入价）；没有可平均的模型时依次用估算的 `fallback` 模型（`auto` 为 `glm-5.2`，
-  本机 WorkBuddy 最常用的模型）、id 的系列、产品自报费用，否则未定价。加载时校验 `fallback` 指向存在的模型。
+  WorkBuddy 常见的默认模型）、id 的系列、产品自报费用，否则未定价。加载时校验 `fallback` 指向存在的模型。
 - 复核日期：模型条目可带 `reviewBy`（YYYY-MM-DD，促销 / 预览价的复核日，如 `gpt-5.6-sol` 2026-11-21、三个
   Gemini Flash 促销价 2026-12-31）；表头 `reviewAfterDays: 90`。本地日期晚于 `reviewBy` 的条目列入
   `pricingStale`，`checkedAt` 距今超过 `reviewAfterDays` 天时 `tableStale` / `pricingTable.stale` 为 true，
@@ -925,8 +925,8 @@ cursor、trae、hermes、qclaw、lumiclaw、moticlaw、smartorder、kiro、winds
 
 `server/agent-versions.mjs`。本机版本只读文件、从不执行程序：应用包 `Info.plist`；npm 全局包——在已知 PATH 目录
 里解析命令、`realpath` 后向上找到同名 `package.json`；Claude Code 原生安装看 `~/.local/share/claude/versions/<版本>`；
-Hermes 取 `hermes_cli/__init__.py` 的 `__release_date__`（与它的 GitHub 版本标签同一套），没有时用
-`install-stamp.json` 的 `baseVersion`；自带的 CLI（`~/.hermes/node/bin/lark-cli`）。最新版本只来自官方来源：CLI
+Hermes 同时记下 `install-stamp.json` 的 `baseVersion`（0.21.x，v0.22 起它的 GitHub 版本标签用这一套）与
+`hermes_cli/__init__.py` 的 `__release_date__`（日历版本，旧标签用这一套），按最新标签的格式选一个比较和显示；自带的 CLI（`~/.hermes/node/bin/lark-cli`）。最新版本只来自官方来源：CLI
 包查 npm registry 的 `latest`；应用查自己的更新源——electron-updater 的 `Contents/Resources/app-update.yml`
 （`generic` → `<url>/<channel>-mac.yml`，`github` → 该仓库的 latest release）、Sparkle 的 `SUFeedURL` appcast；
 Hermes 按自己的 git 远端（GitHub）查 latest release。占位或不安全的地址（`example.com`、`.test`、IP、非 https）
@@ -946,9 +946,110 @@ Hermes 按自己的 git 远端（GitHub）查 latest release。占位或不安�
     latest: { version, source: "npm" | "github" | "electron-updater" | "sparkle", url, releasedAt?, notesUrl? } | null,
     status: "up-to-date" | "update-available" | "unknown" | "error",
     error?: string, reason?: string, // reason：为什么是 unknown（没有更新源、占位地址、还没检查过）
-    remedy?: Remedy,
+    active: boolean,                 // 同一产品有多份（原生安装与 npm）时，用户 PATH 上排第一、真正运行的那份为 true
+    openApp?: { bundleId: string }, downloadUrl?: string,   // 桌面应用：用 open -b 打开让它自己更新；官方下载页
+    remedy?: Remedy & { action?: { kind: "agent-update", id: string } },   // action：可以一键更新
   }> }
 ```
+
+同一命令在 PATH 上有多份时（例如 `~/.local/bin/claude` 原生安装和某个 nvm 下的 npm 包），每份一行：第一份 id 不变，
+其余加 `-2`、`-3`，名称后注明“（原生安装）/（npm）”，`active` 标出生效的一份。
+
+**一键更新（v0.2 §2）**。只有已核实的官方更新命令可以一键执行，其余一律只给 AI 提示词：
+
+| 产品 | 命令（无 shell，参数数组） | 依据 |
+| --- | --- | --- |
+| Codex CLI、Gemini CLI、Claude Code（npm 安装）、lark-cli（含 Hermes 自带的一份） | `<拥有这份安装的 npm> install -g --prefix <它的前缀> <包>@latest` | npm 官方升级方式；Claude Code 文档 “To upgrade an npm installation, run npm install -g @anthropic-ai/claude-code@latest”；`--prefix` 固定到拥有这份副本的全局目录（Hermes 的那份用 `~/.hermes/node/bin/npm`） |
+| Claude Code（原生安装） | `<~/.local/bin/claude> update` | code.claude.com/docs/en/setup：手动更新 `claude update` |
+| OpenClaw（npm 安装） | `<openclaw> update` | OpenClaw 文档 install/updating：“Recommended: openclaw update”（会重启 Gateway） |
+
+`POST /api/agent-versions/plan { id }` → `{ planId, expiresAt, title, steps: [{ display }], effects: string[], afterCheck: { kind: "version", id } }`；
+必须先检查到新版本（否则 409 `up-to-date` / `check-required`），不在白名单 409 `refused`，命令目录被固定
+（`SKILL_MANAGER_COMMAND_DIRS`）且程序不在其中 403 `command-not-allowed`，程序已不存在 409 `stale-plan`。
+`POST /api/agent-versions/apply { planId, confirm: true }` + `x-skill-manager-confirm: yes` → `{ ok, steps: [{ display, exitCode, output }],
+version: { before, after }, historyEntry }`：计划 10 分钟内有效、只能用一次；离线模式 409 `updates-offline`；每步 5 分钟超时，
+环境只有 `PATH`（程序自己的目录 + 系统目录）、`HOME`、`LANG`，工作目录是主目录；输出经密钥擦除与主目录压缩、只留最后 4 KB；
+执行后重新读本机版本，并在历史里记一条不可撤销的 `agent-update`。`POST /api/agent-versions/open { id }` 用 `open -b <bundleId>`
+打开桌面应用（不下载、不改文件；命令目录被固定时拒绝）。
+
+## v0.2 后台新增
+
+### 新 Agent 与发现（§1）
+
+`config.json` 新增 `knownAgentIds`（首次运行时把当前检测到的 Agent 全部记为已知，避免全部显示“新”）与
+`ignoredDiscoveries`（用户忽略的候选路径，`~/…`）。`GET /api/config` 另返回 `newAgentIds`；`GET /api/scan` 的每个
+Agent 带 `isNew`（已检测到、且不在 `knownAgentIds` 中）。`POST /api/agents/acknowledge { ids }` → `{ knownAgentIds, newAgentIds }`。
+保存配置时用户自己加的 Agent 自动记为已知，未传的 `knownAgentIds` / `ignoredDiscoveries` 保持原值。
+
+`GET /api/agents/discover`（`server/agent-discovery.mjs`，只读、3 秒预算）→ `{ candidates: [{ id, guessName, path, skillCount,
+appPath?, launcher?, reason }], truncated }`：在 `~/.*` 与 `~/Library/Application Support/*`（及其下一层）找
+`skills/<名>/SKILL.md`，跳过缓存与工具链目录、已知 Agent 的目录与忽略的路径，不跟随离开主目录的链接；应用包只读
+`Info.plist`，按名称 / bundle id 对应 `~/.<名>`、`Application Support/<名>`；`~/.local/bin` 中指向 `.app` 内部的链接
+（取最内层，如 pcsuite.app 里的 VClaw.app）即使还没有技能目录也列为候选，同名启动脚本记为 `launcher`。
+
+### 排序字段（§3）
+
+技能：`installedAt`（各副本中最早的创建时间）、`updatedAt`（最晚的修改时间）、`lastUsedAt` / `uses30d` / `usesAll`
+（来自用量索引，任何 Agent，名称不区分大小写，`plugin:name` 也按 `name` 匹配）；实例另有 `createdAt`。技能库条目
+`installedAt`；插件 `installedAt` / `updatedAt`（安装目录）与 `lastUsedAt`（它的任一技能最近一次使用）；MCP
+`updatedAt`（所在配置文件的修改时间）；能力条目（专家等）`createdAt` / `updatedAt` / `lastUsedAt`。没有的值为 `null`。
+
+### 连接器详情（§5）
+
+`/api/integrations` 的 Codex 连接器新增 `providers: [{ id, name }]`（提供它的插件）、`iconAssetId`（插件图标，经
+`/api/plugin-asset`）、`auth: { status: "connected" | "unknown", basis }`（Codex 只在连接过的应用缓存工具列表，有缓存即
+`connected`；不读任何账号信息）与 `tools: [{ name, description, readOnly }]`（最多 200 个，说明经密钥擦除、200 字）。
+
+### 密钥清单（§6）
+
+`GET /api/secrets`（`server/secrets-inventory.mjs`，同站）→ `{ generatedAt, items: [{ id, service, keyName, location, storage,
+agents, usedBy: [{ kind: "mcp" | "skill" | "cli", name }], fingerprint?, modifiedAt, note?, firstSeenAt, changedAt, remedy }],
+changes: [{ id, kind: "added" | "changed" | "removed", at, keyName? }], summary: { total, plaintext, byStorage } }`，
+`storage` ∈ `plaintext`、`env-ref`、`keychain`、`credential-file`、`oauth`。
+
+来源：各 Agent 的 MCP（复用 `readMcpSources` 与 `secret-fields`）；Claude `settings.json` / `~/.claude.json` 的 `env`；
+Gemini、WorkBuddy、Hermes 的 `.env`；Gemini `settings.json`、WorkBuddy `env`、Hermes `config.yaml`（不含 MCP 段）；
+OpenClaw / QClaw 配置（不含 `mcp`）、SQLite 认证库（`agents/<id>/agent/openclaw-agent.sqlite`、`state/openclaw.sqlite`：
+只记存在，从不打开）与旧版 `auth-profiles.json`、`auth.json`、`credentials/oauth.json`；办公小浣熊 `config.yaml`、`mcp.json`；
+技能目录里的 `.env*`（只列名称，不算指纹，`.env.example` 等不算）；`gh` 的 `hosts.yml`（没有令牌时注明存在钥匙串）；
+`~/.npmrc`、`~/.netrc`、`~/.aws/credentials`；Docker `config.json`（`credsStore` / `credHelpers` 注明凭据助手）；
+lark-cli `config.json`（`appSecret` 来源为 keychain 时注明）。
+
+隐私：值只在解析函数里出现一次，`classify()` 判定类型后丢弃；变量名字段（`*_env_var`、`env_http_headers`）里只有
+大写变量名算引用，其他内容按“误填的值”记为 plaintext；超时、调试开关等设置项不算密钥。不少于 16 个字符的值
+记 8 位 HMAC-SHA256 指纹，盐是 `~/.agent-skill-manager/secret-salt`（随机、0600），只用来判断“变了没有”。
+`secret-snapshot.json`（0600）只存 id、键名、指纹与时间；第一次是基线，之后报告新增、变化、删除（最多保留 200 条）。
+从不读取 macOS 钥匙串。每条带 `remedy`（按存储类型给出整改提示，例如把明文改成环境变量引用）。
+
+### 用量合计（§7）
+
+`GET /api/usage/totals` → `{ generatedAt, index, status, windows: [{ id: "today" | "7" | "30" | "90" | "all", label, windowDays,
+from, to, tokens, costUsd, costBasis, unpricedTokens, sessions, activeDays, byAgent: [{ agentId, tokens, costUsd, sessions }] }] }`，
+与 `/api/usage/summary` 同一索引、同一计费规则。
+
+### 通用 CLI 清单（§12）
+
+`server/cli-inventory.mjs`，从不执行程序。来源（每个目录最多 400 项）：`~/.local/bin`；每个 nvm 版本、`~/.npm-global`、
+Hermes 自带 node 的 npm 全局 bin（只收 `lib/node_modules` 里的包，不含 node、npm、corepack）；系统前缀 `/opt/homebrew`、
+`/usr/local` 的 bin（npm 包照收；Homebrew 命令只收技能或 Agent 放行规则提到的；命令目录被固定时不看系统前缀）；
+pnpm（`~/Library/pnpm`）、`~/.bun/bin`、`~/.cargo/bin`、`~/go/bin`、`~/.deno/bin`；uv tools 的 `uv-receipt.toml` 入口。
+同名且同一真实文件的多个入口合并为一行（其余入口在 `links`）。`*.bak`、`*.old` 当作备份隐藏并计数。
+
+每个工具：`{ id, name, path, source, sourceLabel?, kind: "script" | "binary" | "symlink" | "other", fileKind, interpreter?, target?,
+links?, owner: { type: "npm" | "uv" | "pipx" | "app" | "native" | "homebrew" | "cargo", name, version, manager?, bundleId? } | null,
+description, size, mtime, referencedBySkills (≤20), referencedCount, aiRelated, aiReasons, agents: [{ agentId, agentName, available,
+detail, allowed }] }`。类型与解释器只看前 512 字节（shebang / Mach-O / ELF）；归属看真实路径（`.app` 的 Info.plist、
+`versions/<版本>`、`package.json`、dist-info、`Cellar/<formula>/<版本>`、`.crates.toml`）；说明取脚本开头最多 3 行注释，
+没有时用 npm 包的 `description`，都经密钥擦除与主目录压缩、200 字。`referencedBySkills`：SKILL.md（最多 2,000 个、
+每个前 64 KB）里代码中处于命令位置的名称，或带 `-`、`_`、`.`、数字的名称在正文中作为单词出现；按文件大小与修改
+时间缓存在 `cli-skill-mentions.json`（0600，只存命中的名称）。`agents` 复用 lark-cli 卡片的 PATH 来源与放行规则
+（`available`：该 Agent 的 PATH 上第一个同名命令就是这一份）。`aiReasons`：`skill-reference`、`known-ai-cli`、`ai-app`
+（链接指向 AI 应用）、`npm-keywords`（ai / agent / llm / mcp）、`local-bin`（在 `~/.local/bin` 且不是 uv、python、pnpm
+等通用工具）。
+
+`GET /api/cli-tools` → `{ tools, summary: { total, aiRelated, referencedBySkills, hiddenBackups, bySource, byKind,
+skillFilesScanned, truncated, deep } }`：先是深度卡片（lark-cli、gh、uv，带各 Agent 的工作区 / 钥匙串 / 放行规则检查与
+修复项，并合并其首选副本的清单字段），再是其余命令。
 
 ## 更新检测与执行
 
@@ -1226,8 +1327,8 @@ replace 的反向是把备份放回原位（共享的真实目录只写一次）
 
 **默认可见的 Agent**：配置新增 `visibleCustomized`（默认 false）。在用户第一次修改可见 Agent 之前（`PUT /api/config`
 中 `visibleAgentIds` 与当前不同，或请求显式带 `visibleCustomized: true`），所有检测到的 Agent 都可见，包括 Hermes、
-OpenClaw、QClaw；修改后按用户的选择保存。状态判断仍只看常用 Agent。本机实测 14 个 Agent 全部可见时 `scanAll`
-冷启动约 530 ms（与原先 6 个可见时相同），内存缓存后约 310 ms，因此可见 Agent 仍做完整元数据与指纹。
+OpenClaw、QClaw；修改后按用户的选择保存。状态判断仍只看常用 Agent。十几个 Agent 全部可见时，`scanAll`
+冷启动与只有几个可见时相近（数百毫秒），内存缓存后更快，因此可见 Agent 仍做完整元数据与指纹。
 
 `GET /api/scan` 的每个 Agent 新增 `iconAvailable: boolean`：只检查已知应用包是否存在并核对 Bundle ID 与图标文件，
 不转换图标；前端只在为 true 时请求 `/api/agent-icon`（未知仍返回 404）。
@@ -1264,6 +1365,44 @@ OpenClaw、QClaw；修改后按用户的选择保存。状态判断仍只看常�
 `clipboard.writeText`。主进程只接受来自本应用主窗口顶层框架的请求，内容必须是字符串且 UTF-8 不超过 1 MB
 （校验在 `desktop/copy-text.mjs`）。
 
+### 应用自身更新
+
+主进程负责全部更新步骤，界面只经 IPC 读状态（`desktop/app-updater.mjs` 控制流程，纯规则在
+`desktop/app-update-core.mjs`，macOS 安装步骤在 `desktop/app-update-mac.mjs`）。preload 在
+`window.skillManagerDesktop.appUpdate` 上提供 `status()`（不联网）、`check()`、`download()`、`install()`
+（都返回状态、从不 reject）和 `onProgress(cb)`（每次状态变化都推送完整状态，返回取消订阅函数）。
+IPC 通道 `desktop:app-update-*` 只接受本应用主窗口顶层框架、来源为应用自身地址、且不带参数的调用
+（`desktop/ipc-guard.mjs`）。
+
+```ts
+{ status: "up-to-date" | "available" | "downloading" | "ready" | "error" | "unsupported",
+  current, latest?, notes?, url?, publishedAt?, checkedAt?, error?,
+  canInstall: boolean,                 // false 时界面改为“打开下载页”
+  reason?: "offline" | "development" | "platform" | "portable" | "package" | "location",
+  manual?, notice?, transferred?, total?, percent?, installing? }
+```
+
+- 来源：`GET https://api.github.com/repos/zifeixu85/skill-control/releases/latest`（草稿和预发布不会返回；
+  404 或最新版本不比当前新都是 `up-to-date`）。启动 15 秒后在上次检查超过 24 小时时检查，之后每小时
+  判断一次是否满 24 小时；手动 `check()` 一分钟内复用上次结果。结果存在 `userData/app-update.json`。
+  `SKILL_MANAGER_UPDATES_OFFLINE=1`、源码运行（未打包）和冒烟测试都不检查。请求走 Electron `net.fetch`
+  （遵循系统代理）。
+- macOS（ad-hoc 签名，Squirrel.Mac 无法安装）：从 Release 资产读 `latest-mac.yml`（FAILSAFE 解析，
+  各字段校验），按 `-mac-<arch>.zip` 选包，下载到系统临时目录的 `skill-control-update-*`（只接受本仓库
+  的 Release 资产，最终地址必须在 GitHub 下载域名，大小与清单一致、≤ 1 GB，60 秒无数据即中止），
+  校验 sha512，`/usr/bin/ditto -x -k` 解压，确认 `CFBundleIdentifier = dev.skillcontrol.desktop`、
+  版本一致、可执行文件存在。安装：当前 `.app` 先在同一目录改名为
+  `Skill Control <旧版本> (replaced <时间>).app`，新包移入原路径（跨卷时先 `ditto` 到隐藏的同级目录），
+  再次校验；任何一步失败都把旧包放回。成功后用 `shell.trashItem` 把旧包移到废纸篓（失败则保留并在
+  `notice` 里说明），由一个等待本进程退出的 `/bin/sh` 辅助进程执行 `open -n <路径>`，然后退出。
+  应用在 App Translocation、DMG 等不可写位置时 `canInstall: false`，下载与安装改为打开下载页。
+- Windows / Linux：只在这两个平台动态加载 electron-updater，显式构造 `NsisUpdater` / `AppImageUpdater`
+  （`.deb` 不会用到 `DebUpdater`），关闭自动下载与退出时自动安装；便携版、`.deb`、缺少
+  `resources/app-update.yml` 时只提供下载页。安装包未签名，状态里带 `notice` 提示 SmartScreen。
+- 发布：`electron-builder.yml` 的 `publish`（GitHub）让构建生成 `latest*.yml` 与 `app-update.yml`，构建
+  命令保持 `--publish never`；release workflow 上传 yml 和 blockmap，合并两个架构的 `latest-mac.yml`，
+  由 `publish` job 创建 Release（notes 的 front matter `prerelease: true` 时为预发布）。
+
 ## 本地服务防护（新增）
 
 - 除 Origin 检查外，所有请求的 `Host` 必须是 `127.0.0.1:<端口>`、`localhost:<端口>`
@@ -1296,7 +1435,8 @@ OpenClaw、QClaw；修改后按用户的选择保存。状态判断仍只看常�
 | `GET /api/agent-files`、`/api/agent-file` | 见“洞察接口 · Agent 文件” |
 | `GET /api/agent-tools` | 见“洞察接口 · Agent 工具” |
 | `GET /api/usage/summary`、`/api/usage/skill`、`/api/usage/agent`、`/api/usage/models`、`/api/usage/projects`、`/api/usage/pricing`、`/api/usage/status` | 见“洞察接口 · 用量分析” |
-| `GET /api/agent-versions`、`POST /api/agent-versions/check` | 见“Agent 产品版本” |
+| `GET /api/agent-versions`、`POST /api/agent-versions/check`、`/api/agent-versions/plan`、`/api/agent-versions/apply`、`/api/agent-versions/open` | 见“Agent 产品版本” |
+| `POST /api/agents/acknowledge`、`GET /api/agents/discover`、`GET /api/secrets`、`GET /api/usage/totals` | 见“v0.2 后台新增” |
 | `GET /api/health-report` | 见“洞察接口 · 体检报告” |
 | `GET /api/agent-icon` | 见“洞察接口 · 应用图标” |
 | `GET /api/updates`、`/api/updates/check-status`、`/api/updates/changes`；`POST /api/updates/check`、`/api/updates/plan`、`/api/updates/apply` | 见“更新检测与执行” |

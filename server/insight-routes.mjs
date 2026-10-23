@@ -9,7 +9,7 @@ import { createUpdateService } from "./update-service.mjs";
 import { createAgentVersionService } from "./agent-versions.mjs";
 import { createUsageService } from "./usage-service.mjs";
 import { publicPriceTable } from "./pricing.mjs";
-import { clampDays, usageForAgent, usageForSkill, usageModels, usageProjects, usageSummary } from "./usage-query.mjs";
+import { clampDays, usageForAgent, usageForSkill, usageModels, usageProjects, usageSummary, usageTotals } from "./usage-query.mjs";
 
 /**
  * Read-only "insight" endpoints: agent files, agent tools, usage analytics, health report
@@ -25,10 +25,14 @@ export const INSIGHT_ROUTES = [
   "/api/usage/agent",
   "/api/usage/models",
   "/api/usage/projects",
+  "/api/usage/totals",
   "/api/usage/pricing",
   "/api/usage/status",
   "/api/agent-versions",
   "/api/agent-versions/check",
+  "/api/agent-versions/plan",
+  "/api/agent-versions/apply",
+  "/api/agent-versions/open",
   "/api/health-report",
   "/api/agent-icon",
   "/api/updates",
@@ -82,7 +86,8 @@ export function createInsightRoutes(context) {
     homes: context.homes,
     stateDirectory: context.stateDirectory,
     ...(context.applicationDirectories ? { applicationDirectories: context.applicationDirectories } : {}),
-    ...(context.commandDirectories ? { searchDirectories: context.commandDirectories } : {}),
+    ...(context.commandDirectories ? { searchDirectories: context.commandDirectories, pinnedDirectories: context.commandDirectories.map((entry) => entry.directory) } : {}),
+    historyFile: context.historyFile,
     offline: Boolean(context.updatesOffline),
     ...(context.updatesOffline ? { fetchImpl: offlineFetch } : {}),
   });
@@ -171,6 +176,10 @@ export function createInsightRoutes(context) {
       usage.ensureFresh();
       return { ...usageProjects(await usage.getIndex(), { days: clampDays(url.searchParams.get("days"), 30) }), status: usage.status() };
     },
+    async "/api/usage/totals"() {
+      usage.ensureFresh();
+      return { ...usageTotals(await usage.getIndex()), status: usage.status() };
+    },
     async "/api/usage/pricing"() {
       return publicPriceTable();
     },
@@ -210,6 +219,22 @@ export function createInsightRoutes(context) {
     // Read-only network (official registries and feeds): a plain POST with the origin checks.
     async "/api/agent-versions/check"() {
       return versions.check();
+    },
+    // One-click CLI update: only verified official commands, shown in the plan first.
+    async "/api/agent-versions/plan"(body) {
+      return versions.plan({ id: body.id });
+    },
+    async "/api/agent-versions/apply"(body, request) {
+      if (request.headers["x-skill-manager-confirm"] !== "yes" || body.confirm !== true) {
+        throw new RouteError(400, "需要明确确认后才能执行更新。", "confirm-required");
+      }
+      const result = await versions.apply({ planId: body.planId, confirm: true });
+      context.afterWrite?.();
+      return result;
+    },
+    // Opens a desktop app so it can update itself (no download, no file change).
+    async "/api/agent-versions/open"(body) {
+      return versions.openApp({ id: body.id });
     },
     async "/api/updates/apply"(body, request) {
       // Same confirmation model as sync: header + explicit confirm, plan id from this process.

@@ -64,9 +64,9 @@ test("compacts Windows and POSIX home paths in serialized text", () => {
   assert.match(compacted, /bobby/u);
   assert.equal(compactHomeInText("C:\\Users\\bob and C:/Users/bob", [windowsHome]), "~ and ~");
   assert.equal(
-    compactHomeInText("file:///Users/ameng/x /Users/amengxyz/y", ["/Users/ameng"]),
-    "file://~/x /Users/amengxyz/y",
+    compactHomeInText("file:///Users/alice/x /Users/alicexyz/y", ["/Users/alice"]),
+    "file://~/x /Users/alicexyz/y",
   );
   // Markdown and Chinese punctuation end a home path too.
-  assert.equal(compactHomeInText("在 `/Users/ameng` 下，/Users/ameng。<!-- /Users/ameng -->", ["/Users/ameng"]), "在 `~` 下，~。<!-- ~ -->");
+  assert.equal(compactHomeInText("在 `/Users/alice` 下，/Users/alice。<!-- /Users/alice -->", ["/Users/alice"]), "在 `~` 下，~。<!-- ~ -->");
 });

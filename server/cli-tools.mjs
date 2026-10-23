@@ -181,45 +181,80 @@ async function resolveOnPath(command, entries) {
   return null;
 }
 
-async function allowRuleState(agentId, homeDirectory, command) {
-  const has = (list, patterns) => Array.isArray(list) && list.some((item) => typeof item === "string" && patterns.some((pattern) => pattern.test(item)));
-  const escaped = command.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+const COMMAND_NAME = "[\\w.+-]{1,64}";
+const stringsOf = (list) => (Array.isArray(list) ? list.filter((item) => typeof item === "string").slice(0, 5_000) : []);
+const namesFrom = (items, pattern) => new Set(items.flatMap((item) => [...item.matchAll(pattern)].map((match) => match[1])));
+const NO_RULES = { check: () => "n/a", commands: new Set() };
+
+/**
+ * An Agent's allow rules, read once: `check(command)` → present / missing / n/a, and
+ * `commands`, the command names the rules mention (for "tools an Agent refers to").
+ */
+export async function loadAllowRules(agentId, homeDirectory) {
   switch (agentId) {
     case "claude": {
       const settings = await readBoundedJson(path.join(homeDirectory, ".claude", "settings.json"), 2_000_000);
       const permissions = object(object(settings.value).permissions);
-      if (permissions.defaultMode === "bypassPermissions") return "present";
-      return has(permissions.allow, [new RegExp(`^Bash\\(${escaped}(?:[ :]\\*)?\\)$`, "u"), /^Bash(?:\(\*\))?$/u]) ? "present" : "missing";
+      const allow = stringsOf(permissions.allow);
+      const everything = permissions.defaultMode === "bypassPermissions" || allow.some((item) => /^Bash(?:\(\*\))?$/u.test(item));
+      return {
+        check: (command) => (everything || allow.some((item) => new RegExp(`^Bash\\(${escapeRegExp(command)}(?:[ :]\\*)?\\)$`, "u").test(item)) ? "present" : "missing"),
+        commands: namesFrom(allow, new RegExp(`^Bash\\((${COMMAND_NAME})(?=[ :)])`, "gu")),
+      };
     }
     case "codex": {
-      for (const name of (await readdir(path.join(homeDirectory, ".codex", "rules")).catch(() => [])).filter((file) => file.endsWith(".rules"))) {
-        const text = (await readBoundedText(path.join(homeDirectory, ".codex", "rules", name), 1_000_000)).text || "";
-        if (new RegExp(`prefix_rule\\(\\s*pattern\\s*=\\s*\\[\\s*"${escaped}"`, "u").test(text)) return "present";
+      const texts = [];
+      for (const name of (await readdir(path.join(homeDirectory, ".codex", "rules")).catch(() => [])).filter((file) => file.endsWith(".rules")).slice(0, 50)) {
+        texts.push((await readBoundedText(path.join(homeDirectory, ".codex", "rules", name), 1_000_000)).text || "");
       }
-      return "missing";
+      return {
+        check: (command) => (texts.some((value) => new RegExp(`prefix_rule\\(\\s*pattern\\s*=\\s*\\[\\s*"${escapeRegExp(command)}"`, "u").test(value)) ? "present" : "missing"),
+        commands: namesFrom(texts, new RegExp(`prefix_rule\\(\\s*pattern\\s*=\\s*\\[\\s*"(${COMMAND_NAME})"`, "gu")),
+      };
     }
     case "gemini": {
       const settings = await readBoundedJson(path.join(homeDirectory, ".gemini", "settings.json"), 2_000_000);
-      return has(object(object(settings.value).tools).allowed, [new RegExp(`^run_shell_command(?:\\(${escaped}\\))?$`, "u")]) ? "present" : "missing";
+      const allowed = stringsOf(object(object(settings.value).tools).allowed);
+      return {
+        check: (command) => (allowed.some((item) => new RegExp(`^run_shell_command(?:\\(${escapeRegExp(command)}\\))?$`, "u").test(item)) ? "present" : "missing"),
+        commands: namesFrom(allowed, new RegExp(`^run_shell_command\\((${COMMAND_NAME})`, "gu")),
+      };
     }
     case "cursor": {
       const config = await readBoundedJson(path.join(homeDirectory, ".cursor", "cli-config.json"), 2_000_000);
-      if (config.status === "missing") return "n/a";
-      return has(object(object(config.value).permissions).allow, [new RegExp(`^Shell\\(${escaped}\\)$`, "u")]) ? "present" : "missing";
+      if (config.status === "missing") return NO_RULES;
+      const allow = stringsOf(object(object(config.value).permissions).allow);
+      return {
+        check: (command) => (allow.some((item) => new RegExp(`^Shell\\(${escapeRegExp(command)}\\)$`, "u").test(item)) ? "present" : "missing"),
+        commands: namesFrom(allow, new RegExp(`^Shell\\((${COMMAND_NAME})`, "gu")),
+      };
     }
     case "opencode": {
       const config = await readBoundedJson(path.join(homeDirectory, ".config", "opencode", "opencode.json"), 2_000_000);
-      if (config.status === "missing") return "n/a";
+      if (config.status === "missing") return NO_RULES;
       const bash = object(object(config.value).permission).bash;
-      return bash === "allow" || object(bash)[`${command} *`] === "allow" ? "present" : "missing";
+      const keys = Object.keys(object(bash)).slice(0, 5_000);
+      return {
+        check: (command) => (bash === "allow" || object(bash)[`${command} *`] === "allow" ? "present" : "missing"),
+        commands: namesFrom(keys, new RegExp(`^(${COMMAND_NAME})(?= |$)`, "gu")),
+      };
     }
     case "hermes": {
       const config = await readYamlFile(path.join(homeDirectory, ".hermes", "config.yaml"));
-      return has(object(config.value).command_allowlist, [new RegExp(`^${escaped}(?:\\s|$)`, "u")]) ? "present" : "missing";
+      const list = stringsOf(object(config.value).command_allowlist);
+      return {
+        check: (command) => (list.some((item) => new RegExp(`^${escapeRegExp(command)}(?:\\s|$)`, "u").test(item)) ? "present" : "missing"),
+        commands: namesFrom(list, new RegExp(`^(${COMMAND_NAME})(?=\\s|$)`, "gu")),
+      };
     }
     default:
-      return "n/a";
+      return NO_RULES;
   }
+}
+
+async function allowRuleState(agentId, homeDirectory, command) {
+  return (await loadAllowRules(agentId, homeDirectory)).check(command);
 }
 
 /** Workspace readiness: config existence and the kind of secret source — never the secret. */

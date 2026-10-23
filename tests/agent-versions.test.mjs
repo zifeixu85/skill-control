@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -140,8 +140,8 @@ test("installed versions come from files, latest from official feeds only", LIMI
 
   // Remedies: the exact npm of that Node, the official updaters, the app's own updater.
   assert.deepEqual(after["codex-cli"].remedy.commands, [
-    { label: "升级", command: "~/.nvm/versions/node/v24.0.0/bin/npm install -g @openai/codex@latest" },
-    { label: "检查版本", command: "~/.nvm/versions/node/v24.0.0/bin/npm ls -g @openai/codex --depth=0" },
+    { label: "升级", command: "~/.nvm/versions/node/v24.0.0/bin/npm install -g --prefix ~/.nvm/versions/node/v24.0.0 @openai/codex@latest" },
+    { label: "检查版本", command: "~/.nvm/versions/node/v24.0.0/bin/npm ls -g --prefix ~/.nvm/versions/node/v24.0.0 @openai/codex --depth=0" },
   ]);
   assert.match(after["codex-cli"].remedy.prompt, /0\.150\.0 → 0\.160\.0/u);
   assert.deepEqual(after["hermes-cli"].remedy.commands.map((command) => command.command), ["git -C ~/.hermes/hermes-agent status --short", "hermes update"]);
@@ -188,4 +188,171 @@ test("start(): checks when the cache is older than a day, otherwise waits", LIMI
   assert.equal(network.calls.length, 6);
   const view = await service.view();
   assert.equal(view.nextCheckAt, new Date(Date.parse(view.checkedAt) + 24 * 3_600_000).toISOString());
+});
+
+// ---------------------------------------------------------------------------
+// One-click updates (v0.2 §2)
+
+const NEWER = {
+  "https://registry.npmjs.org/@anthropic-ai%2Fclaude-code/latest": { version: "2.1.300" },
+  "https://registry.npmjs.org/openclaw/latest": { version: "2026.10.1" },
+};
+
+/** The fixture plus OpenClaw (npm) and Hermes' own npm; Claude Code has a newer release. */
+async function oneClickSetup(context, options = {}) {
+  const network = fakeFetch();
+  const fetchImpl = async (url, init) => (NEWER[url] ? new Response(JSON.stringify(NEWER[url]), { status: 200 }) : network.fetchImpl(url, init));
+  const runs = [];
+  const run = async (file, args, runOptions) => {
+    runs.push({ file, args, ...runOptions });
+    if (args.includes("@openai/codex@latest")) {
+      await writeFile(path.join(runOptions.cwd, ".nvm", "versions", "node", "v24.0.0", "lib", "node_modules", "@openai", "codex", "package.json"), JSON.stringify({ name: "@openai/codex", version: "0.160.0" }));
+    }
+    return { exitCode: options.exitCode ?? 0, stdout: `changed 1 package in ${runOptions.cwd}/x\napi_key=ZZ9outputSecret01abcdef\n`, stderr: "" };
+  };
+  const launches = [];
+  const result = await setup(context, { fetchImpl, run, launch: async (bundleId) => launches.push(bundleId), platform: "darwin", pinnedDirectories: [], ...options.service });
+  const node = path.join(result.home, ".nvm", "versions", "node", "v24.0.0");
+  await writeFixtureFile(node, "lib/node_modules/openclaw/package.json", JSON.stringify({ name: "openclaw", version: "2026.9.8" }));
+  await writeFixtureFile(node, "lib/node_modules/openclaw/openclaw.mjs", "#!/usr/bin/env node\n");
+  await symlink(path.join(node, "lib", "node_modules", "openclaw", "openclaw.mjs"), path.join(node, "bin", "openclaw"));
+  await chmod(await writeFixtureFile(result.home, ".hermes/node/bin/npm", "#!/bin/sh\n"), 0o755);
+  return { ...result, runs, launches };
+}
+
+test("one-click update: verified official commands only, shown in the plan first", LIMIT, async (context) => {
+  const { home, service } = await oneClickSetup(context);
+  const view = rows(await service.check());
+  assert.deepEqual(view["codex-cli"].remedy.action, { kind: "agent-update", id: "codex-cli" });
+  assert.deepEqual(view["openclaw-cli"].remedy.action, { kind: "agent-update", id: "openclaw-cli" });
+  assert.deepEqual(view["claude-cli"].remedy.action, { kind: "agent-update", id: "claude-cli" });
+  assert.deepEqual(view["lark-cli-hermes"].remedy.action, { kind: "agent-update", id: "lark-cli-hermes" });
+  assert.equal(view["hermes-cli"].remedy.action, undefined, "Hermes: AI prompt only");
+  assert.equal(view["cursor-app"].remedy.action, undefined, "apps update themselves");
+  assert.deepEqual(view["cursor-app"].openApp, { bundleId: "com.todesktop.230313mzl4w4u92" });
+  assert.deepEqual(view["openclaw-cli"].remedy.commands.map((command) => command.command), ["openclaw update", "openclaw --version"]);
+  assert.match(view["lark-cli-hermes"].remedy.prompt, /Hermes 自带的 node/u);
+
+  const displays = {};
+  for (const id of ["codex-cli", "openclaw-cli", "claude-cli", "lark-cli-hermes"]) {
+    const plan = await service.plan({ id });
+    assert.match(plan.planId, /^[0-9a-f-]{36}$/u);
+    assert.deepEqual(plan.afterCheck, { kind: "version", id });
+    assert.ok(plan.effects.length >= 2 && Date.parse(plan.expiresAt) > Date.now());
+    displays[id] = plan.steps.map((step) => step.display);
+  }
+  assert.deepEqual(displays, {
+    "codex-cli": ["~/.nvm/versions/node/v24.0.0/bin/npm install -g --prefix ~/.nvm/versions/node/v24.0.0 @openai/codex@latest"],
+    "openclaw-cli": ["~/.nvm/versions/node/v24.0.0/bin/openclaw update"],
+    "claude-cli": ["~/.local/bin/claude update"],
+    "lark-cli-hermes": ["~/.hermes/node/bin/npm install -g --prefix ~/.hermes/node @larksuite/cli@latest"],
+  });
+  const refused = async (id) => service.plan({ id }).then(() => null, (error) => [error.statusCode, error.code]);
+  assert.deepEqual(await refused("hermes-cli"), [409, "refused"]);
+  assert.deepEqual(await refused("cursor-app"), [409, "refused"]);
+  assert.deepEqual(await refused("workbuddy-app"), [409, "check-required"]);
+  assert.deepEqual(await refused("nope"), [404, "not-found"]);
+  assert.deepEqual(await refused("../x"), [400, "invalid-request"]);
+  assert.equal(JSON.stringify(displays).includes(home), false);
+});
+
+test("one-click update: apply runs once without a shell, scrubs output and records history", LIMIT, async (context) => {
+  const { home, service, runs } = await oneClickSetup(context);
+  await service.check();
+  const plan = await service.plan({ id: "codex-cli" });
+  await assert.rejects(service.apply({ planId: plan.planId }), (error) => error.code === "confirm-required");
+  const result = await service.apply({ planId: plan.planId, confirm: true });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.version, { before: "0.150.0", after: "0.160.0" });
+  assert.equal(runs.length, 1);
+  // The npm and prefix that own this copy (real paths: /private/var/… for a /var/… home).
+  const node = await realpath(path.join(home, ".nvm", "versions", "node", "v24.0.0"));
+  assert.deepEqual([runs[0].file, runs[0].args], [path.join(node, "bin", "npm"), ["install", "-g", "--prefix", node, "@openai/codex@latest"]]);
+  assert.deepEqual(Object.keys(runs[0].env).sort(), ["HOME", "LANG", "PATH"], "no inherited environment");
+  assert.ok(runs[0].env.PATH.split(path.delimiter).includes(path.join(node, "bin")), "npm finds its own node");
+  assert.deepEqual([runs[0].cwd, runs[0].timeoutMs], [home, 300_000]);
+  assert.doesNotMatch(JSON.stringify(result), /ZZ9/u);
+  assert.equal(JSON.stringify(result).includes(home), false);
+  assert.match(result.steps[0].output, /~\/x/u);
+  const history = (await readFile(path.join(home, ".agent-skill-manager", "history.jsonl"), "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual([history[0].type, history[0].agentId, history[0].restorable, history[0].ok], ["agent-update", "codex", false, true]);
+  assert.doesNotMatch(JSON.stringify(history), /ZZ9/u);
+  await assert.rejects(service.apply({ planId: plan.planId, confirm: true }), (error) => error.code === "plan-not-found");
+});
+
+test("one-click update: failures stop, offline and pinned folders refuse, apps open by bundle id", LIMIT, async (context) => {
+  const failing = await oneClickSetup(context, { exitCode: 1 });
+  await failing.service.check();
+  const failed = await failing.service.apply({ planId: (await failing.service.plan({ id: "openclaw-cli" })).planId, confirm: true });
+  assert.deepEqual([failed.ok, failed.steps[0].exitCode, failed.version.after], [false, 1, "2026.9.8"]);
+
+  // A plan made online, applied by an offline service: nothing runs.
+  const online = await oneClickSetup(context);
+  await online.service.check();
+  const offline = createAgentVersionService({
+    homeDirectory: online.home,
+    stateDirectory: path.join(online.home, ".agent-skill-manager"),
+    applicationDirectories: [path.join(online.home, "Applications")],
+    searchDirectories: [{ directory: path.join(online.home, ".nvm", "versions", "node", "v24.0.0", "bin") }, { directory: path.join(online.home, ".local", "bin") }],
+    offline: true,
+    pinnedDirectories: [],
+    run: async () => assert.fail("must not run offline"),
+  });
+  const offlinePlan = await offline.plan({ id: "claude-cli" });
+  await assert.rejects(offline.apply({ planId: offlinePlan.planId, confirm: true }), (error) => error.code === "updates-offline");
+
+  const pinned = await oneClickSetup(context, { service: { pinnedDirectories: [path.join(tmpdir(), "elsewhere")] } });
+  await pinned.service.check();
+  await assert.rejects(pinned.service.plan({ id: "codex-cli" }), (error) => [error.statusCode, error.code].join() === "403,command-not-allowed");
+
+  assert.deepEqual(await online.service.openApp({ id: "cursor-app" }), { opened: true, bundleId: "com.todesktop.230313mzl4w4u92" });
+  assert.deepEqual(online.launches, ["com.todesktop.230313mzl4w4u92"]);
+  await assert.rejects(online.service.openApp({ id: "codex-cli" }), (error) => error.code === "refused");
+  const sandboxed = createAgentVersionService({ homeDirectory: online.home, stateDirectory: path.join(online.home, ".agent-skill-manager"), applicationDirectories: [path.join(online.home, "Applications")], searchDirectories: [], platform: "darwin", pinnedDirectories: ["/nowhere"] });
+  await assert.rejects(sandboxed.openApp({ id: "cursor-app" }), (error) => error.code === "command-not-allowed");
+});
+
+test("two copies of Claude Code: both listed, the first on the PATH is active", LIMIT, async (context) => {
+  const home = await mkdtemp(path.join(tmpdir(), "agent-versions-claude-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  const node = path.join(home, ".nvm", "versions", "node", "v24.0.0");
+  await writeFixtureFile(node, "lib/node_modules/@anthropic-ai/claude-code/package.json", JSON.stringify({ name: "@anthropic-ai/claude-code", version: "2.1.250" }));
+  await writeFixtureFile(node, "lib/node_modules/@anthropic-ai/claude-code/cli.js", "#!/usr/bin/env node\n");
+  await mkdir(path.join(node, "bin"), { recursive: true });
+  await symlink(path.join(node, "lib", "node_modules", "@anthropic-ai", "claude-code", "cli.js"), path.join(node, "bin", "claude"));
+  await writeFixtureFile(home, ".local/share/claude/versions/2.1.283", "binary");
+  await mkdir(path.join(home, ".local", "bin"), { recursive: true });
+  await symlink(path.join(home, ".local", "share", "claude", "versions", "2.1.283"), path.join(home, ".local", "bin", "claude"));
+  const service = createAgentVersionService({
+    homeDirectory: home,
+    stateDirectory: path.join(home, ".agent-skill-manager"),
+    applicationDirectories: [],
+    searchDirectories: [{ directory: path.join(home, ".local", "bin") }, { directory: path.join(node, "bin") }],
+    offline: true,
+  });
+  const claude = (await service.view()).agents.filter((row) => row.agentId === "claude");
+  assert.deepEqual(
+    claude.map((row) => [row.id, row.name, row.installed.source, row.installed.version, row.active]),
+    [
+      ["claude-cli", "Claude Code（原生安装）", "cli", "2.1.283", true],
+      ["claude-cli-2", "Claude Code（npm）", "npm", "2.1.250", false],
+    ],
+  );
+});
+
+test("Hermes: the installed version in the latest tag's scheme (baseVersion for v0.22+, release date before)", LIMIT, async (context) => {
+  const semverFeed = fakeFetch();
+  const semver = await setup(context, {
+    fetchImpl: async (url, init) =>
+      url.endsWith("/hermes-agent/releases/latest") ? new Response(JSON.stringify({ tag_name: "v0.22.5", published_at: "2026-10-23T05:28:45Z" }), { status: 200 }) : semverFeed.fetchImpl(url, init),
+  });
+  await writeFixtureFile(semver.home, ".hermes/hermes-agent/install-stamp.json", JSON.stringify({ baseVersion: "0.21.5" }));
+  assert.equal(rows(await semver.service.view())["hermes-cli"].installed.version, "0.21.5", "before a check: baseVersion");
+  const checked = rows(await semver.service.check())["hermes-cli"];
+  assert.deepEqual([checked.installed.version, checked.latest.version, checked.status], ["0.21.5", "0.22.5", "update-available"]);
+
+  const calendar = await setup(context);
+  await writeFixtureFile(calendar.home, ".hermes/hermes-agent/install-stamp.json", JSON.stringify({ baseVersion: "0.21.5" }));
+  const old = rows(await calendar.service.check())["hermes-cli"];
+  assert.deepEqual([old.installed.version, old.latest.version, old.status], ["2026.9.1", "2026.9.24", "update-available"]);
 });

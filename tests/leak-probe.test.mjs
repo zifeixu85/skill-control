@@ -176,6 +176,15 @@ test("no planted Hermes, OpenClaw, QClaw or LumiClaw secret appears in any local
   const checked = await get("agent-versions:check", "/api/agent-versions/check", { method: "POST", body: "{}" });
   assert.equal(checked.status, 200);
   assert.equal((await request("/api/agent-versions/check", { method: "POST", body: "{}", headers: { "Sec-Fetch-Site": "cross-site" } })).status, 403);
+  // v0.2: the secrets inventory sees these products' planted credentials by key name only;
+  // discovery, totals, the CLI inventory and update plans carry no values or home paths.
+  const secrets = JSON.parse((await get("secrets", "/api/secrets")).body);
+  assert.ok(secrets.items.some((item) => item.agents.includes("hermes")) && secrets.items.some((item) => item.agents.includes("openclaw")) && secrets.items.some((item) => item.agents.includes("office-raccoon")));
+  await get("secrets:again", "/api/secrets");
+  await get("discover", "/api/agents/discover");
+  await get("usage:totals", "/api/usage/totals");
+  await get("cli-tools", "/api/cli-tools");
+  for (const row of versions.agents) await get(`versions:plan:${row.id}`, "/api/agent-versions/plan", { method: "POST", body: JSON.stringify({ id: row.id }) });
   const health = JSON.parse((await get("health", "/api/health-report?force=1")).body);
   assert.ok(health.findings.every((finding) => typeof finding.remedy?.prompt === "string" && finding.remedy.prompt.length <= 1_500));
   assert.equal(typeof health.remedyAll.prompt, "string");

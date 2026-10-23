@@ -72,16 +72,36 @@ confirmation, and replacements are backed up first.
 管理服务允许的网页来源限制为当前界面来源，并通过隔离的 preload 把实际服务地址
 传给界面。
 
-安装依赖时，npm 会按照你的 npm 配置访问包注册表。访问 GitHub、下载 Release 或
-检查未来版本更新也可能产生由相应平台处理的网络请求；这些行为与核心本地 Skill
-扫描不同。
+安装依赖时，npm 会按照你的 npm 配置访问包注册表。除此之外，Skill Control 只在以下
+情况联网，且都只读取公开信息、不发送技能内容或本机路径：
 
-In source mode, the UI communicates with a loopback-only local service. npm
-dependency installation, visiting GitHub, downloading a release, or a future
-update check may make network requests governed by the corresponding provider;
-these are separate from local Skill scanning. Packaged desktop mode also uses
-loopback-only UI and manager services, automatically chooses a free local port
-when needed, and restricts the manager's allowed origin to the active local UI.
+- **应用更新检查**（桌面版）：启动后（距上次检查超过 24 小时时）、之后每天一次或手动
+  检查时，请求 `api.github.com` 上本项目的最新 Release；有新版本并由你点击下载时，
+  从 `github.com` 及 GitHub 的下载域名获取更新清单和安装包。请求头只包含应用版本、
+  平台和架构。检查结果保存在桌面应用的用户数据目录（`app-update.json`），下载的
+  安装包放在系统临时目录，安装或失败后删除；
+- **Agent 版本检查**：每天一次，读取 npm registry、GitHub 和各产品自己的更新源上的
+  最新版本号；
+- **技能与插件更新检测**：按技能和插件的来源请求 GitHub、npm registry 等已登记的主机；
+  只有你在设置中开启时才会读取 `gh auth token`，并且只发给 `api.github.com`；
+- **一键更新**：你确认后，由该命令行工具自己的官方更新命令联网。
+
+设置环境变量 `SKILL_MANAGER_UPDATES_OFFLINE=1` 会关闭以上全部检查（应用更新、Agent
+版本和技能更新），也不会执行会联网的更新命令。从源码运行时不检查应用更新。
+
+In source mode, the UI communicates with a loopback-only local service. Besides
+npm installing dependencies, Skill Control makes network requests only for: app
+update checks in the desktop build (this repository's latest release on
+`api.github.com`; the manifest and installer from `github.com` and GitHub's
+download hosts when you download an update; the request carries only the app
+version, platform and architecture), daily Agent version checks (npm registry,
+GitHub and each product's own update source), Skill and plugin update detection
+(listed hosts only; `gh auth token` is read only when you enable it and is sent
+only to `api.github.com`), and one-click updates you confirm. No Skill content or
+local path is sent. `SKILL_MANAGER_UPDATES_OFFLINE=1` turns all of these off.
+Packaged desktop mode also uses loopback-only UI and manager services,
+automatically chooses a free local port when needed, and restricts the manager's
+allowed origin to the active local UI.
 
 ## 保留与删除 / Retention and deletion
 
@@ -114,9 +134,9 @@ private Skill content, access tokens, and other identifying information.
 
 ## 变更 / Changes
 
-如果未来加入可选遥测、在线 Skill 目录或自动更新网络请求，我们会在合并前更新本说明，
+如果未来加入可选遥测、在线 Skill 目录或新的联网功能，我们会在合并前更新本说明，
 并在相应功能中提供清楚的告知和选择。
 
-If future versions add optional telemetry, an online Skill catalog, or update
-network requests, this notice will be updated before release and the feature
+If future versions add optional telemetry, an online Skill catalog, or other
+network features, this notice will be updated before release and the feature
 will provide clear disclosure and choice.

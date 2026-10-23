@@ -300,6 +300,80 @@ export function usageSummary(index, { days = 30, now = Date.now() } = {}) {
   };
 }
 
+/**
+ * Sort keys from the usage index for every skill, by lower-case name and by the part after
+ * "plugin:": { lastUsedAt (day), uses30d, usesAll } over all agents.
+ */
+export function skillUsageStats(index, { now = Date.now() } = {}) {
+  const cutoff = dayKey(now - 29 * 86_400_000);
+  const stats = new Map();
+  for (const skills of skillsByAgent(index, (day) => typeof day === "string").values()) {
+    for (const [name, row] of skills) {
+      for (const key of new Set([name.toLowerCase(), name.toLowerCase().split(":").at(-1)])) {
+        const entry = stats.get(key) || { lastUsedAt: null, uses30d: 0, usesAll: 0 };
+        for (const [day, count] of row.days) {
+          entry.usesAll += count;
+          if (day >= cutoff) entry.uses30d += count;
+          if (count > 0 && (!entry.lastUsedAt || day > entry.lastUsedAt)) entry.lastUsedAt = day;
+        }
+        stats.set(key, entry);
+      }
+    }
+  }
+  return stats;
+}
+
+const TOTAL_WINDOWS = [
+  ["today", 1, "今天"],
+  ["7", 7, "近 7 天"],
+  ["30", 30, "近 30 天"],
+  ["90", 90, "近 90 天"],
+  ["all", null, "全部"],
+];
+
+/** One window of GET /api/usage/totals: every agent added up, plus each agent's share. */
+function windowTotals(index, { id, days, label, now }) {
+  const dates = windowDays(days, now, index);
+  const inWindow = windowFilter(dates);
+  const { daily, windowSessions } = dailyByAgent(index, inWindow);
+  const costs = costIndex(index, inWindow);
+  const tokens = emptyTokens();
+  const activeDays = new Set();
+  const byAgent = [];
+  for (const agentId of [...new Set([...daily.keys(), ...costs.keys()])]) {
+    const agentTokens = emptyTokens();
+    for (const [day, row] of daily.get(agentId) || []) {
+      for (const field of FIELDS) agentTokens[field] += row.tokens[field];
+      if (row.started || row.tokens.total) activeDays.add(day);
+    }
+    for (const field of FIELDS) tokens[field] += agentTokens[field];
+    const costUsd = costs.get(agentId)?.costUsd || 0;
+    if (agentTokens.total || costUsd || windowSessions.get(agentId)) byAgent.push({ agentId, tokens: agentTokens, costUsd, sessions: windowSessions.get(agentId) || 0 });
+  }
+  byAgent.sort((left, right) => right.costUsd - left.costUsd || right.tokens.total - left.tokens.total || left.agentId.localeCompare(right.agentId));
+  return {
+    id,
+    label,
+    windowDays: days,
+    from: dates[0],
+    to: dates.at(-1),
+    tokens,
+    ...sumCosts([...costs.values()]),
+    sessions: [...windowSessions.values()].reduce((sum, value) => sum + value, 0),
+    activeDays: activeDays.size,
+    byAgent,
+  };
+}
+
+/** GET /api/usage/totals: today, 7, 30, 90 days and all time in one response. */
+export function usageTotals(index, { now = Date.now() } = {}) {
+  return {
+    generatedAt: new Date(now).toISOString(),
+    index: indexStatus(index),
+    windows: TOTAL_WINDOWS.map(([id, days, label]) => windowTotals(index, { id, days, label, now })),
+  };
+}
+
 /** GET /api/usage/projects */
 export function usageProjects(index, { days = 30, now = Date.now() } = {}) {
   const dates = windowDays(days, now, index);

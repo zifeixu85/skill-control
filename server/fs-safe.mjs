@@ -8,6 +8,12 @@ import { scrubTokens } from "./redact.mjs";
 
 export { MASK, scrubTokens } from "./redact.mjs";
 
+/** When a file or folder appeared: birth time where the file system keeps one, else its ctime. */
+export const createdAtOf = (info) => {
+  const ms = info && Number.isFinite(info.birthtimeMs) && info.birthtimeMs > 0 ? info.birthtimeMs : info?.ctimeMs;
+  return Number.isFinite(ms) && ms > 0 ? new Date(ms).toISOString() : null;
+};
+
 export const object = (value) =>
   value && typeof value === "object" && !Array.isArray(value) ? value : {};
 

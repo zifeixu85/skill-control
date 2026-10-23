@@ -11,7 +11,7 @@ terms.
 
 直接和传递依赖记录在 `package.json` 与 `package-lock.json` 中，包括但不限于
 Electron、React、Vinext、Vite、Tailwind CSS、fflate、smol-toml、js-yaml、json5、
-react-markdown 和 remark-gfm。准确版本以对应 Release 的 lockfile 和构建记录为准。
+electron-updater、react-markdown 和 remark-gfm。准确版本以对应 Release 的 lockfile 和构建记录为准。
 
 Direct and transitive JavaScript dependencies are recorded in `package.json`
 and `package-lock.json`. The lockfile and build record for a release are the
@@ -27,6 +27,33 @@ resources/licenses/json5-LICENSE
 resources/licenses/argparse-LICENSE
 resources/licenses/bricolage-grotesque-OFL.txt
 ```
+
+Windows 与 Linux 版的应用内更新使用 electron-updater（macOS 版不加载它）。它和它的运行时依赖
+随安装包分发，许可证副本位于：
+
+The Windows and Linux in-app updater uses electron-updater (the macOS build does
+not load it). It ships with its runtime dependencies; their licenses are kept in:
+
+```text
+resources/licenses/electron-updater-LICENSE        (MIT)
+resources/licenses/builder-util-runtime-LICENSE    (MIT)
+resources/licenses/debug-LICENSE                   (MIT)
+resources/licenses/ms-LICENSE                      (MIT)
+resources/licenses/sax-LICENSE                     (BlueOak-1.0.0)
+resources/licenses/fs-extra-LICENSE                (MIT)
+resources/licenses/graceful-fs-LICENSE             (ISC)
+resources/licenses/jsonfile-LICENSE                (MIT)
+resources/licenses/universalify-LICENSE            (MIT)
+resources/licenses/lodash.escaperegexp-LICENSE     (MIT)
+resources/licenses/lodash.isequal-LICENSE          (MIT)
+resources/licenses/tiny-typed-emitter-LICENSE      (MIT)
+resources/licenses/semver-LICENSE                  (ISC)
+```
+
+lazy-val（Vladimir Krivosheev）在 package.json 中声明 MIT 许可，但未随包附带许可证文件。
+
+lazy-val (Vladimir Krivosheev) declares the MIT license in its package.json but
+does not ship a license file.
 
 界面中的数字与标题字体 Bricolage Grotesque（Copyright 2022 The Bricolage Grotesque
 Project Authors）以 SIL Open Font License 1.1 授权，字体文件位于 `app/fonts/`，许可证

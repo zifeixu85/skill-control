@@ -20,12 +20,23 @@ credentials to open a Pull Request.
 2. 更新 `package.json` 版本号。
 3. 把 [CHANGELOG.md](../CHANGELOG.md) 中的候选条目整理到新版本，并填写
    `YYYY-MM-DD` 日期。
-4. 确认 [README.md](../README.md) 和 [README_EN.md](../README_EN.md)
+4. 写 `docs/releases/vX.Y.Z.md`（中文在前、英文在后）。要先以预发布形式公开时，在文件开头
+   加上 front matter：
+
+   ```markdown
+   ---
+   prerelease: true
+   ---
+   ```
+
+   Release workflow 会去掉 front matter，把正文作为 Release notes，并用 `--prerelease`
+   创建 Release。front matter 只接受 `prerelease: true | false`，拼错会让发布失败。
+5. 确认 [README.md](../README.md) 和 [README_EN.md](../README_EN.md)
    的平台支持、下载说明和已知限制一致。
-5. 审计 `package-lock.json` 和
+6. 审计 `package-lock.json` 和
    [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)，保留打包运行时要求的
    许可证文件。
-6. 从全新依赖安装开始执行质量门禁：
+7. 从全新依赖安装开始执行质量门禁：
 
 ```bash
 npm ci
@@ -35,8 +46,9 @@ npm run typecheck
 npm test
 ```
 
-7. 检查工作树中没有 `.env`、证书、真实 Skill、`~/.agent-skill-manager`
-   内容或其他本机数据。
+8. 检查工作树中没有 `.env`、证书、真实 Skill、`~/.agent-skill-manager`
+   内容或其他本机数据；对 `git ls-files` 做一次隐私扫描（个人绝对路径、邮箱、
+   令牌、内部主机名、真实姓名）。
 
 ## 2. 构建候选产物
 
@@ -71,6 +83,7 @@ npm test
 - [ ] 软链接模式的行为和说明一致；
 - [ ] 导出后的 `.skill` 可以重新导入；
 - [ ] 应用退出后，本地界面和管理端口被释放；
+- [ ] “设置 → 关于”能检查应用更新；离线模式下显示不检查；
 - [ ] 卸载行为与 Release notes 描述一致。
 
 测试请使用专门的临时 Agent 目录和虚构 Skill，避免污染个人环境。
@@ -80,6 +93,32 @@ npm test
 推荐流程是从通过全部门禁的提交推送 `vX.Y.Z` tag。Release workflow 会在每个
 目标操作系统和架构上构建并启动打包应用；所有冒烟测试通过后，才生成 SHA-256
 校验文件并公开 Release。任一平台失败时不会进入发布 job。
+
+每个平台除了安装包，还会上传应用内更新需要的文件：
+
+| 文件 | 来源 | 用途 |
+| --- | --- | --- |
+| `latest-mac.yml` | arm64 与 x64 两次构建各写一份，`update-manifests` job 用 `scripts/merge-mac-update-manifests.mjs` 合并成一份 | macOS 自写更新器读取 zip 与 sha512 |
+| `latest.yml` | Windows NSIS 构建 | electron-updater（Windows 安装版） |
+| `latest-linux.yml` | Linux AppImage 构建 | electron-updater（AppImage） |
+| `*.blockmap` | 各平台构建 | electron-updater 的差分下载 |
+
+构建命令始终带 `--publish never`：`electron-builder.yml` 里的 `publish`（GitHub）只用来
+生成这些文件，上传和创建 Release 都由 workflow 的 `publish` job 完成，只有这个 job
+拥有 `contents: write` 权限。
+
+### 预发布与转为正式版本
+
+`docs/releases/vX.Y.Z.md` 带 `prerelease: true` 时，Release 以预发布形式创建。应用内
+更新只读取 GitHub 的 `releases/latest`，不会把预发布推送给已安装的用户；验证无误后，
+不需要重新构建，直接转为正式版本：
+
+```bash
+gh release edit vX.Y.Z --prerelease=false --latest
+```
+
+之后可以把 notes 文件里的 front matter 改为 `prerelease: false`（或删除），保持仓库与
+Release 一致。
 
 需要手工发布时，先创建 Draft Release，上传每个已验证平台的产物，从 Draft
 重新下载并复验后再公开。无论自动还是手工流程，都应：

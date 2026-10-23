@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { loadUsageIndex, runUsageIndex, USAGE_INDEX_VERSION } from "../server/usage-index.mjs";
-import { clampDays, usageForAgent, usageForSkill, usageModels, usageProjects, usageSummary } from "../server/usage-query.mjs";
+import { clampDays, skillUsageStats, usageForAgent, usageForSkill, usageModels, usageProjects, usageSummary, usageTotals } from "../server/usage-query.mjs";
 import { dayKey } from "../server/usage-sources.mjs";
 import { writeFixtureFile } from "./fixtures/smartorder.mjs";
 
@@ -48,4 +48,38 @@ test("all time keeps days older than 400 and labels the window", async (context)
   assert.equal(usageForSkill(index, "pdf", { days: null }).agents[0].total, 2);
   assert.equal(usageProjects(index, { days: null }).projects[0].tokens, 220);
   assert.equal(usageForAgent(index, "claude", { days: null }).totals.sessions, 1);
+});
+
+test("totals: today, 7, 30, 90 days and all time in one response; skill stats for sorting", async (context) => {
+  const home = await mkdtemp(path.join(tmpdir(), "usage-totals-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  const assistant = (id, days, skill) => ({
+    type: "assistant",
+    timestamp: ago(days),
+    cwd: "/work/p",
+    message: { id, model: "claude-sonnet-5-5", usage: { input_tokens: 100, output_tokens: 10 }, content: skill ? [{ type: "tool_use", id: `t_${id}`, name: "Skill", input: { skill } }] : [] },
+  });
+  const sessions = [["a", 0, "pdf"], ["b", 5, "pdf"], ["c", 20, "plugin:xlsx"], ["d", 60, "pdf"], ["e", 500, null]];
+  for (const [id, days, skill] of sessions) await writeFixtureFile(path.join(home, ".claude", "projects", "-work-p"), `${id}.jsonl`, line(assistant(id, days, skill)));
+  const indexPath = path.join(home, "index.json");
+  await runUsageIndex({ homeDirectory: home, indexPath, budgetMs: 10_000 });
+  const index = await loadUsageIndex(indexPath);
+
+  const totals = usageTotals(index);
+  assert.deepEqual(totals.windows.map((window) => window.id), ["today", "7", "30", "90", "all"]);
+  assert.deepEqual(totals.windows.map((window) => window.windowDays), [1, 7, 30, 90, null]);
+  assert.deepEqual(totals.windows.map((window) => window.tokens.total), [110, 220, 330, 440, 550]);
+  assert.deepEqual(totals.windows.map((window) => window.sessions), [1, 2, 3, 4, 5]);
+  assert.deepEqual(totals.windows.map((window) => window.activeDays), [1, 2, 3, 4, 5]);
+  for (const window of totals.windows) {
+    assert.deepEqual(window.byAgent.map((row) => row.agentId), ["claude"]);
+    assert.ok(window.costUsd > 0 && typeof window.label === "string" && window.from <= window.to);
+    assert.ok(Math.abs(window.byAgent[0].costUsd - window.costUsd) < 1e-9);
+  }
+  assert.equal(totals.windows[4].from, dayKey(ago(500)));
+
+  const stats = skillUsageStats(index);
+  assert.deepEqual(stats.get("pdf"), { lastUsedAt: dayKey(Date.now()), uses30d: 2, usesAll: 3 });
+  assert.equal(stats.get("xlsx").uses30d, 1, "plugin:xlsx is also found as xlsx");
+  assert.equal(stats.get("plugin:xlsx").usesAll, 1);
 });
