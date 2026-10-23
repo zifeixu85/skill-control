@@ -116,6 +116,16 @@ export function UsageAgentCard({ usage, days, endDate }: { usage: UsageAgent; da
           <CostStat usage={usage} />
         )}
       </div>
+      {usage.notes.length ? (
+        <ul className="usage-notes" aria-label={`${name} 数据说明`}>
+          {usage.notes.map((note) => (
+            <li key={note} title={note}>
+              <InfoIcon aria-hidden="true" />
+              <span className="clamp-2">{note}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {points.length ? (
         <AreaChart
           label={`${name} · ${windowLabel(days)} · ${text.label}`}

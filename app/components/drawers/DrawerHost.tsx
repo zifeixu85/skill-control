@@ -10,6 +10,7 @@ import { RestoreDialog } from "./RestoreDialog";
 import { UpdateDrawer } from "./UpdateDrawer";
 import { ConnectorDrawer } from "./ConnectorDrawer";
 import { CliDrawer } from "./CliDrawer";
+import { DiscoveryDrawer } from "./DiscoveryDrawer";
 
 /** Drawers and dialogs that any page can open. Keyed by target so a new item starts fresh. */
 export function DrawerHost() {
@@ -23,6 +24,7 @@ export function DrawerHost() {
       {drawer?.kind === "update" ? <UpdateDrawer key={drawer.id} unitKey={drawer.id} onClose={closeDrawer} /> : null}
       {drawer?.kind === "connector" ? <ConnectorDrawer key={drawer.id} id={drawer.id} onClose={closeDrawer} /> : null}
       {drawer?.kind === "cli" ? <CliDrawer key={drawer.id} id={drawer.id} onClose={closeDrawer} /> : null}
+      {drawer?.kind === "discovery" ? <DiscoveryDrawer onClose={closeDrawer} /> : null}
       {importOpen ? <ImportDialog onClose={() => setImportOpen(false)} /> : null}
       {libraryRequest ? (
         <PlanReview

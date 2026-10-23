@@ -714,12 +714,28 @@ Hermes：静态解析的全部工具集（`enabled` 表示配置启用或被其�
 | Hermes `state.db` | `sessions` 表 token、`model`、`api_call_count` 与自报费用（只读、`query_only`）；`input_tokens` 已扣除缓存，`reasoning_tokens` 是 `output_tokens` 的子集（Hermes 源码 `cli.py` 标为 “Reasoning (subset)”） | `skills/.usage.json` 计数，每次运行的增量计入当天 | reported |
 | OpenClaw/QClaw `sessions.json` | 会话 token 与费用；有 `model`（及 `modelProvider`）时记模型 | 会话 JSONL 中工具调用读取的 SKILL.md | token reported，技能 inferred |
 | 办公小浣熊 `local-chat.sqlite3` | 每轮 `usage_metadata.token_usage`（无模型，不计价） | `skill_invocations` / `used_skill_codes` 按天计数 | reported |
+| Codex `~/.codex/state_<n>.sqlite` 的 `threads`（会话记录文件已删除、索引里也没有的线程） | 每个线程一个总数 `tokens_used`，按本机已索引会话中该模型（否则全部 Codex）的输入 / 输出 / 缓存读 / 缓存写比例拆分；没有可参考的会话时只计 tokens 不计价 | — | estimate |
 
 每轮索引有 3 秒预算，按修改时间从新到旧处理，每轮至少推进一个文件；服务在后台线程中连续分片执行直到
 完成，此后请求发现索引超过 60 秒未更新时再增量刷新。会话文件被产品删除后其汇总仍保留（保留 400 天）；
 文件被截短或头部变化时重新统计该文件。量级参考（示例：数千个会话文件、数十 GB）：首次索引在一分钟左右，
 增量刷新约 0.1 秒，索引文件为 MB 级；按官方价计算 30 天费用为数十毫秒。
 Codex 续接 / 压缩后的会话可能在第一条 `turn_context` 之前就有用量：先记为 `unknown`，拿到模型后移到该模型下。
+
+**Codex 数据库里的线程**。Codex 已把会话迁入 `state_<n>.sqlite`（取编号最大的一个），并删除旧的 rollout 文件。每轮索引在处理完
+会话记录文件后，只读 `threads` 的 `id`、`rollout_path`（文件名即会话记录的索引键）、`created_at(_ms)`、`updated_at(_ms)`、
+`model`、`cwd`（只取文件夹名）、`tokens_used`、`source`（只看是不是派生的子代理），以及 `thread_spawn_edges` 的子线程 id；
+从不读标题、首条消息、预览或 `thread_history` 的条目，最多 50,000 行。rollout 文件还在或索引里已有这个文件（包括已删除但保留了
+汇总的）的线程跳过，所以不会重复计算；记录每轮重建，之后被索引的 rollout 会取代对应记录。
+- 日期：用 `created_at`。在已索引的会话里，一个线程的 tokens 有 54% 落在创建当天、35% 落在最后更新当天，所以只能选一天时
+  创建日更接近；`updated_at` 记为结束日，用于“窗口内活跃的会话”。
+- 计价：basis 为 `estimate`，费用行带 `reason`（“Codex 已把会话迁入数据库，只剩总 tokens，按本机历史比例拆分估算”）；
+  价格档位按提示长度最小的一档。
+- 子代理线程（`thread_spawn_edges` 的子线程，或 `source.subagent.thread_spawn`）：它的 `tokens_used` 从父线程复制来的上下文
+  开始累计，数据库里没有可以拆出自身用量的字段（实测：与父线程相减、按创建时间插值都偏差数倍），所以只计会话、不计 tokens，
+  总数另存为 `i`（不计入任何合计）。
+- `/api/usage/summary`（每个 Agent）、`/api/usage/agent`、`/api/usage/totals`（`byAgent`）带 `notes: [{ kind: "codex-db-estimate",
+  text, sessions, tokens, spawnedSessions, uncountedTokens, unpricedTokens }]`，界面据此说明这部分是估算。
 
 **会话数 = 窗口内活跃的会话**（`server/usage-sessions.mjs`）：会话在某天开始、用了 token 或调用 / 读取了技能，就算
 那天活跃；窗口的 `sessions` 是至少活跃过一天的不同会话数，所以更早开始、仍在使用的长会话也算。子代理等嵌套

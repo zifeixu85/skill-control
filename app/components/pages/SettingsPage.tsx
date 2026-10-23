@@ -99,7 +99,7 @@ export function SettingsPage() {
             <SettingsNav current={current} onPick={showSection} />
             <div className="set-grid">
               <div className="set-group" id="set-group-agents" data-section="agents">
-                <NewAgentsNotice />
+                <NewAgentsNotice place="settings" />
                 <section className="set-block" aria-labelledby="set-primary">
                   <h2 id="set-primary">常用 Agent</h2>
                   <p>Skill Control 只按这几个 Agent 检查差异和多份副本。其他 Agent 照常显示，但不会提醒你安装。</p>

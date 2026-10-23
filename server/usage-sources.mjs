@@ -539,6 +539,79 @@ async function raccoonSessions(homeDirectory, warnings) {
   }
 }
 
+const CODEX_THREAD_LIMIT = 50_000;
+const CODEX_STATE_FILE = /^state_(\d{1,4})\.sqlite$/u;
+
+/** The newest ~/.codex/state_<n>.sqlite (Codex bumps the number when it migrates the schema). */
+async function codexStateFile(homeDirectory) {
+  const names = await readdir(path.join(homeDirectory, ".codex")).catch(() => []);
+  const newest = names
+    .map((name) => ({ name, version: Number(name.match(CODEX_STATE_FILE)?.[1]) }))
+    .filter((item) => Number.isFinite(item.version))
+    .sort((left, right) => right.version - left.version)[0];
+  return newest ? path.join(homeDirectory, ".codex", newest.name) : null;
+}
+
+/** A thread spawned by another one (a subagent): its tokens_used starts from the parent's context. */
+function spawnedThread(source) {
+  if (typeof source !== "string" || !source.startsWith("{")) return false;
+  try {
+    return Boolean(object(object(JSON.parse(source)).subagent).thread_spawn);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Codex threads from state_<n>.sqlite: Codex now keeps sessions in this database and deletes
+ * old rollout files. Only these columns are read: id, rollout_path (its file name is the
+ * index key of the transcript), created / updated times, model, cwd (folder name only),
+ * tokens_used (one total per thread) and source (only whether it is a spawned subagent);
+ * plus the child ids of thread_spawn_edges. Titles, first messages, previews and
+ * thread_history items are never read.
+ */
+async function codexThreads(homeDirectory, warnings) {
+  const file = await codexStateFile(homeDirectory);
+  const database = file ? await openDatabase(file) : null;
+  if (!database) return null;
+  try {
+    const columns = columnsOf(database, "threads");
+    if (!["id", "rollout_path", "created_at", "tokens_used"].every((name) => columns.has(name))) return null;
+    const pick = (name) => (columns.has(name) ? `"${name}"` : "NULL");
+    const children = new Set();
+    if (columnsOf(database, "thread_spawn_edges").has("child_thread_id")) {
+      for (const row of database.prepare(`SELECT child_thread_id AS id FROM thread_spawn_edges LIMIT ${CODEX_THREAD_LIMIT}`).all()) children.add(String(row.id));
+    }
+    const rows = database
+      .prepare(
+        `SELECT id, rollout_path AS rollout, created_at AS created, ${pick("created_at_ms")} AS createdMs, ${pick("updated_at")} AS updated,
+         ${pick("updated_at_ms")} AS updatedMs, ${pick("model")} AS model, ${pick("cwd")} AS cwd, tokens_used AS tokens, ${pick("source")} AS source
+         FROM threads ORDER BY created_at DESC LIMIT ${CODEX_THREAD_LIMIT}`,
+      )
+      .all();
+    return rows.map((row) => {
+      const created = timeMs(Number(row.createdMs)) || timeMs(Number(row.created));
+      const updated = timeMs(Number(row.updatedMs)) || timeMs(Number(row.updated));
+      return {
+        key: hashKey(`codex-thread:${row.id}`),
+        rolloutKey: typeof row.rollout === "string" && row.rollout ? `codex|${hashKey(path.basename(row.rollout))}` : null,
+        day: dayKey(created),
+        endDay: updated ? dayKey(updated) : null,
+        at: created,
+        model: row.model === null || row.model === undefined ? null : modelKey(row.model),
+        total: count(row.tokens),
+        spawned: children.has(String(row.id)) || spawnedThread(row.source),
+        project: projectName(row.cwd),
+      };
+    });
+  } catch {
+    warnings.push("Codex 的 state 数据库结构无法识别，已跳过数据库里的会话。");
+    return null;
+  } finally {
+    database.close();
+  }
+}
+
 /** Skill usage the products record themselves (counts and dates only). */
 async function reportedSkills(homeDirectory) {
   const hermes = await readBoundedJson(path.join(hermesHomeFor(homeDirectory), "skills", ".usage.json"), 4_000_000);
@@ -567,17 +640,19 @@ async function reportedSkills(homeDirectory) {
 
 export async function readSnapshots(homeDirectory) {
   const warnings = [];
-  const [hermes, workbuddyCredits, openclaw, qclaw, reported, raccoon] = await Promise.all([
+  const [hermes, workbuddyCredits, openclaw, qclaw, reported, raccoon, codex] = await Promise.all([
     hermesSessions(homeDirectory, warnings),
     workBuddyCredits(homeDirectory, warnings),
     openClawSessions("openclaw", homeDirectory),
     openClawSessions("qclaw", homeDirectory),
     reportedSkills(homeDirectory),
     raccoonSessions(homeDirectory, warnings),
+    codexThreads(homeDirectory, warnings),
   ]);
   return {
     sessions: { hermes, openclaw, qclaw, "office-raccoon": raccoon?.records || null },
     workbuddyCredits,
+    codexThreads: codex,
     reported: { ...reported, "office-raccoon": raccoon?.skills || null },
     warnings,
   };

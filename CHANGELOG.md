@@ -247,6 +247,15 @@ on Keep a Changelog and the project follows Semantic Versioning.
   and an AI-related flag with reasons. Backups (`*.bak`, `*.old`) are hidden. The lark-cli,
   gh and uv cards stay as deep views at the top.
 
+- Codex sessions that now exist only in Codex's `state_<n>.sqlite` (their rollout files are
+  deleted and the index never saw them) are counted from the `threads` table: one record per
+  thread on its creation day, with `tokens_used` split into input / output / cache by this
+  machine's observed Codex mix per model and priced as an estimate with its reason. Spawned
+  subagent threads count as sessions only (their totals include the parent's context).
+  Usage summaries, agent views and totals carry a `notes` entry for the UI. Only counts,
+  times, model, folder name and the subagent flag are read; titles, messages, previews and
+  thread history items never are.
+
 ### Changed
 
 - Hermes Agent versions are compared in the scheme of its latest GitHub release tag:

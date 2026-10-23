@@ -1,15 +1,28 @@
 "use client";
 
 import { useState } from "react";
+import { usePersistent } from "../../../hooks/usePersistent";
 import { invalidateResources, isUnsupported, useResource } from "../../../hooks/useResource";
 import { MAX_PRIMARY_AGENTS } from "../../../lib/agents";
 import { api, errorMessage } from "../../../lib/api";
-import { customAgentFrom, newAgents, openCandidates, type DiscoveryCandidate } from "../../../lib/discovery";
+import {
+  allDismissed,
+  customAgentFrom,
+  discoveryKeys,
+  newAgents,
+  openCandidates,
+  parseDismissed,
+  serializeDismissed,
+  sortCandidates,
+  type DiscoveryCandidate,
+} from "../../../lib/discovery";
 import { joinNames } from "../../../lib/format";
+import { persistentStore } from "../../../lib/storage";
 import type { ScanAgent } from "../../../lib/types";
 import { DATA_KEYS, useData } from "../../providers/DataProvider";
 import { useNav } from "../../providers/NavProvider";
 import { useToast } from "../../providers/ToastProvider";
+import { CloseIcon } from "../../icons";
 import { AgentAvatar, LetterLogo } from "../../ui/Avatar";
 
 export const DISCOVER_KEY = "agents:discover";
@@ -109,43 +122,129 @@ function CandidateRow({ candidate, busy, run }: { candidate: DiscoveryCandidate;
   );
 }
 
-/** 首页 / 设置: "发现新 Agent：X" — detected-but-new Agents and folders that look like one. */
-export function NewAgentsNotice() {
+type Run = (label: string, task: () => Promise<unknown>) => void;
+
+/** Everything new, in display order: detected Agents first, then folders by skill count. */
+export function useDiscovery() {
   const { agents, config } = useData();
   const toast = useToast();
   const discovered = useResource(DISCOVER_KEY, () => api.discoverAgents());
   const [busy, setBusy] = useState(false);
-  const acknowledge = useAcknowledge();
   const fresh = newAgents(agents);
-  const candidates = isUnsupported(discovered.error) ? [] : openCandidates(discovered.data || [], config.data);
-  if (!fresh.length && !candidates.length) return null;
-  const run = (label: string, task: () => Promise<unknown>) => {
+  const candidates = sortCandidates(isUnsupported(discovered.error) ? [] : openCandidates(discovered.data || [], config.data));
+  const run: Run = (label, task) => {
     setBusy(true);
     void task()
       .then(() => toast.show(label))
       .catch((error) => toast.show(errorMessage(error, "保存失败。"), { tone: "error" }))
       .finally(() => setBusy(false));
   };
+  const keys = discoveryKeys(fresh, candidates);
   const names = [...fresh.map((agent) => agent.name), ...candidates.map((candidate) => candidate.guessName)];
+  return { fresh, candidates, keys, names, total: fresh.length + candidates.length, busy, run };
+}
+
+export function DiscoveryRows({ fresh, candidates, busy, run }: { fresh: ScanAgent[]; candidates: DiscoveryCandidate[]; busy: boolean; run: Run }) {
   return (
-    <section className="notice-card discovery" aria-labelledby="new-agents-title" aria-busy={busy || undefined}>
+    <ul>
+      {fresh.map((agent) => (
+        <NewAgentRow key={agent.id} agent={agent} busy={busy} run={run} />
+      ))}
+      {candidates.map((candidate) => (
+        <CandidateRow key={candidate.id} candidate={candidate} busy={busy} run={run} />
+      ))}
+    </ul>
+  );
+}
+
+/** "全部忽略": mark every detected Agent as known and ignore every folder, in two writes. */
+export function useIgnoreAll() {
+  const { config, updateConfig } = useData();
+  const acknowledge = useAcknowledge();
+  return async (fresh: ScanAgent[], candidates: DiscoveryCandidate[]) => {
+    if (fresh.length) await acknowledge(fresh.map((agent) => agent.id));
+    if (candidates.length) {
+      await updateConfig({ ignoredDiscoveries: [...new Set([...(config.data?.ignoredDiscoveries || []), ...candidates.map((candidate) => candidate.path)])] });
+      await invalidateResources(DISCOVER_KEY);
+    }
+  };
+}
+
+const MAX_ROWS = 3;
+
+/**
+ * 首页 / 设置: "发现新 Agent：X、Y 等 N 个" — one summary line and at most 3 rows; the full list
+ * opens in a side panel. On 首页 the × hides the card until something new shows up.
+ */
+export function NewAgentsNotice({ place = "home" }: { place?: "home" | "settings" }) {
+  const { openDrawer } = useNav();
+  const { fresh, candidates, keys, names, total, busy, run } = useDiscovery();
+  const [dismissedText, setDismissed] = usePersistent(dismissedStore);
+  const [confirming, setConfirming] = useState(false);
+  const ignoreAll = useIgnoreAll();
+  if (!total) return null;
+  const dismissed = parseDismissed(dismissedText);
+  if (place === "home" && allDismissed(keys, dismissed)) return null;
+  const shownFresh = fresh.slice(0, MAX_ROWS);
+  const shownCandidates = candidates.slice(0, Math.max(0, MAX_ROWS - shownFresh.length));
+  const summary = [fresh.length ? `${fresh.length} 个新检测到的 Agent` : "", candidates.length ? `${candidates.length} 个像 Agent 的文件夹` : ""].filter(Boolean).join("，");
+  return (
+    <section className="notice-card discovery" aria-labelledby={`new-agents-title-${place}`} aria-busy={busy || undefined}>
       <header>
-        <b id="new-agents-title">发现新 Agent：{joinNames(names.slice(0, 3))}{names.length > 3 ? ` 等 ${names.length} 个` : ""}</b>
-        {fresh.length > 1 ? (
-          <button type="button" className="btn sm ghost" disabled={busy} onClick={() => run("已全部标为已知", () => acknowledge(fresh.map((agent) => agent.id)))}>
-            全部知道了
+        <b id={`new-agents-title-${place}`} className="clamp-1">
+          发现新 Agent：{joinNames(names.slice(0, 3))}
+          {names.length > 3 ? ` 等 ${names.length} 个` : ""}
+        </b>
+        {place === "home" ? (
+          <button
+            type="button"
+            className="btn ghost sm icon-only"
+            aria-label="先不提示，有新的再说"
+            title="先不提示，有新的再说"
+            onClick={() => setDismissed(serializeDismissed(new Set([...dismissed, ...keys])))}
+          >
+            <CloseIcon />
           </button>
         ) : null}
       </header>
-      <p>新装的 Agent 不会自动变成常用；设为常用后，Skill Control 才会按它检查差异和多份副本。</p>
-      <ul>
-        {fresh.map((agent) => (
-          <NewAgentRow key={agent.id} agent={agent} busy={busy} run={run} />
-        ))}
-        {candidates.map((candidate) => (
-          <CandidateRow key={candidate.id} candidate={candidate} busy={busy} run={run} />
-        ))}
-      </ul>
+      <p>{summary}。新装的 Agent 不会自动变成常用，设为常用后才会按它检查差异和多份副本。</p>
+      <DiscoveryRows fresh={shownFresh} candidates={shownCandidates} busy={busy} run={run} />
+      <footer className="discovery-foot">
+        {confirming ? (
+          <>
+            <span className="discovery-confirm">
+              把这 {total} 个都标为已知或忽略？以后不再提示它们；已经装上的 Agent 照常显示在侧栏里。
+            </span>
+            <button type="button" className="btn sm ghost" disabled={busy} onClick={() => setConfirming(false)}>
+              取消
+            </button>
+            <button
+              type="button"
+              className="btn sm danger"
+              disabled={busy}
+              onClick={() => {
+                setConfirming(false);
+                run(`已忽略 ${total} 个`, () => ignoreAll(fresh, candidates));
+              }}
+            >
+              确认全部忽略
+            </button>
+          </>
+        ) : (
+          <>
+            {total > shownFresh.length + shownCandidates.length ? (
+              <button type="button" className="btn sm" data-detail-trigger="" onClick={() => openDrawer({ kind: "discovery", id: "all" })}>
+                查看全部 {total} 个
+              </button>
+            ) : null}
+            <button type="button" className="btn sm ghost" disabled={busy} onClick={() => setConfirming(true)}>
+              全部忽略
+            </button>
+          </>
+        )}
+      </footer>
     </section>
   );
 }
+
+const dismissedStore = persistentStore<string>("discovery-dismissed", "", (value) => value.length < 40_000);

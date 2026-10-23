@@ -257,6 +257,86 @@ function applySnapshots(index, snapshots) {
   }
 }
 
+/**
+ * This machine's Codex token mix, per model and overall: [input, output, cacheRead,
+ * cacheWrite] summed from indexed rollouts (only token counts; nothing else is read).
+ */
+export function codexTokenMix(index) {
+  const byModel = new Map();
+  const overall = [0, 0, 0, 0];
+  for (const entry of Object.values(index.files)) {
+    if (entry.a !== "codex") continue;
+    for (const [model, byDay] of Object.entries(entry.m || {})) {
+      const sum = byModel.get(model) || [0, 0, 0, 0];
+      for (const byBucket of Object.values(byDay)) {
+        for (const row of Object.values(byBucket)) {
+          for (let index = 0; index < 4; index += 1) {
+            sum[index] += row[index] || 0;
+            overall[index] += row[index] || 0;
+          }
+        }
+      }
+      byModel.set(model, sum);
+    }
+  }
+  const usable = (row) => row.reduce((total, value) => total + value, 0) > 0;
+  return { byModel: new Map([...byModel].filter(([model, row]) => model !== "unknown" && usable(row))), overall: usable(overall) ? overall : null };
+}
+
+/** `total` split by a [input, output, cacheRead, cacheWrite] mix; the parts add up to `total`. */
+export function splitByMix(total, mix) {
+  const sum = mix.reduce((acc, value) => acc + value, 0);
+  const parts = mix.map((value) => Math.floor((total * value) / sum));
+  const largest = mix.indexOf(Math.max(...mix));
+  parts[largest] += total - parts.reduce((acc, value) => acc + value, 0);
+  return parts;
+}
+
+/**
+ * Codex threads whose rollout file is gone and that the index never saw (a fresh index, or
+ * files deleted before this version): one record per thread, rebuilt every run so the split
+ * follows the latest mix and a rollout that gets indexed later replaces its record.
+ * - Day: created_at. In indexed rollouts 54% of a thread's tokens fall on its creation day and
+ *   35% on its last update day, so the start day is the better single day; the update day is
+ *   kept as the end day for "sessions active in the window".
+ * - Tokens: tokens_used split into input / output / cache read / cache write with the model's
+ *   observed mix (else the overall Codex mix); without any mix the total stays unsplit and unpriced.
+ * - Spawned subagent threads: their tokens_used includes the parent's context copied at spawn,
+ *   which the database does not separate, so only the session is counted and the total is
+ *   kept aside (`i`) as not counted.
+ */
+function applyCodexThreads(index, threads, present) {
+  if (!threads) {
+    // Database unreadable this run: keep the records, minus threads whose rollout is now indexed.
+    for (const [key, record] of Object.entries(index.records.codex || {})) if (record.k && index.files[record.k]) delete index.records.codex[key];
+    return;
+  }
+  const mix = codexTokenMix(index);
+  const records = {};
+  for (const thread of threads) {
+    if (!thread.day || !thread.rolloutKey || index.files[thread.rolloutKey] || present.has(thread.rolloutKey)) continue;
+    const model = thread.model && thread.model !== "unknown" ? thread.model : null;
+    const shares = (model && mix.byModel.get(model)) || mix.overall;
+    const counted = thread.spawned ? 0 : thread.total;
+    const [input, output, cacheRead, cacheWrite] = counted && shares ? splitByMix(counted, shares) : [0, 0, 0, 0];
+    records[thread.key] = {
+      d: thread.day,
+      ...(thread.endDay && thread.endDay > thread.day ? { e: thread.endDay } : {}),
+      t: [input, output, cacheRead, cacheWrite, counted],
+      m: model,
+      b: model ? bucketFor({ model, timestamp: thread.at, agentId: "codex" }) : "s",
+      n: 0,
+      rc: 0,
+      p: thread.project || null,
+      x: "codex-db",
+      k: thread.rolloutKey,
+      ...(thread.spawned && thread.total ? { i: thread.total } : {}),
+      ...(counted && !shares ? { u: 1 } : {}),
+    };
+  }
+  index.records.codex = records;
+}
+
 function pruneModels(byModel, cutoff) {
   for (const [model, byDay] of Object.entries(byModel || {})) {
     for (const day of Object.keys(byDay)) if (day < cutoff) delete byDay[day];
@@ -352,6 +432,8 @@ export async function runUsageIndex({
     progress();
   }
   index.seen = Object.fromEntries([...seen].map(([agentId, digests]) => [agentId, [...digests].slice(-SEEN_LIMIT)]));
+  // After the rollouts, so the token mix and "already indexed" include this run's files.
+  applyCodexThreads(index, snapshots.codexThreads, present);
   pruneOld(index);
   progress();
   index.complete = !timedOut && index.totals.indexedFiles >= index.totals.files;

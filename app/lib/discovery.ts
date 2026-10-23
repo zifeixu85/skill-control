@@ -59,3 +59,32 @@ export function customAgentFrom(candidate: DiscoveryCandidate, existing: AgentCo
   const hash = [...id].reduce((sum, char) => sum + char.charCodeAt(0), 0);
   return { id, name, shortName: name.slice(0, 1).toUpperCase(), color: PALETTE[hash % PALETTE.length], paths: [skillsPath] };
 }
+
+/** Folders with the most skills first, then by name. */
+export function sortCandidates(candidates: DiscoveryCandidate[]): DiscoveryCandidate[] {
+  return [...candidates].sort((left, right) => right.skillCount - left.skillCount || left.guessName.localeCompare(right.guessName, "zh-Hans-CN"));
+}
+
+/** Ids of what is new right now: `agent:<id>` and `folder:<~/path>`. */
+export function discoveryKeys(fresh: ScanAgent[], candidates: DiscoveryCandidate[]): string[] {
+  return [...fresh.map((agent) => `agent:${agent.id}`), ...candidates.map((candidate) => `folder:${candidate.path}`)];
+}
+
+export function parseDismissed(text: string): Set<string> {
+  try {
+    const list = JSON.parse(text || "[]");
+    return new Set(Array.isArray(list) ? list.filter((item): item is string => typeof item === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function serializeDismissed(keys: Set<string>): string {
+  // The newest keys win when the list gets long.
+  return JSON.stringify([...keys].slice(-300));
+}
+
+/** The 首页 card stays hidden while everything new was already dismissed. */
+export function allDismissed(keys: string[], dismissed: Set<string>): boolean {
+  return keys.length > 0 && keys.every((key) => dismissed.has(key));
+}

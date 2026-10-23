@@ -131,3 +131,24 @@ test("one-click update: plan and result shapes; only an agent-update action offe
   assert.equal(report.agents[1].active, false);
   assert.equal(report.agents[2].reason, "读不到本机安装的版本号。");
 });
+
+test("new-Agent card: folders by skill count, dismissal by id until something new appears", () => {
+  const folders = discovery.sortCandidates([
+    { id: "b", guessName: "Beta", path: "~/.b/skills", skillCount: 2 },
+    { id: "a", guessName: "Alpha", path: "~/.a/skills", skillCount: 9 },
+    { id: "c", guessName: "Cola", path: "~/.c/skills", skillCount: 2 },
+  ]);
+  assert.deepEqual(folders.map((item) => item.id), ["a", "b", "c"]);
+  const keys = discovery.discoveryKeys([{ id: "zcode" }], folders);
+  assert.deepEqual(keys, ["agent:zcode", "folder:~/.a/skills", "folder:~/.b/skills", "folder:~/.c/skills"]);
+  const dismissed = discovery.parseDismissed(discovery.serializeDismissed(new Set(keys)));
+  assert.equal(discovery.allDismissed(keys, dismissed), true);
+  assert.equal(discovery.allDismissed([...keys, "folder:~/.new/skills"], dismissed), false, "a new folder brings the card back");
+  assert.equal(discovery.allDismissed([], dismissed), false);
+  assert.equal(discovery.parseDismissed("not json").size, 0);
+  assert.equal(discovery.parseDismissed('{"a":1}').size, 0);
+  const many = new Set(Array.from({ length: 400 }, (_, index) => `folder:~/.x${index}`));
+  const kept = discovery.parseDismissed(discovery.serializeDismissed(many));
+  assert.equal(kept.size, 300);
+  assert.ok(kept.has("folder:~/.x399"), "the newest keys are kept");
+});

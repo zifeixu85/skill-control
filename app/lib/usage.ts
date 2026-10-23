@@ -60,6 +60,18 @@ export interface UsageAgent {
   credits: number | null;
   series: UsagePoint[];
   sources: UsageSource[];
+  /** Caveats from the service, e.g. Codex moved old sessions into its database (partly estimated). */
+  notes: string[];
+}
+
+/** `notes` (strings or { text }) or a single `note`; trimmed, deduplicated, at most 5. */
+export function usageNotes(record: Record<string, unknown>): string[] {
+  const raw = Array.isArray(record.notes) ? record.notes : record.note !== undefined ? [record.note] : typeof record.notes === "string" ? [record.notes] : [];
+  const texts = raw
+    .map((item) => (typeof item === "string" ? item : asString(pick(asRecord(item), "text", "message", "detail"))))
+    .map((text) => text.trim())
+    .filter(Boolean);
+  return [...new Set(texts)].slice(0, 5);
 }
 
 export interface TopSkill {
@@ -178,6 +190,7 @@ export function normalizeUsageAgent(value: unknown, fallbackId = ""): UsageAgent
     credits: asOptionalNumber(pick(base, "credits")),
     series: normalizeSeries(record.series),
     sources: normalizeSources(record.sources),
+    notes: usageNotes(record),
   };
 }
 

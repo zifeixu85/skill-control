@@ -30,15 +30,22 @@ export function collectModelRows(target, byModel, inWindow) {
   return added;
 }
 
+/** Why Codex threads from its database are estimates (shown with the cost and per agent). */
+export const CODEX_DB_REASON = "Codex 已把会话迁入数据库，只剩总 tokens，按本机历史比例拆分估算";
+
 /** A database record as a priceable row. */
 export function recordRow(record) {
   const t = record.t || [];
+  // Codex database threads: a total split by this machine's mix; unsplit totals are unpriced.
+  const estimated = record.x === "codex-db";
   return {
     model: record.m || null,
     day: record.d,
     bucket: record.b || "s",
-    row: [t[0] || 0, t[1] || 0, t[2] || 0, t[3] || 0, 0, record.n || 0],
+    row: record.u ? [t[4] || 0, 0, 0, 0, 0, record.n || 0] : [t[0] || 0, t[1] || 0, t[2] || 0, t[3] || 0, 0, record.n || 0],
     reported: record.rc ?? record.c ?? 0,
+    ...(estimated ? { estimateReason: CODEX_DB_REASON } : {}),
+    ...(record.u ? { unsplit: true } : {}),
   };
 }
 
@@ -77,7 +84,7 @@ function accumulator() {
     typeTokens,
     byDay,
     add(model, resolution, basis, day, row, cost, long = false, countForAverage = false, parts = null) {
-      const key = `${model}|${basis}|${resolution.priceAs || ""}`;
+      const key = `${model}|${basis}|${resolution.priceAs || ""}|${resolution.reason || ""}`;
       const acc = models.get(key) || { model, resolution, basis, row: [0, 0, 0, 0, 0, 0], costUsd: 0, longTokens: 0 };
       row.forEach((value, index) => {
         acc.row[index] += value;
@@ -132,9 +139,15 @@ export function priceRows(agentId, { rows = new Map(), records = [] }, { table =
   for (const record of records) {
     reportedCostUsd += record.reported;
     const model = record.model || "unknown";
+    if (record.unsplit) {
+      // Only a total and no mix to split it with: counted, not priced.
+      acc.add(model, { basis: "unpriced", reason: record.estimateReason }, "unpriced", record.day, record.row, 0);
+      continue;
+    }
     const resolution = record.model ? resolve(record.model, table, { agentId }) : { basis: "unpriced" };
     if (resolution.basis === "ignored") continue;
     if (resolution.average) deferred.push({ model, resolution, item: record, reported: record.reported });
+    else if (resolution.entry && record.estimateReason) priceRow(acc, model, { ...resolution, basis: "estimate", reason: record.estimateReason }, record, false);
     else if (resolution.entry) priceRow(acc, model, resolution, record, true);
     else if (record.reported > 0) acc.add(model, { basis: "reported" }, "reported", record.day, record.row, record.reported);
     else acc.add(model, resolution, "unpriced", record.day, record.row, 0);
@@ -169,6 +182,7 @@ function publicModel(acc) {
     basis: acc.basis,
     ...(resolution.priceAs ? { priceAs: resolution.priceAs } : {}),
     ...(resolution.priceRef ? { priceRef: resolution.priceRef } : {}),
+    ...(resolution.reason ? { reason: resolution.reason } : {}),
     ...(resolution.unitPrice ? { unitPrice: Object.fromEntries(TYPES.map((type) => [type, roundUsd(resolution.unitPrice[type])])) } : {}),
     tokens: { input: row[0], output: row[1], cacheRead: row[2], cacheWrite: row[3], cacheWrite1h: row[4], total },
     requests: row[5],
@@ -229,7 +243,7 @@ export function modelsAcrossAgents(costs) {
   const merged = new Map();
   for (const [agentId, priced] of costs) {
     for (const row of priced.byModel) {
-      const key = `${row.model}|${row.basis}|${row.priceAs || ""}`;
+      const key = `${row.model}|${row.basis}|${row.priceAs || ""}|${row.reason || ""}`;
       const target = merged.get(key) || { ...row, tokens: { ...row.tokens }, costUsd: 0, requests: 0, agents: [], longTokens: 0 };
       if (merged.has(key)) for (const field of Object.keys(target.tokens)) target.tokens[field] += row.tokens[field];
       target.costUsd += row.costUsd;

@@ -90,3 +90,15 @@ test("window: a bad end date or empty series charts nothing instead of throwing"
   assert.deepEqual(win.chartPoints([], null, "").points, []);
   assert.equal(win.chartPoints([], null, "2026-10-07").points.length, 1);
 });
+
+test("usage notes: notes or note, strings or { text }, deduplicated", () => {
+  assert.deepEqual(usage.usageNotes({ notes: ["Codex 把旧会话移进了数据库，这部分是估算。", { text: "另一条" }, "Codex 把旧会话移进了数据库，这部分是估算。", " "] }), [
+    "Codex 把旧会话移进了数据库，这部分是估算。",
+    "另一条",
+  ]);
+  assert.deepEqual(usage.usageNotes({ note: "部分是估算" }), ["部分是估算"]);
+  assert.deepEqual(usage.usageNotes({}), []);
+  const summary = usage.normalizeUsageSummary({ agents: [{ agentId: "codex", sessions: 3, note: "部分是估算" }, { agentId: "claude", sessions: 1 }] }, 30);
+  assert.deepEqual(summary.agents.find((agent) => agent.agentId === "codex").notes, ["部分是估算"]);
+  assert.deepEqual(summary.agents.find((agent) => agent.agentId === "claude").notes, []);
+});

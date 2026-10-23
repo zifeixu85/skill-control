@@ -337,3 +337,29 @@
   color: var(--ink-2);
   max-width: 860px;
 }
+
+/* Narrow windows: the table scrolls sideways inside its box and the model column stays put. */
+.price-table {
+  overscroll-behavior-x: contain;
+}
+.price-table table {
+  min-width: 760px;
+}
+.price-table thead th:first-child,
+.price-table tbody th.cell-main {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--panel);
+  box-shadow: inset -1px 0 0 var(--line-2);
+}
+/* A row's note stays readable while the table is scrolled sideways. */
+.price-table .price-note td {
+  overflow: visible;
+}
+.price-table .price-note p {
+  position: sticky;
+  left: 10px;
+  width: fit-content;
+  max-width: min(640px, 70vw);
+}

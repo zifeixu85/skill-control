@@ -1,5 +1,5 @@
 import { pricingFreshness } from "./pricing.mjs";
-import { costIndex, modelsAcrossAgents, roundUsd, sumCosts } from "./usage-cost.mjs";
+import { CODEX_DB_REASON, costIndex, modelsAcrossAgents, roundUsd, sumCosts } from "./usage-cost.mjs";
 import { agentProjects, costProjects, projectsAcrossAgents } from "./usage-projects.mjs";
 import { fileActiveDays, recordActiveDays, sessionCounter, sessionKeyOf } from "./usage-sessions.mjs";
 import { dayKey } from "./usage-sources.mjs";
@@ -23,6 +23,7 @@ export const USAGE_SOURCES = {
   },
   codex: {
     tokens: { label: "会话记录 ~/.codex/sessions（token_count）", confidence: "exact" },
+    threads: { label: "会话记录已删除的线程：state 数据库 threads 表的总 tokens（按本机比例拆分估算）", confidence: "estimate" },
     skills: { label: "命令参数中读取的 SKILL.md", confidence: "inferred" },
     reportedCost: false,
   },
@@ -207,6 +208,37 @@ function skillsByAgent(index, inWindow) {
 
 const sumDays = (days) => [...days.values()].reduce((total, value) => total + value, 0);
 
+/**
+ * Per-agent notes for the window, for the UI to show next to the figures. Codex: sessions
+ * that only exist in its database (rollout files deleted) are estimates; spawned subagent
+ * threads there count as sessions only, because their totals include the parent's context.
+ */
+function agentNotes(index, inWindow) {
+  const notes = new Map();
+  let sessions = 0;
+  let tokens = 0;
+  let spawned = 0;
+  let uncounted = 0;
+  let unsplit = 0;
+  for (const record of Object.values(index.records?.codex || {})) {
+    if (record.x !== "codex-db" || !inWindow(record.d)) continue;
+    sessions += 1;
+    tokens += record.t?.[4] || 0;
+    if (record.i) {
+      spawned += 1;
+      uncounted += record.i;
+    }
+    if (record.u) unsplit += record.t?.[4] || 0;
+  }
+  if (sessions) {
+    const parts = [`${CODEX_DB_REASON}（${sessions} 个会话）。`];
+    if (spawned) parts.push(`其中 ${spawned} 个子代理线程的总数含父线程上下文、无法拆出自身用量，只计会话、不计 tokens。`);
+    if (unsplit) parts.push("还没有可参考的 Codex 会话记录，这部分 tokens 暂不估算费用。");
+    notes.set("codex", [{ kind: "codex-db-estimate", text: parts.join(""), sessions, tokens, spawnedSessions: spawned, uncountedTokens: uncounted, unpricedTokens: unsplit }]);
+  }
+  return notes;
+}
+
 function sourcesFor(agentId) {
   const sources = USAGE_SOURCES[agentId];
   if (!sources) return [];
@@ -238,6 +270,7 @@ export function usageSummary(index, { days = 30, now = Date.now() } = {}) {
   const { daily, windowSessions } = dailyByAgent(index, inWindow);
   const skills = skillsByAgent(index, inWindow);
   const costs = costIndex(index, inWindow);
+  const notes = agentNotes(index, inWindow);
   const agentIds = [...new Set([...daily.keys(), ...skills.keys(), ...costs.keys()])].sort();
   const agents = agentIds.map((agentId) => {
     const byDay = daily.get(agentId) || new Map();
@@ -270,6 +303,7 @@ export function usageSummary(index, { days = 30, now = Date.now() } = {}) {
         costUsd: roundUsd(priced.byDay.get(date)),
       })),
       sources: sourcesFor(agentId),
+      ...(notes.has(agentId) ? { notes: notes.get(agentId) } : {}),
     };
   });
   const totals = new Map();
@@ -337,6 +371,7 @@ function windowTotals(index, { id, days, label, now }) {
   const inWindow = windowFilter(dates);
   const { daily, windowSessions } = dailyByAgent(index, inWindow);
   const costs = costIndex(index, inWindow);
+  const notes = agentNotes(index, inWindow);
   const tokens = emptyTokens();
   const activeDays = new Set();
   const byAgent = [];
@@ -348,7 +383,9 @@ function windowTotals(index, { id, days, label, now }) {
     }
     for (const field of FIELDS) tokens[field] += agentTokens[field];
     const costUsd = costs.get(agentId)?.costUsd || 0;
-    if (agentTokens.total || costUsd || windowSessions.get(agentId)) byAgent.push({ agentId, tokens: agentTokens, costUsd, sessions: windowSessions.get(agentId) || 0 });
+    if (agentTokens.total || costUsd || windowSessions.get(agentId)) {
+      byAgent.push({ agentId, tokens: agentTokens, costUsd, sessions: windowSessions.get(agentId) || 0, ...(notes.has(agentId) ? { notes: notes.get(agentId) } : {}) });
+    }
   }
   byAgent.sort((left, right) => right.costUsd - left.costUsd || right.tokens.total - left.tokens.total || left.agentId.localeCompare(right.agentId));
   return {
@@ -509,5 +546,6 @@ export function usageForAgent(index, agentId, { days = 90, now = Date.now() } = 
     topProjects,
     otherProjects,
     sources: sourcesFor(agentId),
+    notes: agentNotes(index, inWindow).get(agentId) || [],
   };
 }

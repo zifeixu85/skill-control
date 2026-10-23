@@ -62,4 +62,5 @@ export type DrawerTarget =
   | { kind: "mcp"; id: string }
   | { kind: "update"; id: string }
   | { kind: "connector"; id: string }
-  | { kind: "cli"; id: string };
+  | { kind: "cli"; id: string }
+  | { kind: "discovery"; id: string };

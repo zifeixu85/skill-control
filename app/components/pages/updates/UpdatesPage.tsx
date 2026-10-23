@@ -9,10 +9,11 @@ import { useScrollMemory } from "../../../hooks/useScrollMemory";
 import { api, errorMessage } from "../../../lib/api";
 import { formatDateTime, formatRelative, joinNames } from "../../../lib/format";
 import { groupUnits, STATUS_HINTS, STATUS_LABELS, type CheckJob, type UpdatesData, type UpdateStatus, type UpdateUnit } from "../../../lib/updates";
-import { RefreshIcon } from "../../icons";
+import { CopiesIcon, RefreshIcon } from "../../icons";
 import { useToast } from "../../providers/ToastProvider";
 import { EmptyState, Loading, SectionHeading, TopBar } from "../../ui/basics";
-import { RemedyAllBar } from "../../ui/RemedyPanel";
+import { useCopyRemedy } from "../../ui/RemedyPanel";
+import { InfoPopover } from "../../ui/InfoPopover";
 import { AgentVersions } from "./AgentVersions";
 import { UnitRow } from "./UnitRow";
 
@@ -41,12 +42,40 @@ function CheckProgress({ job }: { job: CheckJob }) {
   );
 }
 
-function FirstCheckNote({ data }: { data: UpdatesData }) {
+/**
+ * One compact row: the first-check privacy note (hosts behind an ⓘ) and "复制给 AI，一次处理全部".
+ * Short windows keep their height for the lists below.
+ */
+function IntroRow({ data, firstCheck }: { data: UpdatesData; firstCheck: boolean }) {
+  const copy = useCopyRemedy();
+  const prompt = data.remedyAll?.prompt || "";
+  if (!firstCheck && !prompt) return null;
   return (
-    <div className="inline-note first-check">
-      <span>
-        检查更新时会联网，只读取公开信息，访问这些地址：<b>{joinNames(data.allowedHosts)}</b>。不会上传你的技能内容，也不会自动安装任何东西。
+    <div className="intro-row">
+      <span className="intro-text">
+        {firstCheck ? (
+          <>
+            检查更新会联网，只读取公开信息，不上传技能内容，也不自动安装。
+            <InfoPopover label="会访问的地址">
+              <b className="info-pop-title">会访问这些地址</b>
+              <span>{joinNames(data.allowedHosts)}</span>
+            </InfoPopover>
+          </>
+        ) : (
+          "把所有待处理的更新整理成一段说明，交给你常用的 AI 逐个处理。"
+        )}
       </span>
+      {prompt ? (
+        <button
+          type="button"
+          className="btn sm"
+          title="复制一段说明，粘贴给你常用的 AI（如 Codex、Claude Code）；只复制，不改任何东西"
+          onClick={() => void copy(prompt, "ai")}
+        >
+          <CopiesIcon />
+          复制给 AI，一次处理全部
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -161,13 +190,12 @@ export function UpdatesPage() {
         ) : (
           <>
             {running && activeJob ? <CheckProgress job={activeJob} /> : null}
-            {!data.checkedAt && !running ? <FirstCheckNote data={data} /> : null}
+            <IntroRow data={data} firstCheck={!data.checkedAt && !running} />
             {activeJob?.state === "error" && !running ? (
               <p className="index-note error" role="alert">
                 上次检查没有完成：{activeJob.error || "未知错误"}。已拿到的结果仍然有效。
               </p>
             ) : null}
-            <RemedyAllBar remedy={data.remedyAll} what="所有待处理的更新" />
             <AgentVersions />
             <SectionHeading title="技能和插件" note="上游有没有新版本" />
             <div className="health-summary">
