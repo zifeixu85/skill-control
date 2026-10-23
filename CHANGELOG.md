@@ -9,6 +9,8 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-24
+
 ### Added
 
 - In-app updates for Skill Control itself, from GitHub Releases: checked 15 seconds
