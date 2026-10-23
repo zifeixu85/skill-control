@@ -11,6 +11,16 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ## [0.2.0] - 2026-10-24
 
+### Security
+
+- Electron 43.2.0 → 43.8.3 for the open Electron advisories (fixed in 43.7.6 and later).
+
+### Fixed
+
+- Version checks and update detection keep the event loop alive while a request is
+  pending, so `AbortSignal.timeout` can fire; on Linux the tests used to end with the
+  request still pending.
+
 ### Added
 
 - In-app updates for Skill Control itself, from GitHub Releases: checked 15 seconds

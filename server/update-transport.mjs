@@ -1,3 +1,4 @@
+import { withKeepAlive } from "./keep-alive.mjs";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -121,7 +122,9 @@ export function createTransport({
     if (isGitHubApi && githubToken) requestHeaders.authorization = `Bearer ${githubToken}`;
     let response;
     try {
-      response = await fetchImpl(parsed.toString(), { method, headers: requestHeaders, redirect: "follow", signal: AbortSignal.timeout(timeoutMs) });
+      response = await withKeepAlive(timeoutMs, () =>
+        fetchImpl(parsed.toString(), { method, headers: requestHeaders, redirect: "follow", signal: AbortSignal.timeout(timeoutMs) }),
+      );
     } catch (error) {
       throw new TransportError(error?.name === "TimeoutError" ? "timeout" : "offline", error?.name === "TimeoutError" ? "请求超时。" : "网络不可用。");
     }

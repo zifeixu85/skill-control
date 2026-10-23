@@ -1,3 +1,4 @@
+import { withKeepAlive } from "./keep-alive.mjs";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFile, chmod, mkdir, mkdtemp, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
@@ -305,20 +306,22 @@ function createHttp(fetchImpl, timeoutMs = REQUEST_TIMEOUT_MS) {
   return async function get(url, allowedHost, accept) {
     const parsed = new URL(url);
     if (parsed.protocol !== "https:" || parsed.hostname !== allowedHost) throw new Error("不在允许访问的地址范围内。");
-    let response;
-    try {
-      // No cookies, tokens or device identifiers: a fixed user agent and an Accept header only.
-      response = await fetchImpl(parsed.toString(), {
-        headers: { accept, "user-agent": "skill-control-version-check" },
-        redirect: "follow",
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-    } catch (error) {
-      throw new Error(error?.name === "TimeoutError" ? "请求超时。" : "网络不可用。");
-    }
-    if (response.status === 404) throw new Error("更新源里没有这个条目。");
-    if (!response.ok) throw new Error(`更新源返回 ${response.status}。`);
-    return readCapped(response);
+    return withKeepAlive(timeoutMs, async () => {
+      let response;
+      try {
+        // No cookies, tokens or device identifiers: a fixed user agent and an Accept header only.
+        response = await fetchImpl(parsed.toString(), {
+          headers: { accept, "user-agent": "skill-control-version-check" },
+          redirect: "follow",
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+      } catch (error) {
+        throw new Error(error?.name === "TimeoutError" ? "请求超时。" : "网络不可用。");
+      }
+      if (response.status === 404) throw new Error("更新源里没有这个条目。");
+      if (!response.ok) throw new Error(`更新源返回 ${response.status}。`);
+      return readCapped(response);
+    });
   };
 }
 
