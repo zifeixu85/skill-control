@@ -138,7 +138,7 @@ jobs:
           esac
 
       - name: Upload platform artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ matrix.artifact }}
           path: |
@@ -156,7 +156,7 @@ jobs:
 
       - name: Upload macOS update manifest
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: update-manifest-${{ matrix.artifact }}
           path: release/latest-mac-*.yml
@@ -195,7 +195,7 @@ jobs:
         run: node scripts/merge-mac-update-manifests.mjs mac-manifests update-manifests/latest-mac.yml
 
       - name: Upload merged manifest
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: desktop-update-manifests
           path: update-manifests/latest-mac.yml
