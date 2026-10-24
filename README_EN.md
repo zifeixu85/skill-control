@@ -186,8 +186,6 @@ last check is older than 24 hours), then daily, or on demand in Settings → Abo
 - Only full releases are offered, never pre-releases. Offline mode and source
   runs never check.
 
-v0.1.0 has no in-app updater: download v0.2.0 manually once.
-
 ### Run from source
 
 Requires Node.js `22.13.0` or later, npm and Git.
