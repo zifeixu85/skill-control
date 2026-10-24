@@ -95,6 +95,20 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
+      # An unsealed bundle (only Electron's linker signature) is reported as "damaged"
+      # on other Macs; fail the release instead of shipping it.
+      - name: Verify macOS code signature
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          shopt -s nullglob
+          apps=(release/mac*/"Skill Control.app")
+          test "${#apps[@]}" -gt 0
+          for app in "${apps[@]}"; do
+            codesign --verify --deep --strict --verbose=2 "$app"
+            codesign -dv "$app" 2>&1 | grep -q "Identifier=dev.skillcontrol.desktop"
+          done
+
       - name: Configure Linux Chromium sandbox for smoke test
         if: runner.os == 'Linux'
         shell: bash

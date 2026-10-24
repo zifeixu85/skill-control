@@ -158,18 +158,45 @@ Download the file for your system from [Releases](../../releases):
 
 | Your system | Choose this file |
 | --- | --- |
-| Apple Silicon Mac (M1/M2/M3/M4/M5…) | `Skill-Control-0.2.0-mac-arm64.dmg` |
-| Intel Mac | `Skill-Control-0.2.0-mac-x64.dmg` |
-| Windows x64 | `Skill-Control-0.2.0-win-x64-setup.exe` (installer) or `…-portable.exe` |
-| Linux x64 | `Skill-Control-0.2.0-linux-x86_64.AppImage` or `…-linux-amd64.deb` |
+| Apple Silicon Mac (M1/M2/M3/M4/M5…) | `Skill-Control-<version>-mac-arm64.dmg` |
+| Intel Mac | `Skill-Control-<version>-mac-x64.dmg` |
+| Windows x64 | `Skill-Control-<version>-win-x64-setup.exe` (installer) or `…-portable.exe` |
+| Linux x64 | `Skill-Control-<version>-linux-x86_64.AppImage` or `…-linux-amd64.deb` |
 
 Apple Silicon users should not choose `mac-x64`, which macOS treats as an Intel
 application. The `*.zip`, `latest*.yml` and `*.blockmap` files in a release are
 used by the in-app updater; `SHA256SUMS.txt` lists checksums for every file.
 
-Installers are not yet code-signed or notarized: macOS may ask you to confirm
-the first launch in System Settings → Privacy & Security, Windows SmartScreen may
-show an unknown-publisher warning, and the AppImage needs execute permission.
+### First launch on macOS
+
+Skill Control is a personal open-source project, so the installers are not signed
+with an Apple Developer ID or notarized, and macOS stops the first launch. The app
+itself is fully (ad hoc) signed; open it like this:
+
+1. Open the dmg, drag Skill Control into Applications, then open it.
+2. If macOS says it "cannot verify that Skill Control is free of malware", click Done.
+3. Open System Settings → Privacy & Security, scroll to Security and click
+   "Open Anyway" next to Skill Control, then confirm with your password.
+   (On macOS 14 and earlier you can also right-click the app in Applications → Open.)
+
+**If macOS says the app "is damaged and can't be opened"**: the v0.2.0 macOS
+packages had an incomplete signature; this is fixed from v0.2.1, so please download
+the latest release. For an installed v0.2.0, remove the download quarantine flag in
+Terminal and open it again:
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Skill Control.app"
+```
+
+This only removes the "downloaded from the internet" flag and doesn't change the
+app. Only do it for files from this repository's Releases; you can check a download
+against `SHA256SUMS.txt` with `shasum -a 256 <file>`.
+
+### First launch on Windows / Linux
+
+- **Windows**: if SmartScreen shows an unknown-publisher warning, choose
+  More info → Run anyway.
+- **Linux**: make the AppImage executable: `chmod +x Skill-Control-*.AppImage`.
 
 ### App updates
 

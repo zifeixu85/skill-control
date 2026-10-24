@@ -133,18 +133,43 @@ Windows 创建目录软链接时可能需要开启“开发人员模式”；不
 
 | 你的系统 | 应选择的文件 |
 | --- | --- |
-| Apple Silicon Mac（M1/M2/M3/M4/M5…） | `Skill-Control-0.2.0-mac-arm64.dmg` |
-| Intel Mac | `Skill-Control-0.2.0-mac-x64.dmg` |
-| Windows x64 | `Skill-Control-0.2.0-win-x64-setup.exe`（安装版）或 `…-portable.exe`（便携版） |
-| Linux x64 | `Skill-Control-0.2.0-linux-x86_64.AppImage` 或 `…-linux-amd64.deb` |
+| Apple Silicon Mac（M1/M2/M3/M4/M5…） | `Skill-Control-<版本>-mac-arm64.dmg` |
+| Intel Mac | `Skill-Control-<版本>-mac-x64.dmg` |
+| Windows x64 | `Skill-Control-<版本>-win-x64-setup.exe`（安装版）或 `…-portable.exe`（便携版） |
+| Linux x64 | `Skill-Control-<版本>-linux-x86_64.AppImage` 或 `…-linux-amd64.deb` |
+
+不确定 Mac 是哪种芯片：点屏幕左上角苹果菜单 →“关于本机”，看“芯片”一行。
 
 Apple Silicon 用户不要选择 `mac-x64`，否则 macOS 会把它当作 Intel 应用。Release 中的
 `*.zip`、`latest*.yml` 和 `*.blockmap` 供应用内更新使用，不需要手动下载；
 `SHA256SUMS.txt` 提供全部文件的校验值。
 
-安装包尚未使用商业代码签名证书或公证：macOS 首次打开时可能需要在“系统设置 → 隐私与
-安全性”中确认，Windows SmartScreen 可能提示“未知发布者”，Linux AppImage 需要先赋予
-执行权限。
+### 首次打开（macOS）
+
+Skill Control 是个人开源项目，安装包没有经过 Apple 开发者证书签名和公证，所以 macOS
+第一次打开时会拦一下。应用本身是完整签名的（ad-hoc），可以放心按下面的步骤打开：
+
+1. 打开 dmg，把 Skill Control 拖进“应用程序”文件夹，然后双击打开。
+2. 如果提示“Apple 无法验证‘Skill Control’是否包含恶意软件”或“无法打开”，先点“完成”。
+3. 打开“系统设置 → 隐私与安全性”，滚到页面底部的“安全性”，点“Skill Control”旁边的
+   “仍要打开”，输入开机密码确认。以后就能正常打开了。
+   （macOS 14 及更早的版本，也可以在“应用程序”里右键点 Skill Control →“打开”。）
+
+**如果提示“已损坏，无法打开，你应该将它移到废纸篓”**：这是 v0.2.0 的 macOS 安装包签名
+不完整造成的，v0.2.1 起已修复，建议下载最新版本。已经装好的 v0.2.0 可以在“终端”里运行下面
+这条命令，去掉下载时系统加的隔离标记，然后再打开：
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Skill Control.app"
+```
+
+这条命令只移除“从网上下载”的标记，不改动应用本身；请只对从本仓库 Releases 下载的文件
+这样做，必要时可以用 `SHA256SUMS.txt` 核对下载文件的校验值（`shasum -a 256 文件名`）。
+
+### 首次打开（Windows / Linux）
+
+- **Windows**：SmartScreen 可能提示“未知发布者”，点“更多信息 → 仍要运行”。
+- **Linux**：AppImage 需要先赋予执行权限：`chmod +x Skill-Control-*.AppImage`。
 
 ### 应用更新
 

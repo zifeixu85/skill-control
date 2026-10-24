@@ -1,6 +1,6 @@
 {
   "name": "skill-control",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Local-first desktop manager for skills shared across AI coding agents.",
   "author": {
     "name": "Skill Control contributors",

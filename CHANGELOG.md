@@ -9,6 +9,23 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-24
+
+### Fixed
+
+- macOS: the app bundle is now signed ad hoc as a whole (`identity: "-"`). In v0.2.0
+  it kept only Electron's linker signature, which no longer matched the packaged
+  files, so downloaded copies were reported as "damaged" and could not be opened.
+  Hardened runtime is off until the app is signed with a Developer ID and notarized.
+- The release workflow verifies the macOS code signature and fails instead of
+  publishing an unsealed bundle.
+
+### Documentation
+
+- README: how to open the app the first time on macOS (Privacy & Security → Open
+  Anyway), what to do if v0.2.0 reports "damaged", and Windows / Linux first-launch
+  notes.
+
 ## [0.2.0] - 2026-10-24
 
 ### Security

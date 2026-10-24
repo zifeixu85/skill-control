@@ -22,7 +22,13 @@ artifactName: Skill-Control-${version}-${os}-${arch}.${ext}
 mac:
   category: public.app-category.developer-tools
   icon: resources/icon.png
-  hardenedRuntime: true
+  # No Developer ID yet: sign the whole bundle ad hoc ("-") so the signature is
+  # valid. Without it the bundle keeps only Electron's linker signature, which no
+  # longer matches the packaged files, and macOS calls downloaded copies "damaged".
+  # Hardened runtime only matters for notarization and would need
+  # disable-library-validation with ad hoc signing; turn it back on with Developer ID.
+  identity: "-"
+  hardenedRuntime: false
   entitlements: resources/entitlements.mac.plist
   entitlementsInherit: resources/entitlements.mac.plist
   target:
