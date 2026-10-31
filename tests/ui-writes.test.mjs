@@ -20,6 +20,11 @@ const WRITE_ARGS = {
   applyAgentUpdate: ["plan-1"],
   applyAgentUpdateInTerminal: ["plan-1"],
   applyAgentUpdateInBackground: ["plan-1"],
+  libraryCatchUpApply: ["plan-1"],
+  applyInstall: ["plan-1"],
+  restoreAutoLink: ["h-1"],
+  applyCliLauncher: ["install"],
+  applyCompanionSkill: [],
 };
 const PLAN_ARGS = {
   planSync: [{ sourceInstanceId: "s", targetAgentIds: ["codex"], mode: "copy" }],
@@ -30,6 +35,8 @@ const PLAN_ARGS = {
   planUninstall: ["skill", "codex"],
   cliPlan: ["lark-cli", "wrapper"],
   planAgentUpdate: ["codex"],
+  libraryCatchUpPlan: [{ agents: ["hermes"] }],
+  planInstall: [{ source: { importId: "imp" }, scope: "primary" }],
 };
 const isWrite = (name) => /^(execute|apply|restore)|Apply$/.test(name);
 const isPlan = (name) => /^plan|Plan$/.test(name);

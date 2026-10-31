@@ -18,7 +18,7 @@ export function DiffView({ diff }: { diff: string }) {
   );
 }
 
-function StepText({ step }: { step: PlanStepItem }) {
+export function StepText({ step }: { step: PlanStepItem }) {
   if (step.command) return <code className="command">{step.command}</code>;
   if (step.type === "link") {
     return (

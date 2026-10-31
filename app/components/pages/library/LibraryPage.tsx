@@ -4,14 +4,16 @@ import { isUnsupported, useResource } from "../../../hooks/useResource";
 import { usePageMemory, useReturnHighlight } from "../../../hooks/usePageMemory";
 import { useScrollMemory } from "../../../hooks/useScrollMemory";
 import { api, errorMessage } from "../../../lib/api";
-import type { LibraryEntry, LibraryIssue } from "../../../lib/library";
+import { gapIssues, primaryLibraryAgents, type GapIssue, type LibraryEntry, type LibraryIssue } from "../../../lib/library";
 import type { SortFields, SortKey } from "../../../lib/sort";
 import { SortControl, useSortedList } from "../../ui/SortControl";
-import { scopeForIssue } from "../../../lib/library-review";
-import { CheckIcon, WarnIcon } from "../../icons";
+import { consentRequest, scopeForIssue } from "../../../lib/library-review";
+import { InfoIcon, WarnIcon } from "../../icons";
+import { useData } from "../../providers/DataProvider";
 import { EmptyState, Loading, SectionHeading, TopBar } from "../../ui/basics";
 import { ItemText } from "../../ui/Item";
 import { AgentStrip, EntriesTable } from "./LibraryParts";
+import { LibraryStatus } from "./LibraryStatus";
 import { TrashList } from "./TrashList";
 import { useNav } from "../../providers/NavProvider";
 import type { PlanRequest } from "./PlanReview";
@@ -25,6 +27,7 @@ const NO_ENTRIES: LibraryEntry[] = [];
 
 export function LibraryPage() {
   const library = useResource(LIBRARY_KEY, () => api.library());
+  const { primary: appPrimary, agentName } = useData();
   const scrollRef = useScrollMemory<HTMLDivElement>("library");
   const { setLibraryRequest } = useNav();
   const review = () => setLibraryRequest(BATCH);
@@ -39,13 +42,20 @@ export function LibraryPage() {
   useReturnHighlight("library", Boolean(data));
   const { sorted: entries, key: sortKey, options: sortOptions, setKey: setSortKey } = useSortedList("library", data?.entries || NO_ENTRIES, entryFields, ENTRY_SORTS);
   const shownAgents = data ? data.agents.filter((agent) => allAgents || !agent.collapsed) : [];
+  const gaps = data ? gapIssues(data, primaryLibraryAgents(data, appPrimary), agentName) : [];
+  const fixGap = (gap: GapIssue) => {
+    if (gap.fix === "consent") setLibraryRequest(consentRequest(gap.agentId, agentName(gap.agentId)));
+    else if (gap.fix === "catch-up") setLibraryRequest({ action: "catch-up", agents: [gap.agentId], title: `补齐接入：${agentName(gap.agentId)}` });
+    else review();
+  };
+  const issueCount = (data?.issues.length || 0) + gaps.length;
   const hiddenAgents = data ? data.agents.filter((agent) => agent.collapsed).length : 0;
 
   return (
     <section className="page" aria-labelledby="page-title">
       <TopBar
         title={<span id="page-title">技能库</span>}
-        sub="技能库 = ~/.agents/skills。装一次，常用 Agent 都能用；每个 Agent 按自己的方式读取它"
+        sub="技能库 = ~/.agents/skills。技能只存这一份：有的 Agent 会自动读取技能库，有的需要逐个接入或加一次额外目录"
       >
         <button type="button" className="btn primary" disabled={!data} onClick={review}>
           一键整理
@@ -74,20 +84,42 @@ export function LibraryPage() {
               {!data.exists ? <span className="tag warn">还没有创建</span> : null}
               <span className="muted">{data.entries.length} 个技能</span>
             </div>
-            <SectionHeading title="各 Agent 怎么读取技能库" note={hiddenAgents && !allAgents ? `另有 ${hiddenAgents} 个不常用的 Agent` : undefined} />
+            <LibraryStatus data={data} />
+            <SectionHeading title="各 Agent 怎么接入技能库" note={hiddenAgents && !allAgents ? `另有 ${hiddenAgents} 个不常用的 Agent` : undefined} />
             <AgentStrip data={data} agents={shownAgents} />
             {hiddenAgents ? (
               <button type="button" className="btn sm ghost" onClick={() => setAllAgents(!allAgents)}>
                 {allAgents ? "只看常用 Agent" : `显示全部 ${data.agents.length} 个 Agent`}
               </button>
             ) : null}
-            <SectionHeading title="需要注意" note={data.issues.length ? `${data.issues.length} 项` : "没有问题"} />
-            {data.issues.length ? (
+            <SectionHeading title="需要注意" note={issueCount ? `${issueCount} 项` : "没有问题"} />
+            {issueCount ? (
               <div className="notes">
+                {gaps.map((gap) => (
+                  <div className="note" key={`gap-${gap.agentId}`}>
+                    <span className="ic warn">
+                      <WarnIcon />
+                    </span>
+                    <ItemText
+                      title={gap.title}
+                      meta={`${gap.names.slice(0, 8).join("、")}${gap.names.length > 8 ? ` 等 ${gap.names.length} 个` : ""}`}
+                      mono
+                      desc={gap.detail || null}
+                      lines={2}
+                    />
+                    <div className="it-acts">
+                      {gap.fix ? (
+                        <button type="button" className="btn sm" onClick={() => fixGap(gap)}>
+                          {gap.fix === "consent" ? "同意读取" : gap.fix === "catch-up" ? "补齐接入" : "整理"}
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
                 {data.issues.map((issue) => (
                   <div className="note" key={issue.id + (issue.agentId || "")}>
-                    <span className={`ic ${issue.severity === "error" ? "danger" : issue.severity === "warn" ? "warn" : "ok"}`}>
-                      {issue.severity === "info" ? <CheckIcon /> : <WarnIcon />}
+                    <span className={`ic ${issue.severity === "error" ? "danger" : issue.severity === "warn" ? "warn" : "info"}`}>
+                      {issue.severity === "info" ? <InfoIcon /> : <WarnIcon />}
                     </span>
                     <ItemText
                       title={issue.title}
@@ -105,7 +137,7 @@ export function LibraryPage() {
                 ))}
               </div>
             ) : (
-              <p className="muted small">每个常用 Agent 都能看到技能库里的技能。</p>
+              <p className="muted small">没有需要注意的问题。</p>
             )}
             <SectionHeading
               title="库里的技能"

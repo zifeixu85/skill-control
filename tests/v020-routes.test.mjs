@@ -3,6 +3,7 @@ import { chmod, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { markInstalled } from "./fixtures/agents.mjs";
 import { startTestServer } from "./fixtures/server.mjs";
 import { writeFixtureFile } from "./fixtures/smartorder.mjs";
 
@@ -31,6 +32,7 @@ test("v0.2 routes: new Agents, discovery, secrets, totals, sort fields, CLI inve
   const home = await mkdtemp(path.join(tmpdir(), "v020-routes-"));
   context.after(() => rm(home, { recursive: true, force: true }));
   await createV020Home(home);
+  await markInstalled(home, "codex");
   const { request, requestJson } = await startTestServer(context, home);
   const bodies = [];
   const json = async (label, pathname, options) => {
@@ -46,6 +48,9 @@ test("v0.2 routes: new Agents, discovery, secrets, totals, sort fields, CLI inve
   assert.ok(["claude", "codex"].every((id) => first.knownAgentIds.includes(id)));
   assert.deepEqual(first.newAgentIds, []);
   await writeFixtureFile(home, ".gemini/skills/g1/SKILL.md", skill("g1"));
+  assert.deepEqual((await requestJson("/api/config")).newAgentIds, [], "a skills folder alone is not an installed Agent");
+  await markInstalled(home, "gemini");
+  await requestJson("/api/scan?force=1");
   assert.ok((await requestJson("/api/config")).newAgentIds.includes("gemini"));
 
   for (let attempt = 0; attempt < 200; attempt += 1) {

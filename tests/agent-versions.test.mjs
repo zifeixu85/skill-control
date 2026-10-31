@@ -458,3 +458,19 @@ test("the streaming runner runs without a shell, streams output and times out", 
   assert.equal(slow.exitCode, "timeout");
   assert.equal((await runStreaming("/nonexistent/program", [], { cwd: tmpdir(), timeoutMs: 1_000 })).exitCode, 1);
 });
+
+test("automatic checks follow 自动检查更新 and the first-run notice; checks the user starts always run", async (context) => {
+  let state = "off";
+  const { service, network } = await setup(context, { autoCheck: () => state });
+  let view = await service.check({ automatic: true });
+  assert.deepEqual([network.calls.length, view.offline, view.autoCheck, view.checkedAt], [0, false, "off", null]);
+  state = "waiting-notice";
+  view = await service.check({ automatic: true });
+  assert.deepEqual([network.calls.length, view.autoCheck], [0, "waiting-notice"], "the start-up check waits for the notice");
+  view = await service.check();
+  assert.ok(network.calls.length > 0, "立即检查 runs anyway");
+  const calls = network.calls.length;
+  state = "on";
+  assert.equal(await service.checkIfStale(), null, "the cache is fresh: nothing to do");
+  assert.deepEqual([network.calls.length, (await service.view()).autoCheck, (await service.view()).checking], [calls, "on", false]);
+});

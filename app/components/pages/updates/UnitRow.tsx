@@ -90,6 +90,8 @@ export function UnitRow({ unit }: { unit: UpdateUnit }) {
     }
   };
   const agents = [...new Set(unit.instances.map((instance) => instance.agentId))];
+  // "来源未知" is already the status chip: don't say it twice.
+  const source = unit.status === "unknown-source" && (unit.sourceLabel || "").includes("未知") ? "" : unit.sourceLabel || unit.sourceType;
   const actionable = unit.action.kind !== "none" && (unit.status === "update-available" || unit.status === "conflict" || unit.action.kind === "guide");
   return (
     <div
@@ -106,8 +108,8 @@ export function UnitRow({ unit }: { unit: UpdateUnit }) {
         title={unit.title}
         meta={
           <>
-            {unit.sourceLabel || unit.sourceType}
-            {unit.current || unit.latest ? <span className="sep">·</span> : null}
+            {source}
+            {source && (unit.current || unit.latest) ? <span className="sep">·</span> : null}
             <VersionLine unit={unit} />
           </>
         }

@@ -232,7 +232,7 @@ export function filterChips(views: SkillView[], primary: string[], names: Record
   for (const agentId of primary) {
     chips.push({ id: `only:${agentId}`, label: `只在 ${names[agentId] || agentId}`, count: count(`only:${agentId}`), agentId });
   }
-  chips.push({ id: "none", label: "常用里都没有", count: count("none") });
+  chips.push({ id: "none", label: "常用 Agent 都没装", count: count("none") });
   chips.push({ id: "multi", label: "存了多份", count: count("multi") });
   chips.push({ id: "differs", label: "版本不同", count: count("differs") });
   return chips;

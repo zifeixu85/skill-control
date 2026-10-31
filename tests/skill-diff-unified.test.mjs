@@ -1,0 +1,32 @@
+import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import test from "node:test";
+import { unifiedSkillDiff } from "../server/local-server.mjs";
+import { writeFixtureFile } from "./fixtures/smartorder.mjs";
+
+test("unified diff of two copies: changed files, hunks with line numbers, secrets masked, binaries listed", async (context) => {
+  const root = await mkdtemp(path.join(tmpdir(), "unified-diff-"));
+  context.after(() => rm(root, { recursive: true, force: true }));
+  const left = path.join(root, "left");
+  const right = path.join(root, "right");
+  const body = (version, key) => `---\nname: demo\ndescription: demo\n---\n# Demo\n\nline 1\nline 2\nversion ${version}\napi_key=${key}\nline 5\n`;
+  await writeFixtureFile(left, "SKILL.md", body("1", "ZZ9leftsecretvalue01"));
+  await writeFixtureFile(right, "SKILL.md", body("2", "ZZ9rightsecretvalue2"));
+  await writeFixtureFile(left, "same.md", "same\n");
+  await writeFixtureFile(right, "same.md", "same\n");
+  await writeFixtureFile(right, "new.md", "brand new\n");
+  await writeFixtureFile(left, "logo.png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]));
+  await writeFixtureFile(right, "logo.png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 9, 9, 9]));
+  const result = await unifiedSkillDiff(left, right);
+  assert.deepEqual(result.files.map((file) => [file.path, file.change]).sort(), [["SKILL.md", "modified"], ["logo.png", "modified"], ["new.md", "right-only"]]);
+  assert.match(result.diff, /--- a\/SKILL\.md\n\+\+\+ b\/SKILL\.md\n@@ -6,7 \+6,7 @@\n \n line 1\n line 2\n-version 1\n/u);
+  assert.match(result.diff, /\n-version 1\n/u);
+  assert.match(result.diff, /\n\+version 2\n/u);
+  assert.match(result.diff, /--- \/dev\/null\n\+\+\+ b\/new\.md\n@@ -1,0 \+1,\d @@\n\+brand new\n/u);
+  assert.match(result.diff, /\+\+\+ b\/logo\.png\n（二进制或无法预览的文件，内容不同）/u);
+  assert.doesNotMatch(result.diff, /ZZ9/u, "credential values are masked");
+  assert.ok(result.redacted >= 2);
+  assert.equal(result.truncated, false);
+});

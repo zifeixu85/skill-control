@@ -1,0 +1,68 @@
+name: macOS signing check
+
+# Run by hand (Actions → macOS signing check → Run workflow) after adding or rotating the
+# MAC_SIGN_P12_* secrets, or by pushing a branch named sign-check/… (dispatch only works once
+# this file is on the default branch): builds the arm64 app, signs it with the certificate, verifies it and
+# prints the designated requirement and certificate SHA-1, then re-signs a changed copy to show
+# that the designated requirement stays the same while the cdhash changes.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "sign-check/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mac-sign-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mac-sign-check:
+    name: Sign and verify the macOS app
+    runs-on: macos-latest
+    timeout-minutes: 40
+    env:
+      MAC_SIGN_REQUIRED: "true"
+      MAC_SIGN_CERT_SHA1: ${{ vars.MAC_SIGN_CERT_SHA1 }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22.13.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and sign the arm64 app
+        run: npm run desktop:prepare && npx electron-builder --mac --arm64 --dir --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          MAC_SIGN_P12_BASE64: ${{ secrets.MAC_SIGN_P12_BASE64 }}
+          MAC_SIGN_P12_PASSWORD: ${{ secrets.MAC_SIGN_P12_PASSWORD }}
+
+      - name: Verify, re-sign a changed copy and compare
+        shell: bash
+        env:
+          MAC_SIGN_P12_BASE64: ${{ secrets.MAC_SIGN_P12_BASE64 }}
+          MAC_SIGN_P12_PASSWORD: ${{ secrets.MAC_SIGN_P12_PASSWORD }}
+        run: |
+          app="release/mac-arm64/Skill Control.app"
+          node scripts/sign-mac.mjs verify "$app"
+          copy="${RUNNER_TEMP}/copy/Skill Control.app"
+          mkdir -p "${RUNNER_TEMP}/copy"
+          ditto "$app" "$copy"
+          date -u +%FT%TZ > "$copy/Contents/Resources/sign-check.txt"
+          node scripts/sign-mac.mjs sign "$copy"
+          node scripts/sign-mac.mjs compare "$app" "$copy"
+
+      - name: Smoke-test the signed app
+        run: npm run desktop:smoke

@@ -46,7 +46,7 @@ export function Availability({ tool }: { tool: CliTool }) {
   const { agentName } = useData();
   if (!tool.availability.length) return null;
   return (
-    <span className="avail-row" aria-label={tool.availability.map((entry) => `${agentName(entry.agentId)}${entry.available === true ? "能用" : entry.available === false ? "找不到" : "未知"}`).join("，")}>
+    <span className="avail-row" aria-label={tool.availability.map((entry) => `${agentName(entry.agentId)}${entry.available === true ? "能用" : entry.available === false ? "找不到" : "无法判断"}`).join("，")}>
       {tool.availability.map((entry) => (
         <span
           key={entry.agentId}

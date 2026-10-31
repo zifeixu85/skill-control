@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Shown while the local services start (desktop/main.mjs). Static: no scripts, no network. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Skill Control</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --window: #fbfbf9;
+        --ink: #1d1d1f;
+        --ink-2: #5d5e63;
+        --track: rgba(29, 29, 31, 0.12);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --window: #18191b;
+          --ink: #ececee;
+          --ink-2: #a5a6ac;
+          --track: rgba(255, 255, 255, 0.14);
+        }
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: grid;
+        place-items: center;
+        background: var(--window);
+        color: var(--ink);
+        font: 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", system-ui, sans-serif;
+        user-select: none;
+        cursor: default;
+      }
+      main {
+        display: grid;
+        justify-items: center;
+        gap: 12px;
+      }
+      .spinner {
+        width: 22px;
+        height: 22px;
+        border: 2px solid var(--track);
+        border-top-color: var(--ink-2);
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .spinner {
+          animation: none;
+        }
+      }
+      h1 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 600;
+      }
+      p {
+        margin: 0;
+        color: var(--ink-2);
+      }
+    </style>
+  </head>
+  <body>
+    <main role="status" aria-live="polite">
+      <div class="spinner" aria-hidden="true"></div>
+      <h1>Skill Control</h1>
+      <p>正在启动本地服务…</p>
+    </main>
+  </body>
+</html>

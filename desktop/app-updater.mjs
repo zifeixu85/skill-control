@@ -3,6 +3,9 @@ import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promise
 import os from "node:os";
 import path from "node:path";
 import {
+  automaticCheckState,
+  APP_MANAGEMENT_NOTICE,
+  APP_MANAGEMENT_SETTINGS_URL,
   BUNDLE_ID,
   CHECK_INTERVAL_MS,
   isAllowedAssetUrl,
@@ -37,7 +40,8 @@ export * from "./app-update-mac.mjs";
  *
  * State: { status: "up-to-date"|"available"|"downloading"|"ready"|"error"|"unsupported",
  *   current, latest?, notes?, url?, publishedAt?, checkedAt?, error?, canInstall,
- *   reason?, manual?, notice?, transferred?, total?, percent?, installing? }
+ *   reason?, manual?, notice?, transferred?, total?, percent?, installing?,
+ *   actions?: ("open-app-management"|"open-download-page")[], autoCheck?: "on"|"off"|"waiting-notice" }
  *
  * macOS uses the custom updater in app-update-mac.mjs; Windows (NSIS) and Linux (AppImage)
  * use electron-updater, loaded only on those platforms. Offline mode
@@ -143,8 +147,11 @@ export function createAppUpdater({
   quit = () => {},
   emit = () => {},
   loadElectronUpdater = loadDefaultElectronUpdater,
+  // config `network` from the local service (GET /api/config), read before every automatic check.
+  readNetworkSettings = async () => null,
   mac = macOps,
   fileExists = existsSync,
+  osRelease = os.release(),
   logger = console,
   intervalMs = CHECK_INTERVAL_MS,
   tickMs = TICK_MS,
@@ -165,6 +172,10 @@ export function createAppUpdater({
   let error = null;
   let progress = null;
   let installNotice = null;
+  let appManagementNotice = null;
+  let currentSignature;
+  let failureCode = null;
+  let autoCheck = null;
   let installability = support.install ? INSTALLABLE : blocked(support.reason);
   let pending = null;
   let checking = null;
@@ -194,14 +205,20 @@ export function createAppUpdater({
       const manual = support.check ? installability.manual : MANUAL_TEXT[reason];
       if (manual) state.manual = manual;
     }
-    const notice = installNotice || (support.backend === "electron-updater" ? UNSIGNED_NOTICE[platform] : null);
+    const notice =
+      installNotice || appManagementNotice || (support.backend === "electron-updater" ? UNSIGNED_NOTICE[platform] : null);
     if (notice) state.notice = notice;
+    if (error && failureCode) {
+      state.actions =
+        failureCode === "blocked" && platform === "darwin" ? ["open-app-management", "open-download-page"] : ["open-download-page"];
+    }
     if (progress && (status === "downloading" || status === "ready")) {
       state.transferred = progress.transferred;
       state.total = progress.total;
       state.percent = progress.total ? Math.min(100, Math.round((progress.transferred / progress.total) * 1000) / 10) : 0;
     }
     if (installing) state.installing = true;
+    if (autoCheck) state.autoCheck = autoCheck;
     return state;
   }
 
@@ -275,6 +292,9 @@ export function createAppUpdater({
     if (support.backend === "mac") {
       const where = await mac.checkReplaceable(bundlePath);
       installability = where.ok ? INSTALLABLE : blocked("location", where.manual);
+      if (where.ok && currentSignature === undefined) currentSignature = await mac.readCodeSignature(bundlePath).catch(() => null);
+      appManagementNotice =
+        where.ok && mac.appManagementMayAsk({ signature: currentSignature, osRelease }) ? APP_MANAGEMENT_NOTICE : null;
     } else if (support.backend === "electron-updater") {
       const configured = Boolean(resourcesPath) && fileExists(path.join(resourcesPath, "app-update.yml"));
       installability = configured ? INSTALLABLE : blocked("package");
@@ -316,6 +336,7 @@ export function createAppUpdater({
         release = newer;
       }
       error = null;
+      failureCode = null;
       checkedAt = new Date(now()).toISOString();
       await refreshInstallability();
       await persist();
@@ -382,6 +403,7 @@ export function createAppUpdater({
       await rm(zipPath, { force: true });
       const appPath = await mac.findExtractedApp(extractDir);
       await mac.validateBundle(appPath, { bundleId: BUNDLE_ID, version: target.version });
+      await mac.checkSigner({ currentPath: bundlePath, newPath: appPath, tempDir: dir, bundleId: BUNDLE_ID });
       return { dir, appPath, version: target.version };
     } catch (failure) {
       await mac.removeTempDir(dir, tempRoot).catch(() => {});
@@ -431,6 +453,7 @@ export function createAppUpdater({
     }
     status = "downloading";
     error = null;
+    failureCode = null;
     progress = { transferred: 0, total: 0 };
     publish();
     try {
@@ -443,6 +466,7 @@ export function createAppUpdater({
       warn("下载失败", failure);
       status = "error";
       error = messageOf(failure);
+      failureCode = failure?.code || "error";
       progress = null;
     }
     return publish();
@@ -467,6 +491,7 @@ export function createAppUpdater({
     if (!pending || !bundlePath) throw new UpdateError("swap", "找不到下载好的新版本，请重新下载。");
     const expected = { bundleId: BUNDLE_ID, version: pending.version };
     await mac.validateBundle(pending.appPath, expected);
+    await mac.checkSigner({ currentPath: bundlePath, newPath: pending.appPath, tempDir: pending.dir, bundleId: BUNDLE_ID });
     const result = await mac.swapBundle({
       currentPath: bundlePath,
       newPath: pending.appPath,
@@ -514,6 +539,8 @@ export function createAppUpdater({
       return snapshot();
     }
     installing = true;
+    error = null;
+    failureCode = null;
     try {
       if (support.backend === "mac") await installMac();
       else await installWithElectronUpdater();
@@ -523,7 +550,11 @@ export function createAppUpdater({
       installing = false;
       status = "error";
       error = messageOf(failure);
-      await discardPending();
+      failureCode = failure?.code || "error";
+      // A blocked swap left everything in place: keep the download so a retry after the
+      // user allows App Management does not download again.
+      if (failureCode !== "blocked") await discardPending();
+      else status = "ready";
       return publish();
     }
   }
@@ -536,12 +567,22 @@ export function createAppUpdater({
     await loaded;
     if (!support.check || tickTimer) return;
     await refreshInstallability();
-    const tick = () => {
-      if (!checking && !downloading && shouldCheck({ checkedAt, now: now(), intervalMs })) void check({ background: true });
+    const tick = async () => {
+      if (checking || downloading || !shouldCheck({ checkedAt, now: now(), intervalMs })) return;
+      // 自动检查更新 and the first-run notice (config network); 检查更新 by hand is not gated.
+      let network = null;
+      try {
+        network = await readNetworkSettings();
+      } catch (failure) {
+        warn("读不到联网设置", failure);
+      }
+      autoCheck = automaticCheckState(network, { hasHistory: Boolean(checkedAt) });
+      if (autoCheck === "on") await check({ background: true });
     };
-    startTimer = timers.setTimeout(tick, startupDelayMs);
+    const run = () => void tick().catch((failure) => warn("自动检查失败", failure));
+    startTimer = timers.setTimeout(run, startupDelayMs);
     startTimer?.unref?.();
-    tickTimer = timers.setInterval(tick, tickMs);
+    tickTimer = timers.setInterval(run, tickMs);
     tickTimer?.unref?.();
   }
 
@@ -558,5 +599,34 @@ export function createAppUpdater({
     return snapshot();
   }
 
-  return Object.freeze({ status: readStatus, check, download, install, start, stop, support });
+  /** Opens System Settings → Privacy & Security → App Management (macOS only). */
+  async function openAppManagement() {
+    await loaded;
+    if (platform !== "darwin") return snapshot();
+    try {
+      await openExternal(APP_MANAGEMENT_SETTINGS_URL);
+    } catch (failure) {
+      warn("无法打开系统设置", failure);
+    }
+    return snapshot();
+  }
+
+  /** Opens the release page of the newer version (or the releases list). */
+  async function openDownloadPage() {
+    await loaded;
+    await openReleasePage();
+    return snapshot();
+  }
+
+  return Object.freeze({
+    status: readStatus,
+    check,
+    download,
+    install,
+    openAppManagement,
+    openDownloadPage,
+    start,
+    stop,
+    support,
+  });
 }

@@ -218,7 +218,7 @@ export function UsagePage() {
         title={<span id="page-title">数据</span>}
         sub={
           updatedAt && now
-            ? `${formatRelative(updatedAt, now)}更新 · 只在本机统计，不读对话内容`
+            ? `${formatRelative(updatedAt, now)}更新 · 只在本机统计，只保存数字，不保存对话内容`
             : "各 Agent 的会话、Tokens 和技能使用情况，只在本机统计"
         }
       >

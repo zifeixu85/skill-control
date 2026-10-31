@@ -24,7 +24,7 @@
   min-width: 0;
   flex: 1;
 }
-.ucard-head h3 {
+.ucard-head h2 {
   font-family: var(--font-display);
   font-size: 17px;
   font-weight: 700;

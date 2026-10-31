@@ -3,6 +3,10 @@ import { createCliManager, fixesFor } from "./cli-fixes.mjs";
 import { inventoryCliTools, isKnownAiCommand } from "./cli-inventory.mjs";
 import { AGENT_PATH_SOURCES, detectCliTools } from "./cli-tools.mjs";
 import { object, readBoundedJson } from "./fs-safe.mjs";
+import { agentPathSource } from "./cli-tools.mjs";
+import { bundledCompanion, COMPANION_NAME, companionStatus } from "./companion-skill.mjs";
+import { installLauncher, launcherStatus, uninstallLauncher } from "./cli-launcher.mjs";
+import { createInstallService, INSTALL_SCOPES } from "./install-service.mjs";
 import { createLibraryService } from "./library-service.mjs";
 import { createRestoreService } from "./restore-service.mjs";
 import { defaultSearchDirectories, findCommand } from "./path-lookup.mjs";
@@ -29,6 +33,19 @@ export const MANAGE_ROUTES = [
   "/api/skills/apply-uninstall",
   "/api/trash",
   "/api/trash/restore",
+  // v0.3: auto-link, catch-up, installs through the library, companion skill, CLI launcher.
+  "/api/library/auto-link",
+  "/api/library/auto-link/run",
+  "/api/library/auto-link/undo",
+  "/api/library/catch-up/plan",
+  "/api/library/catch-up/apply",
+  "/api/install/plan",
+  "/api/install/apply",
+  "/api/library/companion-skill",
+  "/api/library/companion-skill/install",
+  "/api/cli-launcher",
+  "/api/cli-launcher/install",
+  "/api/cli-launcher/uninstall",
 ];
 
 class RouteError extends Error {
@@ -43,7 +60,9 @@ const ACTIONS = ["adopt", "link", "unlink", "disable", "remove", "batch"];
 
 /**
  * `context`: { homeDirectory, homes, stateDirectory, backupDirectory, historyFile, getConfig,
- *   getScan, getAgents, materialize, commandDirectories, readBody, afterWrite, json }
+ *   getScan, getAgents, materialize, commandDirectories, readBody, afterWrite, json,
+ *   saveAutoLinkSettings(autoLink), autoLink: { disabled, noWatch, debounceMs, watchImpl },
+ *   install: { resolveSource(source), perAgent: { plan, apply } }, launcher: { target, binDirectory } }
  */
 export function createManageRoutes(context) {
   const searchDirectories = async () => context.commandDirectories || (await defaultSearchDirectories({ homeDirectory: context.homeDirectory }));
@@ -55,6 +74,8 @@ export function createManageRoutes(context) {
     historyFile: context.historyFile,
     getConfig: context.getConfig,
     findCommand: async (name) => findCommand(name, await searchDirectories()),
+    saveAutoLinkSettings: context.saveAutoLinkSettings,
+    autoLink: { ...(context.autoLink || {}), onRun: async () => context.afterWrite?.() },
   });
 
   async function launchctlPath() {
@@ -122,7 +143,52 @@ export function createManageRoutes(context) {
     getScan: context.getScan,
     getAgents: context.getAgents,
     materialize: context.materialize,
+    // Undoing a link or removing one by hand writes an auto-link tombstone.
+    onLinksChanged: (changes) => library.autoLink.record(changes),
   });
+
+  const installs = createInstallService({
+    library,
+    getConfig: context.getConfig,
+    resolveSource: async (source) => {
+      if (source?.bundled === COMPANION_NAME) {
+        const bundled = await bundledCompanion();
+        if (!bundled) throw new RouteError(404, "应用里没有随附的 skill-control 技能。", "not-found");
+        return { sourcePath: bundled.path, name: COMPANION_NAME, sourceHash: bundled.hash, label: "skill-control（随附技能）" };
+      }
+      if (!context.install?.resolveSource) throw new RouteError(400, "缺少技能来源。");
+      return context.install.resolveSource(source);
+    },
+    perAgent: context.install?.perAgent || {
+      plan: async () => {
+        throw new RouteError(409, "这里不支持各装一份。", "refused");
+      },
+      apply: async () => {
+        throw new RouteError(409, "这里不支持各装一份。", "refused");
+      },
+    },
+  });
+
+  /** The login shell's PATH (newest shell snapshot), to tell whether ~/.local/bin is on it. */
+  async function shellPath() {
+    const source = await agentPathSource("gemini", context.homeDirectory).catch(() => null);
+    return source?.path || null;
+  }
+  const launcherOptions = async () => ({ homeDirectory: context.homeDirectory, ...(context.launcher || {}), pathEntries: await shellPath() });
+
+  /** The toast's "撤销": undo one auto-link run (or only one skill of it), then tombstones keep it undone. */
+  async function undoAutoLink(body) {
+    if (typeof body.historyId !== "string" || !/^[\w-]{1,64}$/u.test(body.historyId)) throw new RouteError(400, "历史记录无效。");
+    let select = null;
+    if (typeof body.skill === "string") {
+      const run = (await library.autoLink.readState()).runs.find((item) => item.historyId === body.historyId);
+      select = run?.items.find((item) => item.skill === body.skill)?.unitIds || [];
+      if (!select.length) throw new RouteError(404, "这次自动接入里没有这个技能。", "not-found");
+    }
+    const plan = await restore.planRestore({ historyId: body.historyId, select });
+    if (!plan.planId) throw new RouteError(409, plan.message || "没有可以撤销的改动。", "nothing-to-do");
+    return restore.applyRestore({ planId: plan.planId, confirm: true });
+  }
 
   const cli = createCliManager({
     homeDirectory: context.homeDirectory,
@@ -168,6 +234,8 @@ export function createManageRoutes(context) {
 
   const getRoutes = {
     "/api/library": () => library.view(),
+    "/api/library/companion-skill": async () => companionStatus({ view: await library.view(), bundled: await bundledCompanion() }),
+    "/api/cli-launcher": async () => launcherStatus(await launcherOptions()),
     "/api/cli-tools": () => publicTools(),
     "/api/history": (url) => restore.listHistory(url.searchParams.get("limit")),
     "/api/trash": () => restore.listTrash(),
@@ -230,6 +298,63 @@ export function createManageRoutes(context) {
       context.afterWrite?.();
       return result;
     },
+    // Settings, like the rest of the config: no confirmation header. Turning it on records a baseline.
+    async "/api/library/auto-link"(body) {
+      if (body.enabled !== undefined && typeof body.enabled !== "boolean") throw new RouteError(400, "enabled 必须是 true 或 false。");
+      if (body.scope !== undefined && !["primary", "all"].includes(body.scope)) throw new RouteError(400, "scope 只能是 primary 或 all。");
+      const settings = await library.autoLink.setSettings({ enabled: body.enabled, scope: body.scope });
+      context.afterWrite?.();
+      return { settings, autoLink: (await library.view()).autoLink };
+    },
+    async "/api/library/auto-link/run"(body, request) {
+      if (body.dryRun !== true) confirmed(request, body);
+      const result = await library.autoLink.run({ reason: "manual", dryRun: body.dryRun === true });
+      if (body.dryRun !== true) context.afterWrite?.();
+      return result;
+    },
+    async "/api/library/auto-link/undo"(body, request) {
+      confirmed(request, body);
+      const result = await undoAutoLink(body);
+      context.afterWrite?.();
+      return result;
+    },
+    async "/api/library/catch-up/plan"(body) {
+      return library.autoLink.catchUpPlan({ agents: Array.isArray(body.agents) ? body.agents.filter((id) => typeof id === "string").slice(0, 24) : null, choices: object(body.choices) });
+    },
+    async "/api/library/catch-up/apply"(body, request) {
+      confirmed(request, body);
+      const result = await library.apply({ planId: body.planId, confirm: true });
+      context.afterWrite?.();
+      return result;
+    },
+    async "/api/install/plan"(body) {
+      if (!INSTALL_SCOPES.includes(body.scope)) throw new RouteError(400, "安装范围 scope 只能是 primary、agents 或 agent-only。");
+      const source = object(body.source);
+      return installs.plan({ source, scope: body.scope, agentIds: Array.isArray(body.agentIds) ? body.agentIds : null, choices: object(body.choices) });
+    },
+    async "/api/install/apply"(body, request) {
+      confirmed(request, body);
+      const result = await installs.apply({ planId: body.planId, confirm: true });
+      context.afterWrite?.();
+      return result;
+    },
+    // "把 skill-control 技能装到常用 Agent": into the library, connected to the primary Agents.
+    async "/api/library/companion-skill/install"(body, request) {
+      confirmed(request, body);
+      const plan = await installs.plan({ source: { bundled: COMPANION_NAME }, scope: "primary", choices: { [`replace:${COMPANION_NAME}`]: "use-new" } });
+      if (!plan.planId) return { ...plan, status: await companionStatus({ view: await library.view(), bundled: await bundledCompanion() }) };
+      const result = await installs.apply({ planId: plan.planId, confirm: true });
+      context.afterWrite?.();
+      return { ...result, status: await companionStatus({ view: await library.view(), bundled: await bundledCompanion() }) };
+    },
+    async "/api/cli-launcher/install"(body, request) {
+      confirmed(request, body);
+      return installLauncher(await launcherOptions());
+    },
+    async "/api/cli-launcher/uninstall"(body, request) {
+      confirmed(request, body);
+      return uninstallLauncher(await launcherOptions());
+    },
   };
 
   async function handle(request, url, response, origin) {
@@ -245,5 +370,5 @@ export function createManageRoutes(context) {
     return false;
   }
 
-  return { handle, libraryInternal: () => library.readInternal(), detectTools };
+  return { handle, libraryInternal: () => library.readInternal(), detectTools, autoLink: library.autoLink };
 }

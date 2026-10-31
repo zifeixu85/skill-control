@@ -5,13 +5,17 @@ import { useScrollMemory } from "../../hooks/useScrollMemory";
 import { errorMessage } from "../../lib/api";
 import { joinNames } from "../../lib/format";
 import { persistentStore } from "../../lib/storage";
-import type { ManagerConfig, SyncMode } from "../../lib/types";
+import { detectedHint } from "../../lib/agents";
+import { installMethod, type InstallMethod } from "../../lib/install-scope";
+import type { ManagerConfig } from "../../lib/types";
 import { useData } from "../providers/DataProvider";
 import { useToast } from "../providers/ToastProvider";
 import { useNav } from "../providers/NavProvider";
 import { AgentPicker } from "../shell/AgentPicker";
 import { HistoryList } from "./settings/HistoryList";
 import { AgentVersionsSetting } from "./settings/AgentVersionsSetting";
+import { IntegrationSection } from "./settings/IntegrationSection";
+import { PrivacySection } from "./settings/PrivacySection";
 import { AboutSection, AppUpdateSetting } from "./settings/AboutSection";
 import { SettingsNav, useSectionSpy } from "./settings/SettingsNav";
 import { NewAgentsNotice } from "./home/NewAgentsNotice";
@@ -82,7 +86,10 @@ export function SettingsPage() {
   const { write, saving } = useConfigWriter();
   const [theme, setTheme] = usePersistent(themeStore);
   const scrollRef = useScrollMemory<HTMLDivElement>("settings");
-  const mode: SyncMode = config.data?.syncMode || "copy";
+  const method: InstallMethod = installMethod(config.data);
+  // A pre-0.3 config moved to the library method keeps a note until the user picks.
+  const migratedFrom = config.data?.library?.installModeMigrated?.from || null;
+  const setMethod = (installMode: InstallMethod, message: string) => void write({ library: { installMode } }, message);
   const visible = config.data?.visibleAgentIds || [];
   // Until the user customizes it, every detected Agent is read.
   const customized = config.data?.visibleCustomized !== false;
@@ -124,7 +131,7 @@ export function SettingsPage() {
                         const locked = primary.includes(agent.id);
                         const on = locked || !customized || visible.includes(agent.id);
                         return (
-                          <label key={agent.id} className={locked ? "locked" : ""}>
+                          <label key={agent.id} className={locked ? "locked" : ""} title={detectedHint(agent.detectedBy, 4) || undefined}>
                             <input
                               type="checkbox"
                               checked={on}
@@ -142,7 +149,7 @@ export function SettingsPage() {
                             />
                             <AgentAvatar id={agent.id} size="sm" />
                             <span>{agent.name}</span>
-                            <small>{agent.skillCount} 个</small>
+                            <small>{agent.skillsDir === "missing" ? "还没有技能" : `${agent.skillCount} 个`}</small>
                           </label>
                         );
                       })}
@@ -190,25 +197,28 @@ export function SettingsPage() {
               <div className="set-group" id="set-group-mode" data-section="mode">
                 <section className="set-block" aria-labelledby="set-mode">
                   <h2 id="set-mode">安装方式</h2>
-                  <p>把技能装到另一个 Agent 时默认怎么做。</p>
+                  <p>导入技能、从一个 Agent 装到其他 Agent 时默认怎么做。每次安装时还可以再选范围。</p>
+                  {migratedFrom === "copy" ? (
+                    <p className="inline-note">从旧版本升级：以前的默认是“复制”，现在默认改为统一技能库。想继续各装一份，选下面的「各装一份」。</p>
+                  ) : null}
                   <div className="radio-row">
                     <Choice
                       name="sync-mode"
-                      value="copy"
-                      current={mode}
+                      value="library"
+                      current={method}
                       disabled={saving}
-                      title="复制（推荐）"
-                      detail="每个 Agent 一份独立副本；替换前自动备份"
-                      onSelect={(value) => void write({ syncMode: value }, "安装方式改为复制")}
+                      title="统一技能库（推荐）"
+                      detail="技能放进 ~/.agents/skills 只存一份：会自动读取技能库的 Agent 直接能用，其他的逐个接入。在库里更新一次，大家都用新版本"
+                      onSelect={() => setMethod("library", "安装方式改为统一技能库")}
                     />
                     <Choice
                       name="sync-mode"
-                      value="symlink"
-                      current={mode}
+                      value="per-agent"
+                      current={method}
                       disabled={saving}
-                      title="软链接"
-                      detail="所有 Agent 共用一份，改一处全部生效；只支持复制的 Agent 仍会复制"
-                      onSelect={(value) => void write({ syncMode: value }, "安装方式改为软链接")}
+                      title="各装一份"
+                      detail="复制到每个 Agent 自己的技能目录，各自独立；更新时要逐个更新。替换前自动备份"
+                      onSelect={() => setMethod("per-agent", "安装方式改为各装一份")}
                     />
                   </div>
                 </section>
@@ -221,28 +231,21 @@ export function SettingsPage() {
                   <HistoryList />
                 </section>
               </div>
+              <div className="set-group" id="set-group-integration" data-section="integration">
+                <IntegrationSection />
+              </div>
               <div className="set-group" id="set-group-theme" data-section="theme">
                 <section className="set-block" aria-labelledby="set-theme">
                   <h2 id="set-theme">外观</h2>
                   <div className="radio-row three">
-                    <Choice name="theme" value="system" current={theme} title="跟随系统" detail="和 macOS 的外观一致" onSelect={setTheme} />
+                    <Choice name="theme" value="system" current={theme} title="跟随系统" detail="和系统的外观一致" onSelect={setTheme} />
                     <Choice name="theme" value="light" current={theme} title="浅色" detail="始终使用浅色" onSelect={setTheme} />
                     <Choice name="theme" value="dark" current={theme} title="深色" detail="始终使用深色" onSelect={setTheme} />
                   </div>
                 </section>
               </div>
               <div className="set-group" id="set-group-privacy" data-section="privacy">
-                <section className="set-block" aria-labelledby="set-privacy">
-                  <h2 id="set-privacy">数据与隐私</h2>
-                  <p>所有扫描都在本机完成。使用次数只统计会话记录里的调用，不读取对话内容，也不会上传。密钥和令牌在读取配置时就被隐藏。</p>
-                  <p>
-                    “数据”页的预估费用按各厂商官方 API 价格计算，订阅内的用量不等于实际支出。价格和计算规则见{" "}
-                    <button type="button" className="link-btn" onClick={() => go("pricing")}>
-                      模型价格表
-                    </button>
-                    。
-                  </p>
-                </section>
+                <PrivacySection />
               </div>
               <div className="set-group" id="set-group-versions" data-section="versions">
                 <AgentVersionsSetting />

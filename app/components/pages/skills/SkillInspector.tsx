@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRevealLabel } from "../../../hooks/usePlatform";
 import { api, assetUrl } from "../../../lib/api";
 import { formatMonthDay } from "../../../lib/format";
 import { groupCopies, type SkillView } from "../../../lib/skill-model";
@@ -60,6 +61,7 @@ export function SkillInspector({
 }) {
   const { primary } = useData();
   const reveal = useReveal();
+  const revealLabel = useRevealLabel();
   const fallback = primaryInstance(view, primary);
   const [chosen, setChosen] = useState<string | null>(null);
   const instanceId =
@@ -115,7 +117,7 @@ export function SkillInspector({
               actions={
                 <button type="button" className="btn sm" onClick={() => reveal(instanceId)}>
                   <FinderIcon />
-                  在访达中显示
+                  {revealLabel}
                 </button>
               }
             />

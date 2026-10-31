@@ -17,9 +17,14 @@ export function sortedJson(value) {
   return value;
 }
 
-const MODES = { native: "native", config: "config", link: "link" };
+const MODES = { native: "native", config: "config", link: "link", copy: "copy" };
 
-export async function writeLibraryLock({ stateDirectory, homeDirectory, library, adopted = [], removed = [], now = Date.now() }) {
+/**
+ * `added`: [{ name, from }] skills copied into the library by this run (from: "app", "cli",
+ * "auto" …); they are recorded as local skills with `addedFrom`. Copy-tier fanouts record the
+ * library content hash they were copied from (`sourceHash`), so a later library update shows.
+ */
+export async function writeLibraryLock({ stateDirectory, homeDirectory, library, adopted = [], added = [], removed = [], now = Date.now() }) {
   const file = path.join(stateDirectory, "library-lock.json");
   let current = { version: 1, skills: {} };
   try {
@@ -31,6 +36,7 @@ export async function writeLibraryLock({ stateDirectory, homeDirectory, library,
   const upstream = await readSkillsLock(homeDirectory);
   const stamp = new Date(now).toISOString();
   const adoptedFrom = new Map(adopted.map((item) => [item.name, item.from]));
+  const addedFrom = new Map(added.map((item) => [item.name, item.from]));
   for (const name of removed) delete skills[name];
   for (const entry of library.internal.entries) {
     if (entry.kind !== "real") continue;
@@ -38,7 +44,7 @@ export async function writeLibraryLock({ stateDirectory, homeDirectory, library,
     const lock = upstream.entries.get(entry.name);
     const fanout = {};
     for (const [agentId, view] of Object.entries(entry.fanout || {})) {
-      if (view.state === "visible" && MODES[view.tier]) fanout[agentId] = { mode: MODES[view.tier], path: view.path || null, verifiedAt: stamp };
+      if (view.state === "visible" && MODES[view.tier]) fanout[agentId] = { mode: MODES[view.tier], path: view.path || null, ...(view.tier === "copy" ? { sourceHash: entry.hash || null } : {}), verifiedAt: stamp };
     }
     skills[entry.name] = {
       source: lock?.source || previous.source || null,
@@ -50,9 +56,10 @@ export async function writeLibraryLock({ stateDirectory, homeDirectory, library,
       upstreamHash: lock?.skillFolderHash || previous.upstreamHash || null,
       contentHash: entry.hash || null,
       adoptedFrom: adoptedFrom.get(entry.name) || previous.adoptedFrom || null,
+      ...(addedFrom.has(entry.name) || previous.addedFrom ? { addedFrom: addedFrom.get(entry.name) || previous.addedFrom } : {}),
       fanout,
       installedAt: previous.installedAt || stamp,
-      updatedAt: adoptedFrom.has(entry.name) || !previous.updatedAt ? stamp : previous.updatedAt,
+      updatedAt: adoptedFrom.has(entry.name) || addedFrom.has(entry.name) || !previous.updatedAt ? stamp : previous.updatedAt,
     };
   }
   await assertSafeWrite(file, homeDirectory);

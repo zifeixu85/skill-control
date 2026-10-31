@@ -42,6 +42,9 @@ const appUpdate = Object.freeze({
   check: () => invokeAppUpdate("desktop:app-update-check"),
   download: () => invokeAppUpdate("desktop:app-update-download"),
   install: () => invokeAppUpdate("desktop:app-update-install"),
+  // State actions "open-app-management" and "open-download-page" (after a failed install).
+  openAppManagement: () => invokeAppUpdate("desktop:app-update-open-app-management"),
+  openDownloadPage: () => invokeAppUpdate("desktop:app-update-open-download-page"),
   onProgress: (callback) => {
     if (typeof callback !== "function") return () => {};
     const listener = (_event, state) => {
@@ -52,9 +55,25 @@ const appUpdate = Object.freeze({
   },
 });
 
+// Menu commands that change the page, e.g. 设置… (⌘,) → { page: "settings" }.
+const NAVIGATE_CHANNEL = "desktop:navigate";
+const NAVIGATE_PAGES = new Set(["settings"]);
+const onNavigate = (callback) => {
+  if (typeof callback !== "function") return () => {};
+  const listener = (_event, target) => {
+    if (target && typeof target === "object" && NAVIGATE_PAGES.has(target.page)) {
+      const section = typeof target.section === "string" && /^[a-z][a-z-]{0,39}$/u.test(target.section) ? target.section : null;
+      callback(Object.freeze({ page: target.page, ...(section ? { section } : {}) }));
+    }
+  };
+  ipcRenderer.on(NAVIGATE_CHANNEL, listener);
+  return () => ipcRenderer.removeListener(NAVIGATE_CHANNEL, listener);
+};
+
 const desktopApi = Object.freeze({
   apiBase,
   appUpdate,
+  onNavigate,
   getRuntimeInfo: () => ipcRenderer.invoke("desktop:get-runtime-info"),
   openExternal: (url) => ipcRenderer.invoke("desktop:open-external", url),
   // Resolves true when the text was copied (packaged apps cannot use navigator.clipboard).
@@ -62,6 +81,12 @@ const desktopApi = Object.freeze({
     typeof text === "string"
       ? ipcRenderer.invoke("desktop:copy-text", text).then(Boolean, () => false)
       : Promise.resolve(false),
+  // The system folder dialog for importing a skill folder: a full path, or null if cancelled.
+  pickFolder: () =>
+    ipcRenderer.invoke("desktop:pick-folder").then(
+      (picked) => (typeof picked === "string" && picked ? picked : null),
+      () => null,
+    ),
 });
 
 contextBridge.exposeInMainWorld("skillManagerDesktop", desktopApi);

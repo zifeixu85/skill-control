@@ -2,7 +2,7 @@ import { lstat, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { classifyPath, contentHash } from "./fs-links.mjs";
 import { compactHomePath, createdAtOf, exists, homeVariants, isWithin, readBoundedJson } from "./fs-safe.mjs";
-import { AGENT_TIERS, agentOwnDirectories, readAgentSwitches, tierOf } from "./library-agents.mjs";
+import { AGENT_TIERS, agentOwnDirectories, readAgentSwitches, TIER_LABELS, tierOf } from "./library-agents.mjs";
 import { readSkillsLock } from "./update-sources.mjs";
 
 /**
@@ -29,7 +29,7 @@ export function createHasher() {
   };
 }
 
-async function libraryEntries(libraryPath, realRoot, hasher, lock) {
+async function libraryEntries(libraryPath, realRoot, hasher, lock, withHashes = true) {
   let dirents;
   try {
     dirents = await readdir(libraryPath, { withFileTypes: true });
@@ -62,7 +62,7 @@ async function libraryEntries(libraryPath, realRoot, hasher, lock) {
       kind,
       real,
       gitCheckout,
-      hash: real ? await hasher(real) : null,
+      hash: real && withHashes ? await hasher(real) : null,
       ...(lockEntry ? { sourceFromLocks: { source: lockEntry.source, sourceType: lockEntry.sourceType, file: "~/.agents/.skill-lock.json" } } : {}),
     });
   }
@@ -128,6 +128,19 @@ async function agentView(agent, entry, context) {
     return { tier, state: "private-copy", reason: identical ? "与库内容相同的独立副本（可改为链接）" : "与库内容不同的独立副本", identical, path: context.display(local.target) };
   }
 
+  if (tier === "copy") {
+    // Agents that skip links (办公小浣熊) get a real copy of the library entry.
+    if (disabled) return { tier, state: "hidden", reason: "已在该 Agent 中停用" };
+    const local = own[0];
+    if (!local) return { tier, state: "missing", reason: "还没有复制到该 Agent" };
+    if (["link-to-library", "foreign-link", "broken-link"].includes(local.kind)) return { tier, state: "hidden", reason: "该 Agent 不跟随软链接，链接不会生效", path: context.display(local.target) };
+    if (local.kind === "real-file") return { tier, state: "private-copy", reason: "同名的是文件而不是目录", path: context.display(local.target) };
+    const identical = await sameContent(local);
+    return identical
+      ? { tier, state: "visible", reason: "复制自技能库", path: context.display(local.target) }
+      : { tier, state: "private-copy", reason: "与库内容不同的独立副本（库更新后不会自动重新复制）", identical: false, path: context.display(local.target) };
+  }
+
   const copy = own[0];
   return copy ? { tier: "none", state: "private-copy", reason: "该 Agent 不读取库，使用自己的副本" } : { tier: "none", state: "missing", reason: "该 Agent 不读取库" };
 }
@@ -153,7 +166,8 @@ async function agentsInScope(config, homeDirectory, libraryPath) {
   const agents = [];
   for (const agent of config.agents || []) {
     const ownDirs = [];
-    for (const directory of await agentOwnDirectories(agent, { homeDirectory, libraryPath })) {
+    const configuredDirs = await agentOwnDirectories(agent, { homeDirectory, libraryPath });
+    for (const directory of configuredDirs) {
       if ((await stat(directory).catch(() => null))?.isDirectory()) ownDirs.push(directory);
     }
     const tier = tierOf(agent.id);
@@ -174,6 +188,8 @@ async function agentsInScope(config, homeDirectory, libraryPath) {
       primary: primary.has(agent.id),
       collapsed: !primary.has(agent.id),
       ownDirs,
+      // Where a link or copy for this Agent goes: its first existing folder, else the first configured one.
+      linkDir: ownDirs[0] || configuredDirs[0] || null,
       switches,
       notes: AGENT_TIERS[agent.id]?.note || "该 Agent 不读取库，只能使用自己的副本",
     });
@@ -181,13 +197,34 @@ async function agentsInScope(config, homeDirectory, libraryPath) {
   return agents;
 }
 
-export async function readLibrary({ config, homeDirectory, homes = [homeDirectory], stateDirectory, hasher = createHasher() }) {
+/** Per Agent: how many library entries it sees, misses, has its own copy of … (for the honest page header). */
+function coverageOf(entries, agents) {
+  const coverage = {};
+  for (const agent of agents) {
+    const counts = { tier: agent.tier, method: TIER_LABELS[agent.tier] || TIER_LABELS.none, primary: agent.primary, total: 0, visible: 0, missing: 0, privateCopy: 0, hidden: 0, duplicate: 0 };
+    for (const entry of entries) {
+      const state = entry.fanout?.[agent.agentId]?.state;
+      if (!state) continue;
+      counts.total += 1;
+      if (state === "visible") counts.visible += 1;
+      else if (state === "missing") counts.missing += 1;
+      else if (state === "private-copy") counts.privateCopy += 1;
+      else if (state === "hidden") counts.hidden += 1;
+      else if (state === "duplicate") counts.duplicate += 1;
+    }
+    coverage[agent.agentId] = counts;
+  }
+  return coverage;
+}
+
+/** `withHashes: false` skips content hashes (faster; identical copies then show as private copies). */
+export async function readLibrary({ config, homeDirectory, homes = [homeDirectory], stateDirectory, hasher = createHasher(), withHashes = true }) {
   const allHomes = [...new Set([...homes, ...(await homeVariants(homeDirectory))])];
   const display = (value) => (value ? compactHomePath(value, allHomes) : null);
   const libraryPath = libraryPathOf(homeDirectory);
   const realRoot = await realpath(libraryPath).catch(() => null);
   const lock = await readSkillsLock(homeDirectory);
-  const entries = realRoot ? await libraryEntries(libraryPath, realRoot, hasher, lock) : [];
+  const entries = realRoot ? await libraryEntries(libraryPath, realRoot, hasher, lock, withHashes) : [];
   const agents = await agentsInScope(config, homeDirectory, libraryPath);
   const context = { hasher, realRoot, display };
   const libraryLock = await readBoundedJson(path.join(stateDirectory, "library-lock.json"), 4_000_000);
@@ -228,7 +265,8 @@ export async function readLibrary({ config, homeDirectory, homes = [homeDirector
       ...(entry.recorded ? { recorded: entry.recorded } : {}),
       fanout: Object.fromEntries(Object.entries(entry.fanout).map(([agentId, view]) => [agentId, { tier: view.tier, state: view.state, reason: view.reason, ...(view.path ? { path: view.path } : {}) }])),
     })),
-    agents: agents.map((agent) => ({ agentId: agent.agentId, name: agent.name, tier: agent.tier, primary: agent.primary, collapsed: agent.collapsed, notes: agent.notes, directories: agent.ownDirs.map(display) })),
+    agents: agents.map((agent) => ({ agentId: agent.agentId, name: agent.name, tier: agent.tier, method: TIER_LABELS[agent.tier] || TIER_LABELS.none, primary: agent.primary, collapsed: agent.collapsed, notes: agent.notes, directories: agent.ownDirs.map(display), linkDir: display(agent.linkDir) })),
+    coverage: coverageOf(entries, agents),
     issues,
     internal: { libraryPath, realRoot, entries, agents },
   };

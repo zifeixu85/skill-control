@@ -16,6 +16,10 @@ export interface CliAgentRow {
   /** Display name from the service, used when the scan doesn't know this Agent. */
   agentName: string | null;
   pathSource: string;
+  /** v0.3: "unknown" = the Agent has no terminal record yet, so its PATH can't be read: no finding. */
+  status: "found" | "missing" | "unknown";
+  /** Why it is unknown, in plain words. */
+  note: string | null;
   resolves: { path: string; version: string | null } | null;
   workspace: string | null;
   workspaceConfigured: boolean | null;
@@ -148,8 +152,9 @@ function availabilityOf(raw: unknown, rows: CliAgentRow[]): CliAvailability[] {
   }
   return rows.map((row) => ({
     agentId: row.agentId,
-    available: Boolean(row.resolves),
-    detail: row.resolves ? row.resolves.path : null,
+    // Unknown is "can't tell yet", never "not found".
+    available: row.status === "unknown" ? null : Boolean(row.resolves),
+    detail: row.resolves ? row.resolves.path : row.note,
     allowed: row.allowRule === "present" || row.allowRule === "ok" ? true : row.allowRule === "missing" ? false : null,
   }));
 }
@@ -251,11 +256,15 @@ function normalizeAgentRows(raw: unknown): CliAgentRow[] {
         const agent = asRecord(item);
         const resolves = asRecord(agent.resolves);
         const skill = asRecord(agent.skill);
+        const found = Object.keys(resolves).length > 0;
+        const status = asString(agent.status);
         return {
           agentId: asString(agent.agentId),
           agentName: asOptionalString(agent.agentName),
           pathSource: asString(agent.pathSource),
-          resolves: Object.keys(resolves).length ? { path: asString(resolves.path), version: asOptionalString(resolves.version) } : null,
+          status: (status === "found" || status === "missing" || status === "unknown" ? status : found ? "found" : "missing") as CliAgentRow["status"],
+          note: asOptionalString(agent.note),
+          resolves: found ? { path: asString(resolves.path), version: asOptionalString(resolves.version) } : null,
           workspace: asOptionalString(agent.workspace),
           workspaceConfigured: boolOrNull(agent.workspaceConfigured),
           secretSource: asOptionalString(agent.secretSource),
@@ -395,7 +404,9 @@ export function agentChecks(row: CliAgentRow, latest: string | null): AgentCheck
           state: latest && row.resolves.version && row.resolves.version !== latest ? "warn" : "ok",
           detail: `${row.resolves.path}${row.resolves.version ? `（${row.resolves.version}）` : ""} · 来自 ${row.pathSource}`,
         }
-      : { key: "command", label: "找不到命令", short: "找不到", state: "bad", detail: `它的 PATH（${row.pathSource || "未知来源"}）里没有这个命令` },
+      : row.status === "unknown"
+        ? { key: "command", label: "无法判断", short: "无法判断", state: "na", detail: row.note || "还无法判断（这个 Agent 还没记录过终端环境）" }
+        : { key: "command", label: "找不到命令", short: "找不到", state: "bad", detail: `它的 PATH（${row.pathSource || "未知来源"}）里没有这个命令` },
   );
   if (row.workspace) {
     checks.push({

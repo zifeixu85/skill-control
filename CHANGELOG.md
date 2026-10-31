@@ -9,6 +9,156 @@ on Keep a Changelog and the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Library first (v0.3): every skill lives once in `~/.agents/skills` and reaches each agent
+  by its tier (native, extra directory, relative symlink, copy).
+- Auto-link: a new library skill is linked to the primary agents (or to every listed agent
+  with scope "all"; 办公小浣熊 gets a copy) as soon as it appears: on start, after each scan,
+  from a file-system watch on the library and the agents' link folders (first level, 2 s
+  debounce) and from `skill-control sync`. Only missing pairs are touched: an agent's own
+  copy is never replaced, and Hermes' `skills.external_dirs` is never edited without a
+  confirmation. A baseline taken when auto-link is first enabled (including the first run
+  after upgrading) keeps the existing gaps out of it, so an upgrade does not link a hundred
+  skills into an agent at once. Each pair is linked once; a pair the user unlinks or undoes
+  is tombstoned and left alone. Each run is one history entry, undoable as a whole or per
+  skill. Settings in `config.json` (`library.autoLink`), state in
+  `~/.agent-skill-manager/auto-link.json`; `SKILL_MANAGER_AUTO_LINK=off` turns it off.
+- Catch-up: the existing gaps as one plan per agent (`/api/library/catch-up/plan`,
+  `/apply`), confirmed and undoable; the Hermes configuration item is opt-in.
+- One install flow for every entry point (import, sync from an agent, the install switches
+  in skill details, the companion skill, `skill-control add`) with three scopes: all
+  primary agents (default), chosen agents, or this agent only (a copy outside the
+  library). A library skill with the same name and other content needs an explicit choice;
+  "use the new one" backs the old one up first. `/api/install/plan`, `/api/install/apply`.
+  Installing for some agents only (and `skill-control add --link a,b` or `--link none`)
+  tombstones the in-scope agents left unticked (`autoLinkSkip`), under the same lock as the
+  install, so the scan right after it does not auto-link the skill there anyway.
+- Install mode setting: the shared library (default) or a copy per agent (the old way).
+- `skill-control` command line (`server/cli.mjs`): `status`, `add`, `link`, `unlink`,
+  `adopt`, `sync`, `undo`, `doctor`, with `--json`, `--dry-run` and `--read-only` (or
+  `SKILL_MANAGER_DRY_RUN=1`, which writes nothing at all, not even the config). It uses the
+  app's plans, backups, history and lock, and never goes online. Exit codes: 0 done,
+  1 failed, 2 usage, 3 a choice is needed.
+- Launcher `~/.local/bin/skill-control`, installed and removed from the app
+  (`/api/cli-launcher`); a file of that name that Skill Control did not write is never
+  overwritten or removed. On macOS it finds the app by bundle id (recorded path, Spotlight,
+  the Applications folders) and runs the command line with the app's own Node
+  (`ELECTRON_RUN_AS_NODE=1`) without opening a window; on Linux it uses the AppImage or the
+  installed executable. Windows is not supported yet.
+- Companion skill `skill-control`, bundled in `resources/skills/` (unpacked from the asar):
+  teaches agents to install skills the same way (ask the scope, download to a temporary
+  folder, review it, `skill-control add`, verify), with manual steps when the command line
+  is missing and `npx skills add … -g -a codex -y` followed by `skill-control sync` (never
+  `-a hermes-agent`). One click puts it in the library and links it
+  (`/api/library/companion-skill`).
+- A cross-process lock, `~/.agent-skill-manager/library.lock`, so the app and the command
+  line can run at the same time: plan applies, auto-link runs, restores and uninstalls wait
+  for each other (409 `locked` after 30 s; a lock left by a dead process is taken over).
+- `GET /api/library` reports per-agent `coverage` (visible, missing, own copies …), an
+  `autoLink` block and per-pair `autoLinkable`, `catchUp` and `skipped` flags; agents carry
+  `method` and `linkDir`. Library plans carry `byAgent` and item `dependsOn`.
+
+- Import accepts `.zip` (a GitHub download works: files outside the skill folder are left out;
+  several skills side by side return `multiple-skills` with the list, and `x-skill-root` picks
+  one) and a folder the user picked (`POST /api/import-folder`), with the same limits; links
+  inside a folder are not followed.
+- `GET /api/skill-diff-unified`: one unified diff of two copies of a skill, bounded (2,000 lines
+  per file, 200 KB) with credential-shaped values masked.
+- `POST /api/reveal { target: "data-dir" }` opens `~/.agent-skill-manager` in the file manager.
+- Settings `network.updateChecks` (自动检查更新, default on) and `network.noticeSeenAt`.
+
+### Changed
+
+- Agent detection uses each product's own files, commands and apps (Claude Code:
+  `~/.claude/settings.json`, `~/.claude/projects`, `~/.claude.json`, `claude`; Codex:
+  `~/.codex/config.toml`, `sessions`, `codex`, Codex.app; …) and never skill folders or
+  `~/.agents/skills`, so building the library no longer reports Codex as a new Agent. When
+  nothing is detected there are no Agents (no Codex / Claude Code / WorkBuddy placeholders), and
+  saved configs drop Agents that are not installed, including from `primaryAgentIds`. Scanned
+  Agents carry `installed`, `skillsDir` ("missing": installed, no skills folder yet) and
+  `detectedBy`.
+- The health check's "Agent cannot find a command" covers installed Agents only; an Agent
+  without a terminal record yet is "unknown", not a finding; titles use display names.
+- Automatic update checks follow 自动检查更新 and, on a fresh install, wait until the first-run
+  notice was shown; checks the user starts still run. `SKILL_MANAGER_UPDATES_OFFLINE=1` still
+  stops everything. `GET /api/agent-versions` reports `autoCheck` and `checking`.
+- New-Agent discovery runs once a day or on demand (`?force=1`) instead of at every launch, and
+  in `~/Library/Application Support` only opens folders of installed apps or named like an
+  Agent; Apple, system and privacy-protected folders (AddressBook, CallHistory, Mail, Messages,
+  Safari, `com.apple.*` …) are never opened.
+- Price fallback by model family stays within one generation; other generations are reported
+  as unpriced instead of being priced like a newer model.
+- 办公小浣熊 is a copy-tier agent: library skills are copied into `~/.box-agent/skills`
+  (the source hash is recorded) instead of not being distributed. A library update is not
+  re-copied yet; the copy then shows as different from the library.
+- Configs from before 0.3 had only `syncMode`, and a saved "copy" cannot be told from the
+  default, so every old config moves to the library mode; `installModeMigrated` is kept
+  until the user picks a mode.
+- Links and copies go to the agent's first existing skills folder, or its first configured
+  one, which is created when missing.
+- Library history entries record where they came from (`origin`: app, cli or auto); the
+  history list shows the library `operation` (auto-link, catch-up, install, link …).
+- Companion skill 1.1.1 (audited with better-skill): review before any install (also for
+  `npx skills add`), preview every write with `--dry-run`, ask before Hermes config changes,
+  routes for skills already in the library (`link`) or in one Agent's folder (`adopt`), and
+  safer manual steps. `npx skills` runs with `DO_NOT_TRACK=1 DISABLE_TELEMETRY=1`, which turns
+  off that CLI's usage telemetry.
+
+### Desktop and release
+
+- macOS signing moved to `scripts/sign-mac.mjs`, run as electron-builder's `afterPack` hook
+  (`mac.identity: null`; with a null identity electron-builder signs nothing and skips
+  afterSign hooks). It signs every nested binary, framework and helper inside-out, then the
+  app, and verifies the result (`codesign --verify --deep --strict`, identifier, designated
+  requirement). In GitHub Actions, the `MAC_SIGN_P12_BASE64` / `MAC_SIGN_P12_PASSWORD`
+  secrets sign with the fixed self-signed certificate (temporary keychain, trusted for code
+  signing on the runner, removed afterwards); `MAC_SIGN_IDENTITY` signs locally with an
+  identity already in the keychain; otherwise the app is signed ad hoc as before. With the
+  certificate, the designated requirement stays the same across versions, so permissions
+  macOS granted (App Management, Full Disk Access) survive updates.
+- Release workflow: the signing secrets reach the macOS build steps only; the repository
+  variable `MAC_SIGN_REQUIRED=true` makes a missing certificate fail the macOS jobs, and
+  `MAC_SIGN_CERT_SHA1` pins the certificate of certificate-signed builds (it never fails an
+  ad-hoc build, e.g. in forks). The signature check covers the app and the copy inside the
+  zip. New workflow `mac-sign-check` (manual, or a push to a `sign-check/**` branch) builds,
+  signs, verifies and shows that a changed, re-signed copy keeps the designated requirement
+  while its cdhash changes.
+- Releases also carry version-less copies (`Skill-Control-mac-arm64.dmg`,
+  `Skill-Control-mac-x64.dmg`, `Skill-Control-win-x64-setup.exe`,
+  `Skill-Control-linux-x86_64.AppImage`), so `releases/latest/download/<name>` is a fixed
+  link to the latest full release.
+- DMG window background with an arrow and "拖到「应用程序」· 第一次打开请看 README"
+  (`resources/dmg-background.png` and `@2x`, from `scripts/build-dmg-background.mjs`).
+- App updater (macOS): the new bundle must have a valid signature, and when the running copy
+  is signed with a certificate it must satisfy that copy's designated requirement or be
+  signed by a certificate in `TRUSTED_SIGNER_SHA1` (`desktop/code-signature.mjs`, for
+  rotating the certificate). An ad-hoc running copy (0.2.x) is checked for validity only,
+  so 0.2.x updates to 0.3.0.
+- App updater (macOS): when macOS refuses the swap (EPERM/EACCES, App Management) the state
+  explains how to allow Skill Control in 系统设置 → 隐私与安全性 → App管理 and offers
+  `actions: ["open-app-management", "open-download-page"]`; the download is kept, so
+  "安装更新" can be retried. New bridge calls `appUpdate.openAppManagement()` (opens
+  `x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles`) and
+  `appUpdate.openDownloadPage()`. On macOS 13+ a build without a Developer ID gets a notice
+  before installing.
+- The desktop app passes Electron's `net.fetch` to the local service
+  (`startServer({ fetchImpl })`), so Agent version checks and skill and plugin update
+  checks use the system proxy like the app's own update check. `HTTPS_PROXY`,
+  `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY` override it when set.
+- Menu: 实际大小 / 放大 / 缩小 (⌘0, ⌘+ or ⌘=, ⌘-), 关闭窗口 (⌘W) on macOS too, 设置…
+  (⌘,; Windows and Linux: 文件 → 设置…, Ctrl+,) and 帮助 → 使用说明 / 反馈问题. 设置… is
+  delivered to the page through `skillManagerDesktop.onNavigate(cb)`.
+- The window appears at once with a static "正在启动本地服务…" page
+  (`desktop/startup.html`) and loads the app when the local services are ready.
+- The packaged smoke test reports whether the startup page was shown.
+- The app's own automatic update check follows config `network` (read from the local
+  service before each automatic check): none while 自动检查更新 is off, none on a fresh
+  install until the first-run notice was seen; when the settings cannot be read, an install
+  that has checked before keeps checking and a fresh one waits. 检查更新 by hand always runs.
+  The state reports `autoCheck: "on" | "off" | "waiting-notice"`.
+
+
 ## [0.2.1] - 2026-10-24
 
 ### Fixed

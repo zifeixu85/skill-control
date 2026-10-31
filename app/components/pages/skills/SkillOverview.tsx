@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useNow } from "../../../hooks/useNow";
+import { useRevealLabel } from "../../../hooks/usePlatform";
 import { formatMonthDay, joinNames } from "../../../lib/format";
 import { groupCopies, type SkillView, type SlotState } from "../../../lib/skill-model";
 import { FinderIcon, LockIcon } from "../../icons";
@@ -9,9 +10,10 @@ import { useData } from "../../providers/DataProvider";
 import { useNav } from "../../providers/NavProvider";
 import { AgentAvatar } from "../../ui/Avatar";
 import { Switch } from "../../ui/basics";
+import { InstallScopeDialog } from "../../drawers/InstallScope";
 import { UninstallDialog } from "../../drawers/UninstallDialog";
-import { InstallPlan } from "./InstallPlan";
 import { LibraryActions } from "./LibraryActions";
+import { VersionActions } from "./VersionActions";
 import { useReveal } from "./SkillActions";
 import { SkillSource } from "./SkillSource";
 import { SkillUsage } from "./SkillUsage";
@@ -82,8 +84,12 @@ export function SkillOverview({
   const { go } = useNav();
   const now = useNow();
   const reveal = useReveal();
+  const revealLabel = useRevealLabel();
   const [removing, setRemoving] = useState<string | null>(null);
+  // 安装到… without a specific Agent: the dialog starts at 所有常用 Agent（推荐）.
+  const [scopeOpen, setScopeOpen] = useState(false);
   const copies = groupCopies(view, primary);
+  const missing = primary.some((agentId) => view.slots[agentId]?.kind === "missing");
 
   return (
     <>
@@ -101,9 +107,13 @@ export function SkillOverview({
             />
           ))}
         </div>
-        {pendingAgent ? (
-          <InstallPlan key={pendingAgent} view={view} agentId={pendingAgent} onDone={() => onPending(null)} />
+        {missing ? (
+          <button type="button" className="btn sm ghost where-more" onClick={() => setScopeOpen(true)}>
+            安装到更多 Agent…
+          </button>
         ) : null}
+        {pendingAgent ? <InstallScopeDialog key={pendingAgent} view={view} agentId={pendingAgent} onClose={() => onPending(null)} /> : null}
+        {scopeOpen && !pendingAgent ? <InstallScopeDialog view={view} agentId={null} onClose={() => setScopeOpen(false)} /> : null}
       </section>
       {copies.length ? (
         <section>
@@ -121,8 +131,8 @@ export function SkillOverview({
                 <button
                   type="button"
                   className="icon-btn"
-                  aria-label={`在访达中显示 ${group.path}`}
-                  title="在访达中显示"
+                  aria-label={`${revealLabel} ${group.path}`}
+                  title={revealLabel}
                   onClick={() => reveal(group.instances[0].id)}
                 >
                   <FinderIcon />
@@ -138,6 +148,7 @@ export function SkillOverview({
               {view.skill.behind?.length ? `，${joinNames(view.skill.behind.map(agentName))} 里有旧一些的副本` : ""}。
             </p>
           ) : null}
+          {view.differs ? <VersionActions view={view} /> : null}
         </section>
       ) : null}
       <SkillSource view={view} />

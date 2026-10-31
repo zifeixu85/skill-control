@@ -45,7 +45,8 @@ test("detects 办公小浣熊 and scans its skills the way the app loads them", 
   assert.equal(byName["linked-skill"].hiddenByProduct, "symlink-not-followed", "the app skips symlinked folders");
   assert.deepEqual([byName.docx.readOnly, byName.docx.sourceLabel], [true, "内置"]);
 
-  assert.equal(tierOf("office-raccoon"), "none");
+  // v0.3: it gets a copy (it skips links), so its tier is "copy".
+  assert.equal(tierOf("office-raccoon"), "copy");
   assert.deepEqual([...(await readAgentSwitches("office-raccoon", home)).disabled], ["opc-beta"]);
   const item = await disableOps({ agentId: "office-raccoon", name: "办公小浣熊", ownDirs: [] }, "opc-alpha", { homeDirectory: home, backupDirectory: path.join(home, "backups"), group: "g1" });
   assert.equal(item.ops[0].path, path.join(home, ".box-agent", "config", "skill-settings.json"));

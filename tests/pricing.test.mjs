@@ -4,6 +4,7 @@ import {
   bucketFor,
   compileTable,
   costOf,
+  generationOf,
   isOffPeak,
   modelKey,
   normalize,
@@ -66,11 +67,18 @@ test("resolution order: exact, estimate (agent-scoped), family, unpriced", () =>
   const auto = resolve("auto", table, { agentId: "workbuddy" });
   assert.deepEqual([auto.basis, auto.average, auto.priceAs], ["estimate", true, "@agent-average"]);
   assert.equal(resolve("auto", table, { agentId: "claude" }).basis, "unpriced", "the auto estimate is WorkBuddy's own");
-  const opus = resolve("claude-opus-9", table);
+  // Family fallback only within a generation: a newer Opus 5 date suffix or variant is priced, another generation is not.
+  const opus = resolve("claude-opus-5-9", table);
   assert.deepEqual([opus.basis, opus.family, opus.priceAs], ["family", "claude-opus", "claude-opus-5-5"]);
-  assert.equal(resolve("gemini-9-flash-lite", table).family, "gemini-flash-lite", "the more specific family wins");
-  assert.equal(resolve("glm-9-flash", table).family, "glm-flash");
-  assert.equal(resolve("hy5", table).family, "hunyuan");
+  const older = resolve("claude-opus-4-1-20250805", table);
+  assert.deepEqual([older.basis, older.family, older.priceAs], ["family", "claude-opus", "claude-opus-4-8"], "the same generation's model, not Opus 5.5");
+  const cross = resolve("claude-opus-3", table);
+  assert.deepEqual([cross.basis, cross.family, cross.priceAs], ["unpriced", "claude-opus", undefined], "价格未知，未计入");
+  assert.equal(generationOf("gpt-5.4-mini"), "5");
+  assert.equal(generationOf("deepseek-chat"), null);
+  assert.equal(resolve("gemini-3-flash-lite", table).family, "gemini-flash-lite", "the more specific family wins");
+  assert.equal(resolve("glm-5-flash", table).family, "glm-flash");
+  assert.equal(resolve("hy3-pro", table).family, "hunyuan");
   assert.equal(resolve("mystery-model", table).basis, "unpriced");
 });
 

@@ -16,6 +16,8 @@ import { useToast } from "../components/providers/ToastProvider";
 export interface PlanApplyOptions<P, R> {
   /** Everything the plan depends on, serialized; a new key means a new plan. */
   requestKey: string;
+  /** False while the request is incomplete (e.g. no Agent chosen yet): nothing is planned. */
+  enabled?: boolean;
   makePlan: () => Promise<P>;
   /** Runs for the plan of the current request only (never for a superseded one). */
   onPlanned?: (plan: P) => void;
@@ -44,8 +46,10 @@ export function usePlanApply<P, R>(options: PlanApplyOptions<P, R>) {
   const makePlan = useEffectEvent(options.makePlan);
   const onPlanned = useEffectEvent((plan: P) => options.onPlanned?.(plan));
   const planFailure = useEffectEvent(() => options.planFailure);
+  const enabled = options.enabled !== false;
 
   useEffect(() => {
+    if (!enabled) return undefined;
     let cancelled = false;
     makePlan().then(
       (plan) => {
@@ -60,7 +64,7 @@ export function usePlanApply<P, R>(options: PlanApplyOptions<P, R>) {
     return () => {
       cancelled = true;
     };
-  }, [key]);
+  }, [key, enabled]);
 
   const view = flowView(state, key, options.planIdOf);
   const expiresAt = view.plan && options.expiresAtOf ? options.expiresAtOf(view.plan) || null : null;

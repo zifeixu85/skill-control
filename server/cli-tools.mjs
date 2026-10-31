@@ -80,7 +80,8 @@ export async function agentPathSource(agentId, homeDirectory, { launchctlPath = 
   if (source.kind === "shell-snapshot") {
     const newest = await newestFile(path.join(homeDirectory, ...source.dir));
     const text = newest ? (await readBoundedText(newest.file, 4_000_000)).text : null;
-    return { kind: source.kind, via: newest ? "shell snapshot" : "无 shell snapshot", path: text ? pathFromSnapshot(text, homeDirectory) : null, workspace: "local", sandbox: Boolean(source.sandbox) };
+    // No snapshot yet (a new install): its PATH is unknown, not empty.
+    return { kind: source.kind, via: newest ? "终端环境记录" : "还没有终端环境记录", path: text ? pathFromSnapshot(text, homeDirectory) : null, workspace: "local", sandbox: Boolean(source.sandbox) };
   }
   if (source.kind === "launchd") {
     const file = path.join(homeDirectory, ...source.plist);
@@ -103,7 +104,7 @@ export async function agentPathSource(agentId, homeDirectory, { launchctlPath = 
     if (file && (!newest || file.mtimeMs > newest.mtimeMs)) newest = file;
   }
   const text = newest ? (await readBoundedText(newest.file, 4_000_000)).text : null;
-  return { kind: "terminal", via: "终端（参考最新 shell snapshot）", path: text ? pathFromSnapshot(text, homeDirectory) : null, workspace: "local" };
+  return { kind: "terminal", via: newest ? "终端（参考最新的终端环境记录）" : "还没有终端环境记录", path: text ? pathFromSnapshot(text, homeDirectory) : null, workspace: "local" };
 }
 
 async function isExecutableFile(file) {
@@ -301,7 +302,16 @@ export async function detectCliTools({ homeDirectory, homes = [homeDirectory], s
       const source = await agentPathSource(agentId, homeDirectory, { launchctlPath });
       if (!source) continue;
       const resolved = await resolveOnPath(descriptor.command, source.path);
-      const row = { agentId, agentName: agentNames[agentId] || AGENT_DISPLAY_NAMES[agentId] || agentId, pathSource: source.via, resolves: resolved ? { path: display(resolved), version: await versionOf(resolved) } : null };
+      // "unknown": the Agent's PATH cannot be read yet (no terminal record), so no finding.
+      const status = resolved ? "found" : source.path ? "missing" : "unknown";
+      const row = {
+        agentId,
+        agentName: agentNames[agentId] || AGENT_DISPLAY_NAMES[agentId] || agentId,
+        pathSource: source.via,
+        status,
+        ...(status === "unknown" ? { note: "还无法判断（这个 Agent 还没记录过终端环境）" } : {}),
+        resolves: resolved ? { path: display(resolved), version: await versionOf(resolved) } : null,
+      };
       if (descriptor.id === "lark-cli") {
         const workspace = await workspaceState(descriptor, homeDirectory, source.workspace);
         const switches = agentId === "codex" ? await readAgentSwitches("codex", homeDirectory) : {};

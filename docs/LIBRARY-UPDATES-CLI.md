@@ -1,6 +1,8 @@
 # 统一技能库、更新检测与 CLI 工具 / Library, Updates and CLI Tools
 
-状态：第 1–3 节已实现（接口与实现细节见 `docs/ARCHITECTURE.md`“更新检测与执行”“统一技能库与 CLI 工具卡片”）。未实现：WorkBuddy `skillOverrides` 与 Trae `disabledSkills` 停用开关（格式未核实，只给指引）、含注释的 OpenClaw 配置自动编辑、项目级 `skills-lock.json` 扫描。日期：2026-10-04。依据：本机只读实测 + 官方文档 + 9 个同类工具源码调研（vercel-labs/skills、cc-switch、xingkongliang/skills-manager、runkids/skillshare、qufei1993/skills-hub、HarnessKit、getsentry/dotagents、openskills、skillport）。
+状态：第 1–3 节已实现（接口与实现细节见 `docs/ARCHITECTURE.md`“更新检测与执行”“统一技能库与 CLI 工具卡片”）。未实现：WorkBuddy `skillOverrides` 与 Trae `disabledSkills` 停用开关（格式未核实，只给指引）、含注释的 OpenClaw 配置自动编辑、项目级 `skills-lock.json` 扫描、库更新后重新复制副本（复制档和 Windows 复制兜底都只提示“与库内容不同”）。日期：2026-10-04。
+
+v0.3（2026-11-01，技能库优先）：办公小浣熊改为复制档（1.2）；新增自动接入与补齐（1.7）、统一的安装范围（1.8）、命令行 `skill-control` 与随附技能（1.9）。接口见 `docs/ARCHITECTURE.md`“v0.3 技能库优先”。依据：本机只读实测 + 官方文档 + 9 个同类工具源码调研（vercel-labs/skills、cc-switch、xingkongliang/skills-manager、runkids/skillshare、qufei1993/skills-hub、HarnessKit、getsentry/dotagents、openskills、skillport）。
 
 ## 1. 统一技能库
 
@@ -19,7 +21,7 @@
 | A 原生读取 | Codex、Gemini CLI、Cursor、Copilot CLI、VS Code Copilot、OpenCode、Amp、Windsurf（源码或更新日志已核对）；OpenClaw、QClaw | 不建链；清理该 Agent 自己目录里的同名副本。Codex 不合并同名技能，两份都会出现（按路径去重），且 `~/.codex/skills` 已被官方标为过时 |
 | B 配置额外目录 | Hermes（`skills.external_dirs`）；Copilot CLI 另有 `skillDirectories`、OpenCode 有 `skills.paths`、VS Code 有 `chat.agentSkillsLocations`（这些 Agent 已原生读取，通常不需要） | 优先经产品 CLI 写配置（`hermes config set`），写前展示 diff 并备份；清理 `~/.hermes/skills` 中同名不同内容的副本（否则 Hermes 报 Ambiguous skill name） |
 | C 逐技能软链 | Claude Code、Kiro、CodeBuddy、WorkBuddy、Trae（全局目录） | `<agent>/skills/<name> → ~/.agents/skills/<name>`，优先相对路径。只链目录，不要单独链接 `SKILL.md` 文件（Codex 会忽略）；避免链接成环（OpenCode 会卡死） |
-| 不分发 | 办公小浣熊（v1.0.17 已核对：只读取 `~/.box-agent/skills` 下的真实文件夹，`readdir` 后只保留 `isDirectory()` 为真的条目，不跟随软链接；停用开关是 `~/.box-agent/config/skill-settings.json` 的 `disabledSkillNames`） | 不建链；可以通过同步 / 导入复制安装；停用写 `disabledSkillNames`（先备份） |
+| C′ 复制（v0.3 起，此前不分发） | 办公小浣熊（v1.0.17 已核对：只读取 `~/.box-agent/skills` 下的真实文件夹，`readdir` 后只保留 `isDirectory()` 为真的条目，不跟随软链接；停用开关是 `~/.box-agent/config/skill-settings.json` 的 `disabledSkillNames`） | 不建链（链接对它无效，显示为“被隐藏”）；复制库条目一份，`library-lock.json` 记 `sourceHash`，可撤销；库更新后不会自动重新复制；停用写 `disabledSkillNames`（先备份） |
 | D 复制兜底 | Windows 无链接权限、可见性验证失败 | Windows 依次尝试 symlink → junction → 复制；复制记录 `sourceHash`，库更新后重新复制，界面标“副本” |
 
 分发后做可见性体检：按每个 Agent 的真实规则（是否跟随软链、是否做根目录包含检查、同名优先级、停用开关）逐技能给出“可见 / 被隐藏（原因）/ 重复”。
@@ -51,6 +53,39 @@
 ### 1.6 `library-lock.json`
 
 每条：`source`、`sourceType`（github / well-known / local / adopted …）、`sourceUrl`、`skillPath`、`ref`、`commit`、`upstreamHash`（与 vercel `skillFolderHash` 同为 git tree SHA）、`contentHash`（本地 sha256）、`adoptedFrom`、`fanout{agentId:{mode,path,verifiedAt}}`、`installedAt`、`updatedAt`。键排序，便于对比。
+
+### 1.7 自动接入与补齐（v0.3）
+
+- 设置：默认开启，范围“常用 Agent”（可改“全部 Agent”）。只处理档位 C（软链接）和 C′（复制）；Hermes 的 `external_dirs`
+  从不自动改，只提示，由用户在补齐计划里选择后才写（先备份）。
+- 只处理“缺失”的组合：Agent 自己目录里已有同名条目（相同或不同的副本、指向库外的链接）一律不动。
+- 基线：开启时（含升级后第一次运行）记下库里已有的技能，这些缺口不自动处理，而是作为“补齐接入”按 Agent 列出、确认后
+  执行——升级时某个 Agent 还缺 100 多个库技能，也不会被一次性全部链接。之后新进库的技能自动接入；后加入范围的 Agent
+  有自己的基线。
+- 只接一次：每个组合只自动接入一次。用户删掉链接、取消接入或撤销后记为墓碑，不再接回；按“指定 Agent”或“只装到这个
+  Agent”安装（含 `skill-control add --link a,b|none`）时，没勾选的 Agent 也记墓碑；手动接入会清掉墓碑。
+- 触发：启动、每次扫描后、监听库目录和各 Agent 的链接目录（只看第一层，去抖 2 秒）、`skill-control sync`。
+- 记录：每次运行写一条历史，可整条或按技能撤销；界面提示“刚自动接入了 X → A、B · 撤销”。
+
+### 1.8 安装范围（v0.3）
+
+- 所有安装入口（导入、从某个 Agent 同步、技能详情里的安装开关、随附技能、`skill-control add`）同一套范围：所有常用 Agent
+  （默认）/ 指定 Agent / 只装到这个 Agent（不进库，复制到该 Agent 自己的目录）。
+- 前两项先进库，再按 1.2 的档位接入；原生读取库的 Agent 也会看到，界面要说明。
+- 库里已有同名不同内容时必须选择：用新的（旧版先备份）/ 保留库里的。
+- 设置里的“安装方式”（统一技能库 / 各装一份）替代旧的复制 / 软链设置。旧配置一律迁移为统一技能库并提示一次，因为保存下来的
+  “复制”和默认值分不清。
+
+### 1.9 命令行与随附技能（v0.3）
+
+- `skill-control status | add | link | unlink | adopt | sync | undo | doctor`：与应用同一套计划、备份、历史和锁
+  （`~/.agent-skill-manager/library.lock`，应用和命令行可以同时运行），不联网；`--read-only` 或 `SKILL_MANAGER_DRY_RUN=1`
+  不写任何文件。
+- 启动脚本 `~/.local/bin/skill-control` 在设置页安装 / 卸载，不覆盖别人的同名文件；macOS 按 bundle id 找应用并用应用自带的
+  Node 运行（`ELECTRON_RUN_AS_NODE=1`），不会启动应用窗口；Windows 暂不支持。
+- 随附技能 `skill-control`（随应用打包，一键放进库并接入常用 Agent）教 Agent 按同样规则安装：问范围 → 下载到临时目录 →
+  安全检查 → `skill-control add` → 验证；没装命令行时给手动步骤。用 `npx skills add` 时只用 `-g -a codex -y`（不要
+  `-a hermes-agent`：Hermes 通过额外目录读库，它会另建 `~/.hermes/skills` 链接造成重复），装完运行 `skill-control sync`。
 
 ## 2. 更新检测
 
@@ -125,3 +160,4 @@
 2. 更新执行：skills-cli GitHub 条目由 Skill Control 自行更新；其余委托宿主 CLI。
 3. 技能库：所有者检测、可见性体检、收编与分发、停用与卸载。
 4. CLI 工具卡片：检测 → 启动脚本 → 放行规则 → 工作区绑定引导。
+5. v0.3 技能库优先：安装范围与迁移 → 自动接入（基线、墓碑、历史）→ 补齐接入 → 命令行与启动脚本 → 随附技能。

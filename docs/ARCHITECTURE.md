@@ -1208,6 +1208,180 @@ git（ls-remote 返回 unavailable）。测试服务器设置离线、固定命�
 体检报告读取缓存的更新结果（不联网），新增类别 `update-available`、`locally-modified`（只针对有来源的单元）、
 `lock-drift`，以及 `codex-tmp-leftovers`（`~/.codex/.tmp/git-*` 的数量与体积，统计有时间与条目上限）。
 
+## v0.3 技能库优先：唯一路径 + 接入
+
+设计见 `work/product/20261101-v030/SPEC.md`。每个技能只在 `~/.agents/skills/<名称>` 放一份，各 Agent 按
+`docs/LIBRARY-UPDATES-CLI.md` §1.2 的档位接入：原生读取（不动作）/ 额外目录（Hermes，改配置前确认并备份）/
+相对软链接（Claude Code、WorkBuddy、Kiro、Trae、CodeBuddy）/ 复制（办公小浣熊不跟随软链接，档位 `copy`，复制后在
+`library-lock.json` 的 fanout 里记 `sourceHash`）。Windows 的链接依次尝试 symlink → junction → 复制。
+
+### 设置与迁移（`server/library-settings.mjs`）
+
+`config.json` 新增 `library: { installMode: "library" | "per-agent", installModeMigrated?: { from: "copy" | "symlink" },
+autoLink: { enabled, scope: "primary" | "all" } }`。新安装默认 `{ installMode: "library", autoLink: { enabled: true, scope:
+"primary" } }`。0.3 之前的配置只有 `syncMode`，而保存下来的 `"copy"` 和默认值分不清，所以一律迁移为 `library`，并保留
+`installModeMigrated`（来自哪个值）直到用户自己选一次安装方式；`PUT /api/config` 只能改 `installMode`（把迁移说明原样
+带回则保留说明），自动接入只经 `POST /api/library/auto-link` 修改（它要处理基线）。
+
+### 自动接入（`server/auto-link.mjs`）
+
+- 范围：`scope: "primary"` 为常用 Agent，`"all"` 为技能库页列出的全部 Agent；只处理 link / copy 档。办公小浣熊的复制
+  只在它是常用 Agent 或 scope 为 all 时发生。
+- 只处理 `missing` 组合（该 Agent 没有任何同名条目）；Agent 自己的副本（相同或不同）一律不动；Hermes 的
+  `skills.external_dirs` 从不自动修改，缺少时在 `needsConfirmation` 里提示，由用户在补齐计划里选 `configure`。
+- 基线：开启时（以及升级后的第一次运行）记下库里已有的技能名；这些技能的缺口不自动处理，作为“补齐接入”计划提供。
+  之后才进入范围的 Agent（例如 scope 改为 all，或新设为常用）有自己的基线，不会一次性接入大量技能。关闭再开启会重新
+  记基线。不在库里的名字会从基线中去掉，所以删除后再装回来的技能算新技能。
+- 每个组合只自动接入一次（`handled`）；之后它又缺失（用户删了链接）不会再接回。在应用里“取消接入”、`skill-control
+  unlink`、在技能详情里卸载链接、撤销自动接入或链接，都会写墓碑 `skip`；按“指定 Agent”或“只装到这个 Agent”安装、
+  `skill-control add --link a,b|none` 时，范围内没勾选的 Agent 也写墓碑（与安装同一把锁，否则安装后的扫描会马上把它接过去）；
+  手动接入会清掉墓碑。
+- 触发：服务启动后一次（先记基线），每次扫描完成后，技能库目录与范围内 Agent 的链接目录的文件系统监听（只看第一层，
+  去抖 2 秒），以及 `skill-control sync`。同一进程内不会并行运行；每次运行持有技能库锁。
+- 执行：每个组合是一个库计划条目（link 或 copy），与手动操作同一套执行、复验（看不到就回滚）和历史；一次运行写一条
+  `type: "library", action: "auto-link"` 的历史，可以整条或按技能撤销。`SKILL_MANAGER_AUTO_LINK=off` 关闭后台运行
+  （启动、扫描后、监听；显式的 `/run` 和 `skill-control sync` 照常），`SKILL_MANAGER_AUTO_LINK_WATCH=0` 只关文件监听，
+  `SKILL_MANAGER_AUTO_LINK_DEBOUNCE_MS` 调去抖。测试服务默认两者都关：后台运行会在测试最后一个请求之后写主目录，与测试
+  删除临时主目录冲突（`rmdir` 报 ENOTEMPTY，后面的 `after` 钩子不再执行）；需要后台运行的测试显式打开，并在服务启动之后
+  才登记删除主目录。
+- 状态文件 `~/.agent-skill-manager/auto-link.json`（0600，在锁内写）：`{ version, baseline: { at, names, agents },
+  agentBaselines: { [agentId]: { at, names } }, handled: { "<agent>:<skill>": at }, skip: { "<agent>:<skill>": at },
+  runs: [最近 20 次], effectivePrimaryAgentIds, updatedAt }`。开关与范围在 config.json。
+
+`GET /api/library` 新增：
+
+```ts
+autoLink: {
+  enabled: boolean, scope: "primary" | "all",
+  baselineAt: string | null,                 // null：开启后还没运行过（下一次运行记基线）
+  pending: { [agentId]: number },            // 基线缺口（补齐接入会处理的数量）；关闭时为范围内的全部缺口
+  next: number,                              // 下一次运行会自动接入的组合数
+  needsConfirmation: Array<{ agentId: "hermes", kind: "config", id: "hermes-external-dirs", title, missing: number }>,
+  skipped: number,                           // 墓碑数
+  lastRun: { at, reason, items: Array<{ skill, agents: string[], unitIds: string[], historyId }>, failed: [...] } | null,
+  watching: boolean,
+}
+coverage: { [agentId]: { tier, method, primary, total, visible, missing, privateCopy, hidden, duplicate } }
+entries[].fanout[agentId]: { tier: "native" | "config" | "link" | "copy" | "none", state, reason, path?,
+  autoLinkable: boolean /* 下一次运行会自动接入 */, catchUp?: true /* 基线缺口 */, skipped?: true /* 墓碑 */ }
+agents[]: 另有 method（原生读取 / 额外目录 / 软链接 / 复制 / 不支持）与 linkDir（链接或复制放在哪里）
+```
+
+`coverage` 让技能库页如实描述：只有常用 Agent 的 `missing` 都为 0 时才写“常用 Agent 都能用库里的技能”。
+
+- `POST /api/library/auto-link { enabled?, scope? }` → `{ settings, autoLink }`：设置写入，不需要确认头；开启时重记基线。
+- `POST /api/library/auto-link/run { dryRun? }`：立刻运行一次；非 dryRun 需要 `confirm: true` 与确认头 → `{ enabled, scope,
+  connect: [{ agentId, skill }], pending: { [agentId]: number }, needsConfirmation, dryRun, connected: [{ skill, agents, unitIds,
+  historyId }], failed?: [{ skill, agentId, status, error }], historyId? }`（`connect` 是这次要接的组合，`connected` 是实际接上
+  的，按技能合并）。关闭时只返回 `{ enabled: false, connected: [], pending: {}, needsConfirmation: [] }`。
+- `POST /api/library/auto-link/undo { historyId, skill?, confirm: true }` + 确认头：提示条上的“撤销”。给 `skill` 时只撤销
+  这一个技能的组合；撤销的组合写墓碑。返回与 `/api/history/apply-restore` 相同。
+- `POST /api/library/catch-up/plan { agents?, choices? }` → 库计划（`action: "catch-up"`，另有 `byAgent: { [agentId]: { link: n,
+  copy: n } }`）；Hermes 的配置项默认 `skip`，`choices: { "hermes-external-dirs": "configure" }` 才执行。
+  `POST /api/library/catch-up/apply { planId, confirm: true }` + 确认头 → 与 `/api/library/apply` 相同，可从历史撤销。
+
+库计划（`/api/library/plan` 等）的返回都另有 `byAgent`；条目可带 `dependsOn`（前一项失败时跳过）。执行结果的每一项另有
+`kind`、`skill`、`agentId?`；历史记录另有 `origin`（app / cli / auto），条目带 `kind` 与 `agents`，历史列表的
+library 记录另有 `operation`（auto-link、catch-up、install、link …）与 `origin`。
+
+### 安装入口（`server/install-service.mjs`）
+
+导入 `.skill` / zip / 文件夹、从一个 Agent 同步到其他 Agent、技能详情里的安装开关、随附技能，都走同一个计划：
+
+- `POST /api/install/plan { source: { importId } | { instanceId } | { library: name } | { bundled: "skill-control" }, scope:
+  "primary" | "agents" | "agent-only", agentIds?, choices? }`
+  - `primary`：进技能库，接入全部常用 Agent；`agents`：进技能库，只接入 `agentIds`（原生读取的 Agent 也会看到，见
+    `alsoVisibleTo`）；`agent-only`：复制到 `agentIds[0]` 自己的目录，不进技能库。
+  - 安装方式为 `per-agent` 时，前两项也按旧方式复制到每个 Agent 的目录。
+  - `agents` / `agent-only`：自动接入范围内（link / copy 档）没勾选的 Agent 列在 `autoLinkSkip`，执行时为这个技能写墓碑，
+    之后的自动接入不会把它接过去；手动接入照常（并清掉墓碑）。
+  - 技能库模式返回库计划（`action: "install"`）加 `{ mode: "library", scope, installMode, skillName, label, library, targets:
+    [{ agentId, name, tier, method, outcome: "native" | "link" | "copy" | "replace-copy" | "config" | "conflict" | "already" |
+    "unsupported" }], alsoVisibleTo }`；库里已有同名不同内容时计划被挡住（`planId: null`），需
+    `choices: { "replace:<name>": "use-new" | "keep-library" }`（use-new 先把旧版备份）。各装一份模式返回旧的同步 /
+    导入计划加 `{ mode: "per-agent", targetAgentIds }`。
+- `POST /api/install/apply { planId, confirm: true }` + 确认头 → `{ mode, … }`（技能库模式同 `/api/library/apply`；各装一份
+  同 `/api/sync` / `/api/import-install`）。都写历史、可撤销。
+
+### 命令行 `skill-control`（`server/cli.mjs`、`server/cli-launcher.mjs`）
+
+`server/cli.mjs` 复用服务端模块（同一套计划、备份、历史与锁），不联网。命令：`status [<名称>]`、`add <文件夹> [--name]
+[--link primary|all|<a,b>|none] [--replace]`、`link <名称> [--primary|--all|--agents a,b]`、`unlink <名称> --agents a,b`、
+`adopt <agentId> <名称>`、`sync`、`undo <historyId>`、`doctor`；通用 `--json`、`--dry-run`、`--read-only`（或环境变量
+`SKILL_MANAGER_DRY_RUN=1` / `SKILL_CONTROL_READ_ONLY=1`：不写任何文件，包括配置和锁文件）。退出码：0 成功、1 失败、
+2 用法错误、3 需要选择（如 `add` 遇到库里同名不同内容）。写命令输出改了什么和 `skill-control undo <historyId>`；`--json`
+输出 `{ ok, command, readOnly, …, historyId?, undo? }`。常用 Agent：配置里选定的，否则应用上次解析出的
+（`auto-link.json` 的 `effectivePrimaryAgentIds`），再否则可见的 Agent。
+
+启动脚本：`GET /api/cli-launcher` → `{ supported, reason?, path: "~/.local/bin/skill-control", installed, foreign, upToDate,
+runsWith, onPath: boolean | null, pathHint? }`；`POST /api/cli-launcher/install` / `uninstall { confirm: true }` + 确认头。脚本
+第二行是标记行；没有标记的同名文件（别人的）拒绝覆盖或删除（409 `foreign-file`）。macOS 的脚本用 `ELECTRON_RUN_AS_NODE=1
+exec "<应用>/Contents/MacOS/<程序>" "<应用>/Contents/Resources/app.asar/server/cli.mjs" "$@"`，应用位置按 bundle id
+（`dev.skillcontrol.desktop`）查找：先核对安装时记下的位置，再 Spotlight，再 `/Applications`、`~/Applications`；从不用
+AppleScript 的 `path to application id`（它会启动应用）；找不到时清楚报错（退出码 127）。Linux（AppImage 用 `$APPIMAGE`，
+deb 用安装的程序）以 `-e` 加载器从程序旁边的 `resources/app.asar` 找 `server/cli.mjs`；从源码运行时直接用当前 Node。
+Windows 暂不支持（`supported: false` 并说明）。桌面主进程通过环境变量 `SKILL_CONTROL_APP_EXECUTABLE`、
+`SKILL_CONTROL_APP_PATH`、`SKILL_CONTROL_APP_PACKAGED`、`SKILL_CONTROL_BUNDLE_ID`、`SKILL_CONTROL_APPIMAGE` 告诉服务
+如何启动自己；`SKILL_MANAGER_LAUNCHER_DIR` 可改脚本目录（测试）。
+
+### 技能库锁（`server/state-lock.mjs`）
+
+应用与命令行共用 `~/.agent-skill-manager/library.lock`（O_EXCL 创建，0600，记 pid、主机、标签、开始时间）。库计划执行、
+自动接入、恢复、卸载都在锁内；同一异步上下文里嵌套调用复用已持有的锁，同一进程内排队，跨进程轮询等待（默认 30 秒，
+超时 409 `locked`，说明是谁持有）。进程已不在或超过 10 分钟的锁会被接管。
+
+### 随附技能 `skill-control`（`resources/skills/skill-control/`、`server/companion-skill.mjs`）
+
+教 Agent 按统一规则安装技能（问范围 → 下载到临时目录做安全检查 → `skill-control add` → 验证；没有命令行时给手动步骤；
+`npx skills add` 加 `-g -a codex -y` 后运行 `skill-control sync`，不用 `-a hermes-agent`）。随应用打包（electron-builder
+`files` + `asarUnpack`）。`GET /api/library/companion-skill` → `{ name, available, version, inLibrary, upToDate, fanout }`；
+`POST /api/library/companion-skill/install { confirm: true }` + 确认头：以 `scope: "primary"` 安装（库里有旧版本时备份后替换），
+返回安装结果和新的 `status`；已是最新且都已接入时没有可执行的计划，返回计划（`planId: null`）和 `status`。未经确认的写接口都返回
+400 `confirm-required`。
+
+### 新用户审查的后台修复（work/product/20261101-v030/NEW-USER-REVIEW.md）
+
+- **Agent 检测（问题 3、8，`server/agent-detection.mjs`）**：是否安装只看产品自己的文件、命令和应用，从不看技能目录，也不看
+  `~/.agents/skills`（技能库不属于任何 Agent）。Claude Code：`~/.claude/settings.json`、`~/.claude/projects`、`~/.claude.json`、
+  `~/.claude/local/claude`、`~/.local/bin/claude` 或 `claude` 命令；Codex：`~/.codex/config.toml`、`sessions`、`auth.json`、
+  `history.jsonl`、`codex` 命令或 Codex.app；其他 Agent 看产品主目录（如 `~/.kiro`，里面除了 `skills` 还有别的才算）、命令、
+  应用（agent-icons 的名称和 bundle id）或 VS Code 扩展（Cline、Roo Code）。命令只在 `SKILL_MANAGER_COMMAND_DIRS`（测试）、
+  正常搜索路径（真实主目录）或假主目录内的文件夹里找。一个都没检测到时没有 Agent（不再用 Codex、Claude Code、WorkBuddy
+  顶上）；旧配置里没安装的目录 Agent 不再返回，`primaryAgentIds` / `visibleAgentIds` 里的也随之去掉（手动添加的 Agent 一律算
+  已安装）。检测结果缓存 5 秒，`/api/scan?force=1` 刷新。`/api/scan` 的每个 Agent 另有 `installed`（目录 Agent 按检测，手动
+  添加的为 true）、`skillsDir: "present" | "missing"`（已安装但还没有技能目录）和 `detectedBy`（依据，如
+  `["~/.claude.json", "command:claude"]`）；`isNew` 只看已安装的 Agent。
+- **体检（问题 7）**：CLI 工具检查只覆盖已安装的 Agent（配置里只剩已安装的）。每行另有 `status: "found" | "missing" |
+  "unknown"`；还没有终端环境记录（shell snapshot）时为 `unknown` 并带 `note`（“还无法判断（这个 Agent 还没记录过终端环境）”），
+  不算问题，修复建议也不算它。标题和说明用显示名称。
+- **联网（问题 11）**：`config.network = { updateChecks: true, noticeSeenAt: string | null }`。`updateChecks`（设置里的“自动检查
+  更新”）只管自动检查（启动时和每天一次的 Agent 版本检查）；用户自己点的“立即检查”和技能更新检查照常联网。
+  `SKILL_MANAGER_UPDATES_OFFLINE=1` 仍然关掉一切联网（包括执行更新）。**首次启动**：新安装的 `noticeSeenAt` 为 null，自动检查
+  先不联网，等界面展示告知并 `PUT /api/config { network: { noticeSeen: true } }`（服务端只记一次时间）后立刻补一次检查；0.3 以前
+  的配置没有 `network`，迁移为 `noticeSeenAt: "before-0.3"`（这些用户一直在联网检查，不再等待）。`GET /api/config` 的 `network`
+  另有只读的 `envOffline`。`GET /api/agent-versions` 另有 `autoCheck: "on" | "off" | "waiting-notice"` 和 `checking`（后台检查进行
+  中）。桌面版注入的 `net.fetch`（系统代理）照常流进版本和更新两个服务。
+- **新 Agent 发现（问题 12）**：`~/Library/Application Support` 只列第一层文件夹名，只打开与已安装 App 名称或 bundle id 对得上、
+  或名字像 Agent 的文件夹；Apple / 系统 / 隐私保护的目录（`PROTECTED_SUPPORT_NAMES`：`com.apple.*`、AddressBook、
+  CallHistory*、Knowledge、MobileSync、FaceTime、Animoji、DifferentialPrivacy、CloudDocs、FileProvider、iCloud、Mail、Messages、
+  Safari、Calendars、Reminders、Photos 等）从不打开，Apple 的 App 也不参与匹配。`GET /api/agents/discover` 每天最多扫一次
+  （结果存在 `~/.agent-skill-manager/discovery.json`），`?force=1` 立即重扫；返回另有 `checkedAt`、`cached`、`nextCheckAt`，读取时
+  再按忽略列表和已有 Agent 过滤。
+- **导入（问题 16）**：`POST /api/import-skill` 接受 `.skill` 和 `.zip`（同一套检查：路径、条目数、单文件 25 MB、总共 100 MB）。
+  技能根是最浅的 SKILL.md 所在文件夹，根以外的文件（仓库的 README 等）忽略并计入 `ignoredCount`；并列有多个技能时返回 409
+  `multiple-skills` 和 `skills: [{ root, name }]`，用请求头 `x-skill-root: <root>`（URL 编码）重新上传选定的一个。
+  `POST /api/import-folder { path, root? }`：用户在桌面对话框里选的文件夹（完整路径），同样的限制，不跟随链接（计入
+  `skippedLinks`），跳过 `.git`，不接受磁盘根目录和主目录。两者返回同样的导入记录（另有 `source: "skill" | "zip" | "folder"`、
+  `root?`），之后走 `/api/install/plan { source: { importId } }`。错误码：`no-skill`、`multiple-skills`、`too-large`。
+- **版本不同（问题 4）**：“用较新的一份更新另一份”沿用 `POST /api/sync`（copy 模式：先备份、写历史、可撤销），对比沿用
+  `/api/skill-diff`、`/api/skill-diff-file`。新增 `GET /api/skill-diff-unified?leftInstanceId&rightInstanceId` →
+  `{ summary, files: [{ path, change }], diff, truncated, redacted, skillName, left, right }`：一份统一格式的差异（`a/` = left，
+  `b/` = right，每个文件最多 2,000 行，总共 200 KB），像密钥的值打码（`redact.mjs`），二进制文件只列出。
+- **数据目录（问题 15）**：`POST /api/reveal { target: "data-dir" }` 在访达 / 资源管理器 / 文件管理器里打开
+  `~/.agent-skill-manager`（只允许这个目标；测试和沙盒不打开），返回 `{ ok, opened, path }`。
+- **价格兜底（问题 22）**：没有确切价格时，系列兜底只用同一代的型号（代 = 型号 id 里的第一个数字，如 claude-opus-4-1 为 4）；
+  系列里没有这一代的型号时为 `unpriced`（“价格未知，未计入”），`reason` 说明不按其他代估算。
+
 ## 统一技能库与 CLI 工具卡片
 
 设计见 `docs/LIBRARY-UPDATES-CLI.md` 第 1、3 节。
@@ -1401,6 +1575,13 @@ OpenClaw、QClaw；修改后按用户的选择保存。状态判断仍只看常�
 | `invalid-request` | 400 | 参数无效 | 显示错误 |
 | `home-guard` / `command-not-allowed` / `forbidden` | 403 | 写入保护拒绝真实主目录 / 命令不在允许目录 / Host、Origin 或跨站检查不通过 | 显示错误 |
 | `not-found` / `route-missing` | 404 | 对象不存在 / 接口不存在（旧版本服务，界面据此做功能探测） | 显示错误 / 降级 |
+| `locked` | 409 | 另一个进程（应用或 `skill-control`）正在修改技能库，等待 30 秒仍未释放 | 稍后重试 |
+| `read-only` | 409 | 只读模式下拒绝写入 | 显示错误 |
+| `foreign-file` | 409 | `~/.local/bin/skill-control` 已存在且不是 Skill Control 写的 | 显示错误，不覆盖 |
+| `no-primary-agents` | 409 | 安装范围是“所有常用 Agent”但还没有常用 Agent | 引导去选常用 Agent |
+| `no-skill` | 400 | 导入的包或文件夹里没有 SKILL.md | 显示错误 |
+| `multiple-skills` | 409 | 导入的包或文件夹里并列有多个技能（响应带 `skills: [{ root, name }]`） | 让用户选一个后重试 |
+| `too-large` | 400 | 导入的文件夹超过条目数或大小限制 | 显示错误 |
 
 没有显式 `code` 的 403 / 404 / 409 分别默认为 `forbidden`、`not-found`、`conflict`；Node 的系统错误码（如 `ENOENT`）
 不会透出。`ApiError` 带 `code`（旧服务为 null）。
@@ -1449,6 +1630,36 @@ IPC 通道 `desktop:app-update-*` 只接受本应用主窗口顶层框架、来�
 - 发布：`electron-builder.yml` 的 `publish`（GitHub）让构建生成 `latest*.yml` 与 `app-update.yml`，构建
   命令保持 `--publish never`；release workflow 上传 yml 和 blockmap，合并两个架构的 `latest-mac.yml`，
   由 `publish` job 创建 Release（notes 的 front matter `prerelease: true` 时为预发布）。
+- 自动检查（启动后和每天）每次先经本地服务读 `GET /api/config` 的 `network`：`updateChecks` 为 false
+  时不查；全新安装在 `noticeSeenAt` 写入（看过首次告知）前不查；读不到时，检查过的安装（`app-update.json`
+  有 `checkedAt`）照常检查、全新安装等待。状态带 `autoCheck`。手动“检查更新”不受影响。
+- 签名核对（macOS，`checkSigner`，下载后和替换前各一次）：新包必须通过
+  `codesign --verify --deep --strict`；正在运行的版本由证书签名时，新包还要满足它的指定要求
+  （`codesign --verify -R="=<designated requirement>"`），或由 `desktop/code-signature.mjs` 的
+  `TRUSTED_SIGNER_SHA1` 里的证书签名（轮换证书用，同时核对 bundle 标识）。正在运行的是 ad-hoc
+  版本（0.2.x，指定要求只是 cdhash）时只核对有效性。构建端的签名见 `scripts/sign-mac.mjs`
+  与 docs/RELEASING.md“macOS 签名”。
+- macOS 拒绝替换（第一次 rename 或放入新包时 EPERM/EACCES，多为“App管理”权限）时报
+  `code: "blocked"`：说明到“系统设置 → 隐私与安全性 → App管理”允许 Skill Control，状态保持
+  `ready`（保留下载，可直接重试），并给出 `actions: ["open-app-management", "open-download-page"]`；
+  其他下载或安装失败给出 `["open-download-page"]`。`appUpdate.openAppManagement()` 打开
+  `x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles`（macOS 26.4 的“隐私与安全性”
+  扩展声明了 legacyBundleIdentifier `com.apple.preference.security`，`Privacy_AppBundles` 对应
+  `kTCCServiceSystemPolicyAppBundles`），`appUpdate.openDownloadPage()` 打开下载页。macOS 13 及以后、
+  没有 Developer ID（TeamIdentifier）的版本，在安装前的 `notice` 里预先说明可能需要这项权限。
+
+### 窗口、菜单与网络
+
+- 启动时先显示窗口和静态页 `desktop/startup.html`（“正在启动本地服务…”，无脚本，CSP
+  `default-src 'none'`），服务就绪后在同一窗口载入界面。preload 的服务地址在建窗口时固定：
+  管理服务改用了其他端口时，换一个同样大小、位置的新窗口。
+- 菜单（`desktop/app-menu.mjs`）：实际大小、放大（⌘+ 与 ⌘=）、缩小、关闭窗口（⌘W）、设置…（⌘,，
+  Windows / Linux 在“文件”里）、帮助 → 使用说明 / 反馈问题。设置… 经 IPC `desktop:navigate`
+  发 `{ page: "settings" }`，界面用 `skillManagerDesktop.onNavigate(cb)` 订阅（只放行已知页面）。
+- 联网：桌面模式把 Electron `net.fetch` 交给本地服务（`startServer({ fetchImpl })` → 洞察路由的
+  Agent 版本检查与技能 / 插件更新检测），与应用自身的更新检查一样走系统代理；设置了
+  `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY`（`NO_PROXY` 例外）时改用它们
+  （`desktop/network-proxy.mjs` → `session.setProxy`，回环地址始终直连）。离线模式优先于注入的 fetch。
 
 ## 本地服务防护（新增）
 
@@ -1489,6 +1700,8 @@ IPC 通道 `desktop:app-update-*` 只接受本应用主窗口顶层框架、来�
 | `GET /api/updates`、`/api/updates/check-status`、`/api/updates/changes`；`POST /api/updates/check`、`/api/updates/plan`、`/api/updates/apply` | 见“更新检测与执行” |
 | `GET/PUT /api/config` | 新增 `updates: { useGhAuth: boolean }`（默认 false） |
 | `GET /api/library`；`POST /api/library/plan`、`/api/library/apply`、`/api/library/restore` | 见“统一技能库与 CLI 工具卡片” |
+| `POST /api/library/auto-link`、`/api/library/auto-link/run`、`/api/library/auto-link/undo`、`/api/library/catch-up/plan`、`/api/library/catch-up/apply`、`/api/install/plan`、`/api/install/apply`；`GET /api/library/companion-skill`、`POST /api/library/companion-skill/install`；`GET /api/cli-launcher`、`POST /api/cli-launcher/install`、`/api/cli-launcher/uninstall` | 见“v0.3 技能库优先” |
+| `POST /api/import-folder`、`GET /api/skill-diff-unified`、`POST /api/reveal { target: "data-dir" }`；`/api/agents/discover?force=1`、`/api/import-skill` 的 `x-skill-root` | 见“新用户审查的后台修复” |
 | `GET /api/cli-tools`；`POST /api/cli-tools/plan`、`/api/cli-tools/apply` | 同上 |
 | `GET /api/history`、`/api/trash`；`POST /api/history/plan-restore`、`/api/history/apply-restore`、`/api/skills/plan-uninstall`、`/api/skills/apply-uninstall`、`/api/trash/restore` | 见“历史、恢复与卸载” |
 | `GET /api/scan` | Agent 新增 `iconAvailable` |

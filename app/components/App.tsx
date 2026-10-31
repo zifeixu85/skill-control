@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { usePersistent } from "../hooks/usePersistent";
-import { readSession, writeSession } from "../lib/storage";
+import { navigateTarget } from "../lib/navigation";
+import { onboardingLaterStore } from "../lib/onboarding";
 import { DrawerHost } from "./drawers/DrawerHost";
 import { AgentPage } from "./pages/agent/AgentPage";
 import { ConnectorsPage } from "./pages/ConnectorsPage";
@@ -85,9 +86,8 @@ function Shell() {
   const { route, go, drawer } = useNav();
   const { needsOnboarding, scan } = useData();
   const [theme] = usePersistent(themeStore);
-  const [dismissed, setDismissed] = useState(() =>
-    typeof window === "undefined" ? false : readSession("onboarding-dismissed") === "1",
-  );
+  // 稍后再说 (or Esc / the backdrop) is remembered: no sheet at the next start, a banner on 概览 instead.
+  const [later, setLater] = usePersistent(onboardingLaterStore);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -107,7 +107,18 @@ function Shell() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [go]);
 
-  const showOnboarding = needsOnboarding && !dismissed && Boolean(scan.data);
+  // The desktop menu (设置… ⌘,) asks for a page; the web build has no bridge.
+  useEffect(() => {
+    const bridge = (window as { skillManagerDesktop?: { onNavigate?: (callback: (target: unknown) => void) => unknown } }).skillManagerDesktop;
+    if (typeof bridge?.onNavigate !== "function") return undefined;
+    const unsubscribe = bridge.onNavigate((raw) => {
+      const target = navigateTarget(raw);
+      if (target) go(target.page, target.section ? { section: target.section } : {});
+    });
+    return typeof unsubscribe === "function" ? (unsubscribe as () => void) : undefined;
+  }, [go]);
+
+  const showOnboarding = needsOnboarding && later !== "1" && Boolean(scan.data);
   const pageKey = route.page === "agent" ? `agent:${route.agentId}` : route.page;
   const drawerKey = drawer ? `${drawer.kind}:${drawer.id}` : "none";
   return (
@@ -124,12 +135,7 @@ function Shell() {
         </ErrorBoundary>
       </main>
       {showOnboarding ? (
-        <OnboardingSheet
-          onDismiss={() => {
-            writeSession("onboarding-dismissed", "1");
-            setDismissed(true);
-          }}
-        />
+        <OnboardingSheet onLater={() => setLater("1")} />
       ) : null}
     </div>
   );

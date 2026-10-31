@@ -1,0 +1,476 @@
+/* v0.3 统一技能库 installs: the shared scope dialog, import, and 设置 → Agent 集成. */
+
+.install-scope {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+.scope-source {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scope-options {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--w-option), 100%), 1fr));
+}
+.scope-options legend,
+.scope-agents legend {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--ink-2);
+  margin-bottom: 6px;
+}
+.scope-opt {
+  height: 100%;
+  line-height: 1.4;
+}
+.scope-opt small {
+  margin-top: 3px;
+  line-height: 1.5;
+}
+.scope-opt:has(input:checked) {
+  background: color-mix(in oklab, var(--accent-wash) 55%, var(--panel));
+}
+.scope-agents {
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+}
+.scope-agents label {
+  grid-template-columns: 16px 18px minmax(0, 1fr) auto;
+  min-height: 34px;
+}
+.scope-agent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scope-agent em {
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--accent);
+  background: var(--accent-wash);
+  border-radius: 999px;
+  padding: 0 6px;
+  flex: none;
+}
+.scope-plan {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--line-2);
+  padding-top: 12px;
+}
+.scope-plan .mini-h {
+  margin: 0;
+}
+.scope-plan .plan-agent > b .tag {
+  margin-left: 2px;
+}
+.modal-sub {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-3);
+  margin-top: 2px;
+}
+.foot-progress {
+  flex-basis: 100%;
+}
+.import-pick,
+.import-body {
+  display: grid;
+  gap: 14px;
+}
+.import-pick > p {
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+.where-more {
+  justify-self: start;
+  margin-top: 6px;
+}
+
+/* 设置 → Agent 集成 */
+.int-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--w-panel), 100%), 1fr));
+}
+.int-card {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  background: var(--panel);
+  border-radius: var(--r-card);
+  box-shadow: 0 0 0 1px var(--line-2);
+  padding: 14px;
+  min-width: 0;
+}
+.int-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+.int-head h3 {
+  font-size: 14px;
+  font-weight: 650;
+  margin-bottom: 3px;
+}
+.int-head p {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+.int-status,
+.int-reach {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  font-size: 12.5px;
+  min-width: 0;
+}
+.int-status code {
+  font-size: 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.int-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-2);
+}
+.int-agent em {
+  font-style: normal;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+.int-agent.on em {
+  color: var(--accent);
+}
+.int-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: color-mix(in oklab, var(--accent-wash) 60%, var(--panel));
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--accent) 30%, transparent);
+  border-radius: 10px;
+  padding: 9px 10px;
+}
+.int-confirm > span:first-child {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.int-examples {
+  display: grid;
+  gap: 4px;
+  background: var(--code);
+  border-radius: 10px;
+  padding: 8px 10px 10px;
+  min-width: 0;
+}
+.int-examples-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.int-example {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+.int-example code {
+  font-size: 12px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.int-example span {
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+
+/* The plan in library mode: the library row, then one line per target Agent. */
+.install-plan {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.install-targets {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  background: var(--panel);
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px var(--line-2);
+  min-width: 0;
+}
+.install-targets li {
+  display: grid;
+  grid-template-columns: minmax(96px, 150px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 7px 12px;
+  font-size: 13px;
+  min-width: 0;
+}
+.install-targets li + li {
+  border-top: 1px solid var(--line-2);
+}
+.it-who {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.it-how {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--ink-2);
+  min-width: 0;
+}
+.it-how .tier-name {
+  flex: none;
+  font-size: 11.5px;
+}
+.install-steps summary {
+  cursor: pointer;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.install-steps[open] {
+  display: grid;
+  gap: 8px;
+}
+.import-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.import-body .import-head {
+  padding: 10px 12px;
+}
+
+/* 补齐接入 can be 100+ items: one line each under its Agent. */
+.plan-rows {
+  display: grid;
+  background: var(--panel);
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+.plan-row {
+  display: grid;
+  grid-template-columns: 18px minmax(120px, 0.6fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+  min-width: 0;
+}
+.plan-row + .plan-row {
+  border-top: 1px solid var(--line-2);
+}
+.plan-row.off {
+  opacity: 0.6;
+}
+.plan-row input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+.plan-row b {
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan-row-step {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-3);
+}
+.plan-row-step code {
+  font-size: 11.5px;
+}
+
+/* Long plan reviews keep 取消 / 确认 in reach. */
+.plan-sheet > .acts {
+  position: sticky;
+  bottom: -20px;
+  margin: 0 -26px -20px;
+  padding: 12px 26px 16px;
+  background: var(--window);
+  border-top: 1px solid var(--line-2);
+  border-radius: 0 0 18px 18px;
+  z-index: 1;
+}
+
+@container page (max-width: 640px) {
+  .install-targets li {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+.plan-sheet .plan-section + .plan-section {
+  margin-top: 14px;
+}
+
+/* 版本不同: update the older copy, view the diff. */
+.version-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.skill-diff {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.skill-diff-body {
+  display: grid;
+  grid-template-columns: minmax(150px, 220px) minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+}
+.skill-diff-files {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  min-width: 0;
+}
+.skill-diff-file {
+  display: grid;
+  gap: 1px;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  border-radius: 8px;
+  padding: 6px 8px;
+  color: var(--ink);
+  min-width: 0;
+}
+.skill-diff-file code {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skill-diff-file small {
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+.skill-diff-file:hover {
+  background: var(--hover);
+}
+.skill-diff-file.on {
+  background: var(--accent-wash);
+}
+.skill-diff-view {
+  min-width: 0;
+}
+.skill-diff-lines {
+  max-height: 46vh;
+  overflow: auto;
+  margin: 0;
+}
+.skill-diff-lines .ln.skip {
+  color: var(--ink-2);
+  font-style: italic;
+}
+@container page (max-width: 640px) {
+  .skill-diff-body {
+    grid-template-columns: 1fr;
+  }
+}
+.import-alt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.import-alt .btn {
+  cursor: pointer;
+}
+.import-alt .btn:focus-within {
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 30%, transparent);
+}
+.import-hint {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+.import-hint .link-btn {
+  margin-left: 4px;
+}
+.import-choices {
+  display: grid;
+  gap: 8px;
+  background: var(--panel);
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px var(--line-2);
+  padding: 12px 14px;
+}
+.import-choices p {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.import-choice-list {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+.import-choice {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  text-align: left;
+  border: 0;
+  border-radius: 8px;
+  background: var(--hover);
+  color: var(--ink);
+  padding: 7px 10px;
+  font-size: 13px;
+}
+.import-choice:hover {
+  background: var(--accent-wash);
+}
+.import-choice code {
+  font-size: 12px;
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

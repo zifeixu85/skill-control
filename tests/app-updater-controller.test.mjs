@@ -1,10 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdir, readdir, readFile, rename } from "node:fs/promises";
+import { mkdir, readdir, readFile, rename, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
 import * as macOps from "../desktop/app-update-mac.mjs";
-import { createAppUpdater, LATEST_RELEASE_API, RELEASES_URL } from "../desktop/app-updater.mjs";
+import {
+  APP_MANAGEMENT_NOTICE,
+  APP_MANAGEMENT_SETTINGS_URL,
+  BLOCKED_TEXT,
+  createAppUpdater,
+  LATEST_RELEASE_API,
+  RELEASES_URL,
+  UpdateError,
+} from "../desktop/app-updater.mjs";
 import {
   bundleVersion,
   fakeFetch,
@@ -71,8 +79,12 @@ async function controllerFixture(t, { routes = macRoutes(), env = {}, mac = {}, 
         await makeBundle(destination, { version: "0.2.0" });
       },
       spawnRelaunchHelper: (options_) => relaunched.push(options_),
+      // codesign is macOS-only and the fake bundles are unsigned: an ad-hoc running copy.
+      readCodeSignature: async () => null,
+      checkSigner: async () => ({ checked: false, reason: "adhoc" }),
       ...mac,
     },
+    osRelease: "21.6.0",
     ...options,
   });
   return { root, applications, current, trash, events, opened, relaunched, calls, updater, quits: () => quits };
@@ -226,7 +238,7 @@ test("network failures become a readable error", async (t) => {
   assert.equal(fixture.calls.length, 2, "a failed check is retried on demand, not reused");
 });
 
-test("start() checks once when the last check is old and not when it is recent", async (t) => {
+function scheduler() {
   const scheduled = [];
   const timers = {
     setTimeout: (callback, ms) => (scheduled.push({ callback, ms }), { unref() {} }),
@@ -234,16 +246,92 @@ test("start() checks once when the last check is old and not when it is recent",
     clearTimeout() {},
     clearInterval() {},
   };
-  const fixture = await controllerFixture(t, { timers });
+  const fire = async (index) => {
+    scheduled[index].callback();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  };
+  return { scheduled, timers, fire };
+}
+
+const SEEN = { updateChecks: true, noticeSeenAt: "2026-11-01T00:00:00.000Z", envOffline: false };
+
+test("start() checks once when the last check is old and not when it is recent", async (t) => {
+  const { scheduled, timers, fire } = scheduler();
+  const fixture = await controllerFixture(t, { timers, readNetworkSettings: async () => SEEN });
   await fixture.updater.start();
   assert.deepEqual(scheduled.map((entry) => entry.ms), [15_000, 60 * 60 * 1000]);
-  scheduled[0].callback();
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await fire(0);
   assert.equal(fixture.calls.length, 1);
-  scheduled[1].callback();
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await fire(1);
   assert.equal(fixture.calls.length, 1, "checked less than 24 h ago");
   fixture.updater.stop();
+});
+
+test("automatic checks follow 自动检查更新 and wait for the first-run notice; 检查更新 by hand always runs", async (t) => {
+  let network = { updateChecks: false, noticeSeenAt: "before-0.3", envOffline: false };
+  const { timers, fire } = scheduler();
+  const fixture = await controllerFixture(t, { timers, readNetworkSettings: async () => network, recentMs: 0 });
+  await fixture.updater.start();
+  await fire(0);
+  assert.equal(fixture.calls.length, 0, "自动检查更新 is off");
+  assert.equal((await fixture.updater.status()).autoCheck, "off");
+  assert.equal((await fixture.updater.check()).status, "available", "a manual check still runs");
+  assert.equal(fixture.calls.length, 1);
+
+  const freshTimers = scheduler();
+  const waiting = await controllerFixture(t, { timers: freshTimers.timers, readNetworkSettings: async () => network });
+  network = { updateChecks: true, noticeSeenAt: null, envOffline: false };
+  await waiting.updater.start();
+  await freshTimers.fire(0);
+  assert.equal(waiting.calls.length, 0, "a fresh install waits for the notice");
+  assert.equal((await waiting.updater.status()).autoCheck, "waiting-notice");
+  network = { ...network, noticeSeenAt: "2026-11-01T08:00:00.000Z" };
+  await freshTimers.fire(1);
+  assert.equal(waiting.calls.length, 1, "checks once the notice was seen, without a restart");
+  assert.equal((await waiting.updater.status()).autoCheck, "on");
+});
+
+test("when the settings cannot be read, existing installs keep checking and fresh ones wait", async (t) => {
+  const failing = async () => {
+    throw new TypeError("fetch failed");
+  };
+  const freshTimers = scheduler();
+  const fresh = await controllerFixture(t, { timers: freshTimers.timers, readNetworkSettings: failing });
+  await fresh.updater.start();
+  await freshTimers.fire(0);
+  assert.equal(fresh.calls.length, 0);
+  assert.equal((await fresh.updater.status()).autoCheck, "waiting-notice");
+
+  // An install that checked before (0.2.x) has a checkedAt in app-update.json.
+  const existingTimers = scheduler();
+  const existing = await controllerFixture(t, { timers: existingTimers.timers, readNetworkSettings: failing, now: () => Date.parse("2026-11-01T12:00:00Z") });
+  await mkdir(path.join(existing.root, "userData"), { recursive: true });
+  await writeFile(
+    path.join(existing.root, "userData", "app-update.json"),
+    JSON.stringify({ schema: 1, checkedAt: "2026-10-24T12:00:00.000Z", release: null }),
+  );
+  const reloaded = createAppUpdater({
+    currentVersion: "0.1.0",
+    platform: "darwin",
+    arch: "arm64",
+    packaged: true,
+    env: {},
+    fetchImpl: async (url) => {
+      existing.calls.push({ url: String(url) });
+      return new Response("not found", { status: 404 });
+    },
+    stateFile: path.join(existing.root, "userData", "app-update.json"),
+    executablePath: path.join(existing.current, "Contents", "MacOS", "Skill Control"),
+    now: () => Date.parse("2026-11-01T12:00:00Z"),
+    readNetworkSettings: failing,
+    timers: existingTimers.timers,
+    logger: { warn() {} },
+    mac: { ...macOps, readCodeSignature: async () => null },
+  });
+  await reloaded.start();
+  await existingTimers.fire(existingTimers.scheduled.length - 2);
+  assert.equal(existing.calls.length, 1, "the 0.2.x user keeps the automatic check");
+  assert.equal((await reloaded.status()).autoCheck, "on");
 });
 
 test("Windows: electron-updater downloads and installs; portable builds only point to the page", async (t) => {
@@ -305,6 +393,98 @@ test("install before a download explains itself", async (t) => {
   assert.equal(await bundleVersion(fixture.current), "0.1.0");
 });
 
+test("macOS refusing the swap keeps the download and offers App Management and the download page", async (t) => {
+  let allowed = false;
+  const swaps = [];
+  const fixture = await controllerFixture(t, {
+    mac: {
+      swapBundle: async (options) => {
+        swaps.push(options.newPath);
+        if (!allowed) throw new UpdateError("blocked", `${BLOCKED_TEXT}原来的版本没有改动。`);
+        return { backupPath: `${options.currentPath}.old`, trashed: true };
+      },
+    },
+  });
+  await fixture.updater.check();
+  assert.equal((await fixture.updater.download()).status, "ready");
+  const zipRequests = () => fixture.calls.filter((call) => call.url.endsWith(".zip")).length;
+  const downloaded = zipRequests();
+
+  const blocked = await fixture.updater.install();
+  assert.equal(blocked.status, "ready", "the download is kept for a retry");
+  assert.match(blocked.error, /App管理/u);
+  assert.deepEqual(blocked.actions, ["open-app-management", "open-download-page"]);
+  assert.equal(blocked.installing, undefined);
+  assert.equal(fixture.quits(), 0);
+
+  await fixture.updater.openAppManagement();
+  await fixture.updater.openDownloadPage();
+  assert.deepEqual(fixture.opened, [APP_MANAGEMENT_SETTINGS_URL, `${REPO}/releases/tag/v0.2.0`]);
+  assert.equal(APP_MANAGEMENT_SETTINGS_URL, "x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles");
+
+  allowed = true;
+  const retried = await fixture.updater.install();
+  assert.equal(retried.installing, true);
+  assert.equal(retried.actions, undefined);
+  assert.equal(zipRequests(), downloaded, "no second download");
+  assert.equal(swaps.length, 2);
+  assert.equal(swaps[0], swaps[1]);
+  assert.equal(fixture.quits(), 1);
+});
+
+test("a signature that does not match stops the download, with the download page as the way out", async (t) => {
+  const fixture = await controllerFixture(t, {
+    mac: {
+      checkSigner: async () => {
+        throw new UpdateError("signature", "新版本的签名证书和当前应用不一致，已停止。请从下载页手动更新。");
+      },
+    },
+  });
+  await fixture.updater.check();
+  const state = await fixture.updater.download();
+  assert.equal(state.status, "error");
+  assert.match(state.error, /签名证书/u);
+  assert.deepEqual(state.actions, ["open-download-page"]);
+  assert.deepEqual(await readdir(path.join(fixture.root, "tmp")), [], "the download is discarded");
+  const checked = await fixture.updater.check({ background: true });
+  assert.equal(checked.actions, undefined, "a later successful check clears the failure");
+});
+
+test("the signer check runs on the new bundle before it is offered and again before the swap", async (t) => {
+  const checks = [];
+  const fixture = await controllerFixture(t, {
+    mac: {
+      checkSigner: async (options) => {
+        checks.push(options);
+        return { checked: false, reason: "adhoc" };
+      },
+    },
+  });
+  await fixture.updater.check();
+  await fixture.updater.download();
+  await fixture.updater.install();
+  assert.equal(checks.length, 2);
+  assert.equal(checks[0].currentPath, fixture.current);
+  assert.equal(checks[0].bundleId, "dev.skillcontrol.desktop");
+  assert.match(checks[0].newPath, /extracted\/Skill Control\.app$/u);
+  assert.equal(checks[1].newPath, checks[0].newPath);
+});
+
+test("macOS 13+ shows the App Management notice before installing a build without a Developer ID", async (t) => {
+  const modern = await controllerFixture(t, { osRelease: "25.4.0" });
+  assert.equal((await modern.updater.check()).notice, APP_MANAGEMENT_NOTICE);
+  const team = await controllerFixture(t, {
+    osRelease: "25.4.0",
+    mac: { readCodeSignature: async () => ({ adhoc: false, teamIdentifier: "ABCDE12345", authorities: ["Developer ID Application"] }) },
+  });
+  assert.equal((await team.updater.check()).notice, undefined);
+  const monterey = await controllerFixture(t, { osRelease: "21.6.0" });
+  assert.equal((await monterey.updater.check()).notice, undefined);
+  const windows = await controllerFixture(t, { platform: "win32", arch: "x64", env: { PORTABLE_EXECUTABLE_DIR: "C:\\Apps" } });
+  await windows.updater.openAppManagement();
+  assert.deepEqual(windows.opened, [], "App Management exists on macOS only");
+});
+
 // ---------------------------------------------------------------------------
 // Preload bridge
 
@@ -323,6 +503,7 @@ test("the preload bridge exposes appUpdate: fixed channels, never rejects, onPro
       ipcRenderer: {
         invoke: async (channel, ...args) => {
           invoked.push([channel, args.length]);
+          if (channel.startsWith("desktop:app-update-open-")) return { status: "ready", current: "0.2.0", canInstall: true };
           if (channel === "desktop:app-update-install") throw new Error("handler missing");
           return { status: "up-to-date", current: "0.2.0", canInstall: true };
         },
@@ -361,4 +542,24 @@ test("the preload bridge exposes appUpdate: fixed channels, never rejects, onPro
   unsubscribe();
   assert.equal(listeners.has("desktop:app-update-state"), false);
   assert.equal(typeof appUpdate.onProgress("nope"), "function");
+
+  invoked.length = 0;
+  assert.equal((await appUpdate.openAppManagement()).status, "ready");
+  await appUpdate.openDownloadPage();
+  assert.deepEqual(invoked, [
+    ["desktop:app-update-open-app-management", 0],
+    ["desktop:app-update-open-download-page", 0],
+  ]);
+
+  // 设置… (⌘,) in the menu: only known pages reach the page, never the IPC event.
+  const targets = [];
+  const stop = exposed.api.onNavigate((target) => targets.push(target));
+  listeners.get("desktop:navigate")({ sender: "secret" }, { page: "settings" });
+  listeners.get("desktop:navigate")({}, { page: "settings", section: "about" });
+  listeners.get("desktop:navigate")({}, { page: "javascript:alert(1)" });
+  listeners.get("desktop:navigate")({}, null);
+  assert.deepEqual(targets, [{ page: "settings" }, { page: "settings", section: "about" }]);
+  stop();
+  assert.equal(listeners.has("desktop:navigate"), false);
+  assert.equal(typeof exposed.api.onNavigate(42), "function");
 });

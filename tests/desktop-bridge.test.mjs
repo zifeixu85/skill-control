@@ -47,3 +47,37 @@ test("the preload bridge exposes copyText and only sends strings", async () => {
   assert.deepEqual(calls, [["desktop:copy-text", "hello"]]);
   assert.ok(Object.isFrozen(exposed.api));
 });
+
+test("the preload bridge's pickFolder returns a path or null", async () => {
+  const answers = ["/tmp/some-skill", null, "", 7];
+  let exposed = null;
+  const electronPath = require.resolve("electron");
+  const previous = require.cache[electronPath];
+  require.cache[electronPath] = {
+    id: electronPath,
+    filename: electronPath,
+    loaded: true,
+    exports: {
+      contextBridge: { exposeInMainWorld: (name, api) => (exposed = { name, api }) },
+      ipcRenderer: {
+        invoke: async (channel) => {
+          assert.equal(channel, "desktop:pick-folder");
+          if (!answers.length) throw new Error("ipc failed");
+          return answers.shift();
+        },
+      },
+    },
+  };
+  try {
+    delete require.cache[require.resolve("../desktop/preload.cjs")];
+    require("../desktop/preload.cjs");
+  } finally {
+    if (previous) require.cache[electronPath] = previous;
+    else delete require.cache[electronPath];
+  }
+  assert.equal(await exposed.api.pickFolder(), "/tmp/some-skill");
+  assert.equal(await exposed.api.pickFolder(), null);
+  assert.equal(await exposed.api.pickFolder(), null);
+  assert.equal(await exposed.api.pickFolder(), null);
+  assert.equal(await exposed.api.pickFolder(), null, "an IPC failure resolves null");
+});

@@ -64,6 +64,83 @@ npm test
 构建配置的实际产物和名称以 `electron-builder.yml` 为准。正式发布前应使用项目
 认可的代码签名、公证或包签名流程；没有完成时必须在 Release notes 中写明。
 
+## macOS 签名（固定的自签名证书）
+
+macOS 版用一张固定的自签名代码签名证书签名（还没有 Developer ID，也没有公证）。
+证书不变，应用的“指定要求”（designated requirement，形如
+`identifier "dev.skillcontrol.desktop" and certificate leaf = H"…"`）就不变：macOS 按它
+记住的授权（App管理、完全磁盘访问等）在更新后继续有效，应用内更新也用它确认新版本
+来自同一张证书。ad-hoc 签名的指定要求只是 cdhash，每次构建都会变。
+
+### 怎么签
+
+`electron-builder.yml` 里 `mac.identity: null`，由 `afterPack` 钩子
+`scripts/sign-mac.mjs` 统一签名（identity 为 null 时 electron-builder 自己不签，也不会调用
+afterSign 钩子）：先签所有内嵌的二进制、框架和 Helper，再签应用本身（由内向外，不用
+`--deep`），最后执行 `codesign --verify --deep --strict` 并打印指定要求和证书 SHA-1。
+签名方式由环境变量决定：
+
+| 环境 | 方式 |
+| --- | --- |
+| GitHub Actions，且设置了 `MAC_SIGN_P12_BASE64` + `MAC_SIGN_P12_PASSWORD` | 导入临时钥匙串，在 runner 上把证书设为代码签名可信（`sudo security add-trusted-cert`，自签名证书不受信任时 codesign 会报 “no identity found”），签名后删除钥匙串、搜索列表条目和信任设置 |
+| 本机，设置了 `MAC_SIGN_IDENTITY`（SHA-1 或名称） | 用钥匙串里已经信任的身份签名，不改任何钥匙串或信任设置 |
+| 都没有 | ad-hoc 签名（与 v0.2.1 相同），本地构建默认如此 |
+
+在本机设置 `MAC_SIGN_P12_*` 会直接报错：导入 p12 需要创建钥匙串、修改搜索列表和信任
+设置，脚本只在 CI 的一次性 runner 上自动做这些事。
+
+### 设置仓库（一次）
+
+1. 在 Settings → Secrets and variables → Actions 添加 secrets：
+   - `MAC_SIGN_P12_BASE64`：`base64 -i skill-control-signing.p12 | pbcopy`；
+   - `MAC_SIGN_P12_PASSWORD`：p12 的密码。
+
+   p12 用传统加密导出（OpenSSL 3：`openssl pkcs12 -export -legacy …`），否则 macOS 的
+   `security import` 可能读不了。
+2. 添加 variable `MAC_SIGN_CERT_SHA1` = `313A65FF9080E447216EBC2C090344785D2652B1`
+   （当前证书：CN “Skill Control Code Signing (zifeixu85)”，RSA-3072，有效期到 2036-10-28）。
+   用证书签名的构建，证书 SHA-1 必须与它一致；它不会让 ad-hoc 构建失败（fork 和 PR 没有签名
+   secrets，照常 ad-hoc 签名）。
+3. 运行 **macOS signing check**：在 Actions 里手动运行（这个文件进了默认分支以后才能手动
+   运行），或者把要检查的提交推到 `sign-check/…` 分支（例如
+   `git push origin HEAD:sign-check/v0.3.0`）。它构建 arm64 应用、用证书签名并校验，打印
+   指定要求和证书 SHA-1，再把改动过的副本重新签名，确认指定要求相同、cdhash 不同。
+4. 检查通过后添加 variable `MAC_SIGN_REQUIRED` = `true`。此后缺少证书时 macOS 构建直接
+   失败，不会再静默退回 ad-hoc。没设置时，只要 secrets 存在，发布也会用证书签名。
+
+`desktop/code-signature.mjs` 的 `TRUSTED_SIGNER_SHA1` 也写着这张证书的 SHA-1，供更新器在
+轮换证书时使用（见下）。
+
+### 校验一个构建
+
+```bash
+codesign --verify --deep --strict --verbose=2 "Skill Control.app"
+codesign -d -r- "Skill Control.app"            # 指定要求
+node scripts/sign-mac.mjs verify "Skill Control.app"   # 同上，并对照 MAC_SIGN_CERT_SHA1
+```
+
+### 应用内更新怎样核对签名
+
+更新器在下载后、替换前都会检查新版本：签名必须有效；如果正在运行的版本是用证书签的，
+新版本还要满足它的指定要求，或者由 `TRUSTED_SIGNER_SHA1` 里的证书签名。正在运行的是
+ad-hoc 版本（0.2.x）时只检查签名有效，所以 0.2.x 可以更新到第一个用证书签名的版本。
+
+### 轮换证书
+
+1. 生成新证书（同样是代码签名用途），记下它的 SHA-1。
+2. 把新 SHA-1 加进 `desktop/code-signature.mjs` 的 `TRUSTED_SIGNER_SHA1`，仍用**旧证书**
+   发布一个版本 N。装了 N 的用户之后能接受新证书签名的更新。
+3. 大多数用户更新到 N 以后，替换 secrets `MAC_SIGN_P12_*` 和 variable
+   `MAC_SIGN_CERT_SHA1`，运行 macOS signing check，再发布 N+1。
+4. 还停在 N 之前版本的用户，应用内更新会提示签名证书不一致，需要从下载页手动更新一次。
+   证书变了以后，macOS 给过的授权（App管理、完全磁盘访问）需要用户重新允许一次。
+5. 旧证书的 SHA-1 可以在之后的版本里从列表删掉；旧 p12 离线保存，直到不再支持 N 之前的
+   版本。
+
+私钥泄露时按同样步骤尽快轮换，并在 Release notes 里说明。更新器只从本仓库的 Release
+下载、按 Release 里的 `latest-mac.yml` 校验 sha512，单凭私钥推不了应用内更新；但用它签名
+的同标识应用能满足同一个指定要求，可能沿用用户给 Skill Control 的系统授权。
+
 ## 3. 每个平台的冒烟测试
 
 在没有源码目录和开发依赖的普通用户环境中验证：
@@ -106,6 +183,13 @@ npm test
 构建命令始终带 `--publish never`：`electron-builder.yml` 里的 `publish`（GitHub）只用来
 生成这些文件，上传和创建 Release 都由 workflow 的 `publish` job 完成，只有这个 job
 拥有 `contents: write` 权限。
+
+`publish` job 还会复制一份不带版本号的常用安装包：`Skill-Control-mac-arm64.dmg`、
+`Skill-Control-mac-x64.dmg`、`Skill-Control-win-x64-setup.exe`、
+`Skill-Control-linux-x86_64.AppImage`。README 可以用固定链接指向最新的正式版本，例如
+`https://github.com/zifeixu85/skill-control/releases/latest/download/Skill-Control-mac-arm64.dmg`
+（`latest` 不包含预发布）。签名的 secrets 只传给 macOS 的构建步骤；“Verify macOS code
+signature” 会检查应用和 zip 里的副本。
 
 ### 预发布与转为正式版本
 

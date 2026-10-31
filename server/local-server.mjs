@@ -34,7 +34,8 @@ import { remedyForSecret, secretsGuide } from "./remedies.mjs";
 import { buildSecretsInventory } from "./secrets-inventory.mjs";
 import { skillUsageStats } from "./usage-query.mjs";
 import { createManageRoutes, MANAGE_ROUTES } from "./manage-routes.mjs";
-import { applyPrecedence, detectionPaths, SKILL_ADAPTERS } from "./agent-adapters.mjs";
+import { applyPrecedence, SKILL_ADAPTERS } from "./agent-adapters.mjs";
+import { detectInstalledAgents, INSTALL_EVIDENCE } from "./agent-detection.mjs";
 import { isSensitiveCapabilityPath, scanWorkBuddyExperts } from "./workbuddy-experts.mjs";
 import { readWorkBuddyExpertUsage } from "./workbuddy-usage.mjs";
 import { scanHermesProfiles } from "./hermes.mjs";
@@ -62,6 +63,8 @@ import { buildConfigDetail, cleanText } from "./config-detail.mjs";
 import { planTargetWrites, publicAction, publicPlan } from "./sync-targets.mjs";
 import { copySkillTree } from "./skill-copy.mjs";
 import { errorCode } from "./plan-store.mjs";
+import { scrubTokens } from "./redact.mjs";
+import { DEFAULT_LIBRARY_SETTINGS, mergeLibrarySettings, normalizeLibrarySettings } from "./library-settings.mjs";
 
 export { compareVersions } from "./skill-status.mjs";
 export { parseFrontmatter } from "./frontmatter.mjs";
@@ -312,10 +315,49 @@ const AGENT_FALLBACK_COLORS = [
 const DEFAULT_CONFIG = {
   version: 3,
   syncMode: "copy",
-  agents: AGENT_CATALOG.slice(0, 3),
-  visibleAgentIds: ["codex", "claude"],
+  // New installs start with the shared library and auto-link on (server/library-settings.mjs).
+  library: DEFAULT_LIBRARY_SETTINGS,
+  // No placeholder Agents: only installed ones are offered (v0.3, review issue 3).
+  agents: [],
+  visibleAgentIds: [],
   dismissedAgentIds: [],
+  // A fresh install waits for the first-run notice before its first automatic check.
+  network: { updateChecks: true, noticeSeenAt: null },
 };
+
+// Configs from before 0.3 had no `network`: their users already ran update checks, so no notice wait.
+const NOTICE_BEFORE_03 = "before-0.3";
+
+/**
+ * config.network (v0.3, review issue 11): `updateChecks` (default true; 自动检查更新) switches
+ * the automatic checks (agent versions at start-up and daily); `noticeSeenAt`: when the user
+ * saw the first-run notice — automatic checks also wait for it. Checks the user starts
+ * (立即检查, skill update checks) always run; SKILL_MANAGER_UPDATES_OFFLINE=1 stops everything.
+ */
+function normalizeNetwork(input) {
+  const network = input?.network;
+  if (!network || typeof network !== "object" || Array.isArray(network)) return { updateChecks: true, noticeSeenAt: input ? NOTICE_BEFORE_03 : null };
+  const seen = typeof network.noticeSeenAt === "string" && network.noticeSeenAt.length <= 40 ? network.noticeSeenAt : null;
+  return { updateChecks: network.updateChecks !== false, noticeSeenAt: seen };
+}
+
+/** PUT /api/config `network: { updateChecks?, noticeSeen? }`: the server stamps noticeSeenAt once. */
+function mergeNetwork(previous, input) {
+  const base = previous || { updateChecks: true, noticeSeenAt: null };
+  if (!input || typeof input !== "object" || Array.isArray(input)) return base;
+  return {
+    updateChecks: typeof input.updateChecks === "boolean" ? input.updateChecks : base.updateChecks,
+    noticeSeenAt: base.noticeSeenAt || (input.noticeSeen === true ? new Date().toISOString() : null),
+  };
+}
+
+// The last loaded network settings: read by every check (the switch works without a restart).
+let networkSettings = null;
+const envOffline = () => process.env.SKILL_MANAGER_UPDATES_OFFLINE === "1";
+/** Automatic checks: "off" when 自动检查更新 is off, "waiting-notice" until the first-run notice is seen. */
+const autoCheckState = () => (networkSettings?.updateChecks === false ? "off" : networkSettings?.noticeSeenAt ? "on" : "waiting-notice");
+/** GET /api/config also says whether the environment variable keeps checks off anyway. */
+const publicConfig = (config) => ({ ...config, network: { ...config.network, envOffline: envOffline() } });
 
 let cachedScan = null;
 let cachedScanAt = 0;
@@ -458,10 +500,48 @@ async function secretsInventory() {
   return { ...inventory, guide: secretsGuide(inventory.items, { homes }), items: inventory.items.map((item) => ({ ...item, remedy: remedyForSecret(item, { homes }) })) };
 }
 
+const DISCOVERY_FILE = path.join(STATE_DIRECTORY, "discovery.json");
+const DISCOVERY_INTERVAL_MS = 24 * 60 * 60_000;
+
+/**
+ * GET /api/agents/discover: the scan for unknown Agents runs on demand (`force`) or when the
+ * last result is older than a day, not at every launch (review issue 12). The cached result
+ * is filtered again on read, so ignoring a candidate or adding it as an Agent shows at once.
+ */
+async function discoverAgentsDaily({ force = false } = {}) {
+  const config = await loadConfig();
+  const cached = force ? null : await readJsonFile(DISCOVERY_FILE, null).catch(() => null);
+  const fresh = cached?.checkedAt && Date.now() - Date.parse(cached.checkedAt) < DISCOVERY_INTERVAL_MS && Array.isArray(cached.candidates);
+  let result = fresh ? cached : null;
+  if (!result) {
+    const scan = await getScan();
+    const found = await discoverAgents({
+      homeDirectory: HOME_DIRECTORY,
+      homes: [HOME_DIRECTORY, REAL_HOME_DIRECTORY],
+      known: knownAgentLocations(config, scan),
+      ignored: config.ignoredDiscoveries,
+      applicationDirectories: applicationDirectories(),
+    });
+    result = { ...found, checkedAt: new Date().toISOString() };
+    await mkdir(STATE_DIRECTORY, { recursive: true });
+    await writeFile(DISCOVERY_FILE, `${JSON.stringify(result)}\n`, "utf8").catch(() => {});
+  }
+  const ignored = new Set(config.ignoredDiscoveries);
+  const knownIds = new Set(config.agents.map((agent) => agent.id));
+  const knownPaths = new Set(config.agents.flatMap((agent) => agent.paths));
+  return {
+    candidates: result.candidates.filter((candidate) => !ignored.has(candidate.path) && !knownIds.has(candidate.id) && !knownPaths.has(candidate.path)),
+    truncated: Boolean(result.truncated),
+    checkedAt: result.checkedAt,
+    cached: Boolean(fresh),
+    nextCheckAt: new Date(Date.parse(result.checkedAt) + DISCOVERY_INTERVAL_MS).toISOString(),
+  };
+}
+
 /** Detected Agents the user has not acknowledged yet carry `isNew`. */
 function withNewAgents(scan, config) {
   const known = new Set(config.knownAgentIds || []);
-  return { ...scan, agents: scan.agents.map((agent) => ({ ...agent, isNew: Boolean(agent.available && config.knownAgentIds && !known.has(agent.id)) })) };
+  return { ...scan, agents: scan.agents.map((agent) => ({ ...agent, isNew: Boolean((agent.installed ?? agent.available) && config.knownAgentIds && !known.has(agent.id)) })) };
 }
 
 /** Everything that already belongs to a known Agent: skill roots, ids and app bundles. */
@@ -710,7 +790,7 @@ export function sanitizeConfig(input) {
       };
     })
     .filter((agent) => agent.paths.length > 0);
-  const finalAgents = agents.length ? agents : DEFAULT_CONFIG.agents;
+  const finalAgents = agents;
   const configuredIds = new Set(finalAgents.map((agent) => agent.id));
   const requestedVisibleIds = Array.isArray(input?.visibleAgentIds)
     ? [...new Set(input.visibleAgentIds.map(String))].filter((id) =>
@@ -776,6 +856,9 @@ export function sanitizeConfig(input) {
     ignoredDiscoveries: Array.isArray(input?.ignoredDiscoveries)
       ? [...new Set(input.ignoredDiscoveries.filter((item) => typeof item === "string" && item.length < 1024 && !item.includes("\0") && (item.startsWith("~/") || path.isAbsolute(item))))].slice(0, 200)
       : [],
+    network: normalizeNetwork(input),
+    // v0.3: install mode and auto-link; configs from before v0.3 are migrated here.
+    library: normalizeLibrarySettings(input?.library, { legacySyncMode: input?.library ? null : input?.syncMode || "copy" }),
   };
 }
 
@@ -795,39 +878,40 @@ function validateConfigInput(input) {
   }
 }
 
-/** A catalog agent is offered only when its folders or product files exist. */
-async function agentDetected(agent) {
-  const candidates = [
-    ...agent.paths.map(expandHome),
-    ...detectionPaths(agent.id, HOME_DIRECTORY),
-  ];
-  return (await Promise.all(candidates.map((candidate) => pathExists(candidate).catch(() => false)))).some(Boolean);
+const DETECTION_TTL_MS = 5_000;
+let detection = null;
+
+/**
+ * Installed catalog Agents (server/agent-detection.mjs: product files, commands, apps — never
+ * skill folders or ~/.agents/skills). Cached for a few seconds; a forced scan refreshes it.
+ */
+function installedAgents({ refresh = false } = {}) {
+  if (!refresh && detection && Date.now() - detection.at < DETECTION_TTL_MS) return detection.promise;
+  const promise = detectInstalledAgents({ homeDirectory: HOME_DIRECTORY, applicationDirectories: applicationDirectories() });
+  detection = { at: Date.now(), promise };
+  promise.catch(() => {
+    if (detection?.promise === promise) detection = null;
+  });
+  return promise;
 }
 
-export async function loadConfig() {
-  const storedConfig = await readJsonFile(CONFIG_FILE, null);
-  let config;
-  if (storedConfig) {
-    config = sanitizeConfig(storedConfig);
-  } else {
-    const detectedAgents = [];
-    for (const agent of AGENT_CATALOG) {
-      if (await agentDetected(agent)) detectedAgents.push(agent);
-    }
-    config = sanitizeConfig({
-      ...DEFAULT_CONFIG,
-      agents: detectedAgents.length ? detectedAgents : DEFAULT_CONFIG.agents,
-    });
-  }
+/** Catalog Agents count only when installed; Agents the user added by hand always count. */
+const isInstalledAgent = (detected, agent) => !INSTALL_EVIDENCE[agent.id] || Boolean(detected.get(agent.id)?.installed);
 
-  const configuredIds = new Set(config.agents.map((agent) => agent.id));
+/**
+ * The current config; `persist: false` never writes (the CLI's read-only mode). Only installed
+ * Agents are returned: catalog Agents saved earlier but not installed (v0.2's placeholders,
+ * Codex inferred from ~/.agents/skills) are left out, and so are their ids in primaryAgentIds
+ * and visibleAgentIds. Nothing detected means no Agents, never a default set.
+ */
+export async function loadConfig({ persist = true } = {}) {
+  const storedConfig = await readJsonFile(CONFIG_FILE, null);
+  const config = sanitizeConfig(storedConfig || DEFAULT_CONFIG);
+  const detected = await installedAgents();
+  const storedIds = new Set(config.agents.map((agent) => agent.id));
   const dismissedAgentIds = new Set(config.dismissedAgentIds);
-  const newlyDetected = [];
-  for (const agent of AGENT_CATALOG) {
-    if (configuredIds.has(agent.id) || dismissedAgentIds.has(agent.id)) continue;
-    if (await agentDetected(agent)) newlyDetected.push(agent);
-  }
-  const agents = [...config.agents, ...newlyDetected];
+  const newlyDetected = AGENT_CATALOG.filter((agent) => !storedIds.has(agent.id) && !dismissedAgentIds.has(agent.id) && detected.get(agent.id)?.installed);
+  const agents = [...config.agents.filter((agent) => isInstalledAgent(detected, agent)), ...newlyDetected];
   const loaded = sanitizeConfig({
     ...config,
     agents,
@@ -837,9 +921,27 @@ export async function loadConfig() {
   // First start with this feature: every Agent detected now is known, so nothing is "new".
   if (!loaded.knownAgentIds) {
     loaded.knownAgentIds = loaded.agents.map((agent) => agent.id);
-    await persistConfig(loaded).catch(() => {});
+    if (persist) await persistConfig(loaded).catch(() => {});
   }
+  networkSettings = loaded.network;
   return { ...loaded, newAgentIds: loaded.agents.map((agent) => agent.id).filter((id) => !loaded.knownAgentIds.includes(id)) };
+}
+
+/**
+ * Scan agents with their install state: `installed` (catalog: detected; custom: true),
+ * `skillsDir` ("missing": installed, no skills folder yet) and `detectedBy` (evidence).
+ */
+async function withInstallState(scan) {
+  const detected = await installedAgents();
+  return {
+    ...scan,
+    agents: scan.agents.map((agent) => ({
+      ...agent,
+      installed: isInstalledAgent(detected, agent),
+      skillsDir: agent.available ? "present" : "missing",
+      detectedBy: detected.get(agent.id)?.evidence || [],
+    })),
+  };
 }
 
 async function persistConfig(config) {
@@ -874,6 +976,9 @@ async function saveConfig(input) {
     knownAgentIds: [...new Set([...(Array.isArray(input.knownAgentIds) ? input.knownAgentIds : previous.knownAgentIds || []), ...added])],
     ignoredDiscoveries: Array.isArray(input.ignoredDiscoveries) ? input.ignoredDiscoveries : previous.ignoredDiscoveries,
     visibleCustomized: previous.visibleCustomized || input.visibleCustomized === true || visibleChanged,
+    // Only the install mode can change here; auto-link goes through POST /api/library/auto-link.
+    library: mergeLibrarySettings(previous.library, input.library),
+    network: mergeNetwork(previous.network, input.network),
   });
   await mkdir(STATE_DIRECTORY, { recursive: true });
   const temporaryFile = `${CONFIG_FILE}.tmp-${process.pid}`;
@@ -881,6 +986,11 @@ async function saveConfig(input) {
   await rename(temporaryFile, CONFIG_FILE);
   invalidateScanCache();
   activityLoader.clear();
+  networkSettings = config.network;
+  // Checks just turned on, or the notice just seen: the first automatic check runs now.
+  if (config.network.updateChecks && config.network.noticeSeenAt && (!previous.network?.updateChecks || !previous.network?.noticeSeenAt)) {
+    insightRoutes?.versions.checkIfStale().catch(() => {});
+  }
   return config;
 }
 
@@ -1665,6 +1775,8 @@ async function getScan(force = false) {
       cachedScan = scan;
       cachedScanAt = Date.now();
     }
+    // After every scan (start-up, rescans) new library skills get auto-linked (debounced).
+    manageRoutes?.autoLink.schedule("scan");
     return scan;
   })();
   pendingScan = { generation, force, promise };
@@ -2359,6 +2471,80 @@ export async function readSkillDirectoryDiffFile(
   };
 }
 
+const UNIFIED_DIFF_LIMIT = 200_000;
+const UNIFIED_CONTEXT = 3;
+
+/**
+ * GET /api/skill-diff-unified (review issue 4, 版本不同): the changed files of two copies of
+ * one skill and one unified diff (`--- a/<path>` = left, `+++ b/<path>` = right), at most
+ * 200 KB and 2,000 lines per file, with credential-shaped values masked (redact.mjs).
+ * Binary and unreadable files are listed without content.
+ */
+export async function unifiedSkillDiff(leftDirectory, rightDirectory) {
+  const comparison = await compareSkillDirectories(leftDirectory, rightDirectory);
+  const parts = [];
+  let size = 0;
+  let truncated = comparison.truncated;
+  let redacted = 0;
+  const scrub = (line) => {
+    const clean = scrubTokens(line);
+    if (clean !== line) redacted += 1;
+    return clean;
+  };
+  for (const entry of comparison.entries) {
+    if (size >= UNIFIED_DIFF_LIMIT) {
+      truncated = true;
+      break;
+    }
+    const file = await readSkillDirectoryDiffFile(leftDirectory, rightDirectory, entry.path).catch(() => null);
+    const header = `--- ${entry.left ? `a/${entry.path}` : "/dev/null"}\n+++ ${entry.right ? `b/${entry.path}` : "/dev/null"}\n`;
+    if (!file || file.previewKind !== "text") {
+      parts.push(`${header}（二进制或无法预览的文件，内容不同）\n`);
+      continue;
+    }
+    // readSkillDirectoryDiffFile compares right → left: "added" lines are in the left copy only.
+    const lines = file.lines;
+    const changed = lines.map((line, index) => (line.kind !== "context" ? index : -1)).filter((index) => index >= 0);
+    let text = header;
+    let cursor = 0;
+    while (cursor < changed.length) {
+      const start = Math.max(0, changed[cursor] - UNIFIED_CONTEXT);
+      let end = Math.min(lines.length, changed[cursor] + UNIFIED_CONTEXT + 1);
+      while (cursor + 1 < changed.length && changed[cursor + 1] - UNIFIED_CONTEXT <= end) {
+        cursor += 1;
+        end = Math.min(lines.length, changed[cursor] + UNIFIED_CONTEXT + 1);
+      }
+      cursor += 1;
+      const before = lines.slice(0, start);
+      const hunk = lines.slice(start, end);
+      const inLeft = (line) => line.kind !== "removed";
+      const inRight = (line) => line.kind !== "added";
+      const leftStart = before.filter(inLeft).length + 1;
+      const rightStart = before.filter(inRight).length + 1;
+      text += `@@ -${leftStart},${hunk.filter(inLeft).length} +${rightStart},${hunk.filter(inRight).length} @@\n`;
+      for (const line of hunk) text += `${line.kind === "added" ? "-" : line.kind === "removed" ? "+" : " "}${scrub(line.text)}\n`;
+    }
+    if (file.truncated) {
+      text += "（文件超过 2,000 行，后面的差异未显示）\n";
+      truncated = true;
+    }
+    parts.push(text);
+    size += text.length;
+  }
+  let diff = parts.join("");
+  if (diff.length > UNIFIED_DIFF_LIMIT) {
+    diff = `${diff.slice(0, UNIFIED_DIFF_LIMIT)}\n（差异超过 200 KB，后面的内容未显示）\n`;
+    truncated = true;
+  }
+  return {
+    summary: comparison.summary,
+    files: comparison.entries.map((entry) => ({ path: entry.path, change: entry.change })),
+    diff,
+    truncated,
+    redacted,
+  };
+}
+
 function sanitizeSkillDirectoryName(value) {
   return String(value || "")
     .normalize("NFKD")
@@ -2387,11 +2573,11 @@ function normalizeArchivePath(inputPath) {
   return normalized;
 }
 
-export function inspectSkillArchive(archiveBuffer, originalFilename = "skill.skill") {
+export function inspectSkillArchive(archiveBuffer, originalFilename = "skill.skill", { root = null } = {}) {
   const input = Buffer.from(archiveBuffer);
-  if (!input.length) throw new Error(".skill 文件为空。");
+  if (!input.length) throw new Error("压缩包是空的。");
   if (input.length > SKILL_ARCHIVE_LIMIT) {
-    throw new Error(".skill 文件超过 25 MB，无法导入。");
+    throw new Error("压缩包超过 25 MB，无法导入。");
   }
 
   let entryCount = 0;
@@ -2402,25 +2588,33 @@ export function inspectSkillArchive(archiveBuffer, originalFilename = "skill.ski
       entryCount += 1;
       unpackedSize += file.originalSize;
       if (entryCount > SKILL_ENTRY_LIMIT) {
-        throw new Error(`.skill 文件数量超过 ${SKILL_ENTRY_LIMIT} 个。`);
+        throw new Error(`压缩包里的文件超过 ${SKILL_ENTRY_LIMIT} 个。`);
       }
       if (file.originalSize > SKILL_ARCHIVE_LIMIT) {
-        throw new Error(".skill 包含超过 25 MB 的单个文件。");
+        throw new Error("压缩包里有超过 25 MB 的单个文件。");
       }
       if (unpackedSize > SKILL_UNPACKED_LIMIT) {
-        throw new Error(".skill 解压后超过 100 MB。");
+        throw new Error("压缩包解压后超过 100 MB。");
       }
       return !file.name.endsWith("/");
     },
   });
+  const entries = Object.entries(unpacked).map(([entryPath, data]) => [normalizeArchivePath(entryPath), Buffer.from(data)]);
+  return selectSkillFiles(entries, { originalFilename, root, seed: input });
+}
 
-  const archiveEntries = Object.entries(unpacked)
-    .map(([entryPath, data]) => [normalizeArchivePath(entryPath), data])
-    .filter(
-      ([entryPath]) =>
-        !entryPath.startsWith("__MACOSX/") &&
-        path.posix.basename(entryPath) !== ".DS_Store",
-    );
+/**
+ * The one skill in a set of files (an unpacked .skill / .zip, or a folder): the folder of the
+ * shallowest SKILL.md. Files outside it (a repository's README, other folders) are left out.
+ * Several skills side by side need `root` (one of the listed `skills[].root`), else the error
+ * has code "multiple-skills" and the list, so the user can pick one.
+ */
+function selectSkillFiles(rawEntries, { originalFilename, root = null, seed }) {
+  const archiveEntries = rawEntries.filter(
+    ([entryPath]) =>
+      !entryPath.startsWith("__MACOSX/") &&
+      path.posix.basename(entryPath) !== ".DS_Store",
+  );
   const manifestPaths = archiveEntries
     .map(([entryPath]) => entryPath)
     .filter((entryPath) => path.posix.basename(entryPath).toLowerCase() === "skill.md")
@@ -2430,29 +2624,47 @@ export function inspectSkillArchive(archiveBuffer, originalFilename = "skill.ski
         left.localeCompare(right),
     );
   if (!manifestPaths.length) {
-    throw new Error(".skill 包中没有找到必需的 SKILL.md。");
+    throw new HttpError(400, "没有找到 SKILL.md：这不是一个技能（技能文件夹里要有 SKILL.md）。", "no-skill");
   }
-
-  const manifestPath = manifestPaths[0];
-  const rootPrefix = manifestPath.slice(
-    0,
-    manifestPath.length - path.posix.basename(manifestPath).length,
-  );
+  const rootOf = (manifestPath) => manifestPath.slice(0, manifestPath.length - path.posix.basename(manifestPath).length);
+  // Skill roots that are not inside another skill (examples/…/SKILL.md belong to their skill).
+  const roots = [];
+  for (const manifestPath of manifestPaths) {
+    const candidate = rootOf(manifestPath);
+    if (!roots.some((existing) => candidate.startsWith(existing))) roots.push(candidate);
+  }
+  let rootPrefix;
+  if (root !== null && root !== undefined) {
+    const wanted = String(root).replace(/^\/+|\/+$/gu, "");
+    rootPrefix = roots.find((candidate) => candidate.replace(/\/$/u, "") === wanted);
+    if (rootPrefix === undefined) throw new HttpError(400, "所选的技能文件夹不在这个包里。", "invalid-request");
+  } else if (roots.length === 1) {
+    rootPrefix = roots[0];
+  } else {
+    const skills = roots.slice(0, 50).map((candidate) => {
+      const manifest = archiveEntries.find(([entryPath]) => entryPath === `${candidate}SKILL.md` || entryPath.toLowerCase() === `${candidate}skill.md`.toLowerCase());
+      const name = manifest ? parseFrontmatter(manifest[1].toString("utf8"), path.posix.basename(candidate.replace(/\/$/u, "")) || "skill").name : null;
+      return { root: candidate.replace(/\/$/u, ""), name: name || path.posix.basename(candidate.replace(/\/$/u, "")) };
+    });
+    throw Object.assign(new HttpError(409, `这里有 ${roots.length} 个技能，请选一个导入。`, "multiple-skills"), { details: { skills } });
+  }
   const files = new Map();
+  let ignoredCount = 0;
   for (const [entryPath, data] of archiveEntries) {
     if (rootPrefix && !entryPath.startsWith(rootPrefix)) {
-      throw new Error(".skill 包只能包含一个技能根目录。");
+      ignoredCount += 1;
+      continue;
     }
     const relativePath = rootPrefix ? entryPath.slice(rootPrefix.length) : entryPath;
     if (!relativePath) continue;
     files.set(
       relativePath.toLowerCase() === "skill.md" ? "SKILL.md" : relativePath,
-      Buffer.from(data),
+      data,
     );
   }
 
   const manifest = files.get("SKILL.md");
-  if (!manifest) throw new Error(".skill 包中的 SKILL.md 无法读取。");
+  if (!manifest) throw new HttpError(400, "SKILL.md 无法读取。", "no-skill");
   const rootName = rootPrefix
     ? rootPrefix.split("/").filter(Boolean).at(-1)
     : path.basename(originalFilename, path.extname(originalFilename));
@@ -2460,7 +2672,7 @@ export function inspectSkillArchive(archiveBuffer, originalFilename = "skill.ski
   const directoryName =
     sanitizeSkillDirectoryName(parsed.name) ||
     sanitizeSkillDirectoryName(rootName) ||
-    `imported-${createHash("sha1").update(input).digest("hex").slice(0, 8)}`;
+    `imported-${createHash("sha1").update(seed).digest("hex").slice(0, 8)}`;
 
   return {
     originalFilename,
@@ -2471,18 +2683,78 @@ export function inspectSkillArchive(archiveBuffer, originalFilename = "skill.ski
     tags: parsed.tags,
     fileCount: files.size,
     byteCount: [...files.values()].reduce((total, file) => total + file.length, 0),
+    ...(rootPrefix ? { root: rootPrefix.replace(/\/$/u, "") } : {}),
+    ...(ignoredCount ? { ignoredCount } : {}),
     files,
   };
+}
+
+/**
+ * The files of a folder the user picked (desktop folder dialog), with the archive limits:
+ * entry count, single-file and total size; links are never followed (skipped and counted),
+ * `.git` is skipped. Paths are relative with "/" separators.
+ */
+async function readSkillFolderEntries(folderPath) {
+  if (typeof folderPath !== "string" || !path.isAbsolute(folderPath) || folderPath.includes("\0") || folderPath.length > 4096) {
+    throw new HttpError(400, "请选择一个文件夹（完整路径）。", "invalid-request");
+  }
+  const rootPath = await realpath(folderPath).catch(() => null);
+  const info = rootPath ? await stat(rootPath).catch(() => null) : null;
+  if (!info?.isDirectory()) throw new HttpError(404, "找不到这个文件夹。", "not-found");
+  if (rootPath === path.parse(rootPath).root || rootPath === (await realpath(HOME_DIRECTORY).catch(() => HOME_DIRECTORY))) {
+    throw new HttpError(400, "请选择技能所在的文件夹，而不是整个磁盘或主目录。", "invalid-request");
+  }
+  const entries = [];
+  let total = 0;
+  let skippedLinks = 0;
+  const visit = async (directory, relative, depth) => {
+    if (depth > 12) return;
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.name === ".git" || entry.name === ".DS_Store") continue;
+      const childRelative = relative ? `${relative}/${entry.name}` : entry.name;
+      const child = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) {
+        skippedLinks += 1;
+        continue;
+      }
+      if (entry.isDirectory()) {
+        await visit(child, childRelative, depth + 1);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      if (entries.length >= SKILL_ENTRY_LIMIT) throw new HttpError(400, `文件夹里的文件超过 ${SKILL_ENTRY_LIMIT} 个。`, "too-large");
+      const size = (await stat(child)).size;
+      if (size > SKILL_ARCHIVE_LIMIT) throw new HttpError(400, "文件夹里有超过 25 MB 的单个文件。", "too-large");
+      total += size;
+      if (total > SKILL_UNPACKED_LIMIT) throw new HttpError(400, "文件夹超过 100 MB。", "too-large");
+      entries.push([normalizeArchivePath(childRelative), await readFile(child)]);
+    }
+  };
+  await visit(rootPath, "", 0);
+  return { entries, rootPath, skippedLinks };
 }
 
 export async function stageSkillArchive(
   archiveBuffer,
   originalFilename = "skill.skill",
   importRoot = IMPORT_DIRECTORY,
+  { root = null } = {},
 ) {
-  const inspected = inspectSkillArchive(archiveBuffer, originalFilename);
+  const inspected = inspectSkillArchive(archiveBuffer, originalFilename, { root });
+  return stageInspected(inspected, archiveBuffer, importRoot, { source: path.extname(originalFilename).toLowerCase() === ".zip" ? "zip" : "skill" });
+}
+
+/** POST /api/import-folder { path, root? }: a folder the user picked, staged like an archive. */
+export async function stageSkillFolder(folderPath, { root = null, importRoot = IMPORT_DIRECTORY } = {}) {
+  const { entries, rootPath, skippedLinks } = await readSkillFolderEntries(folderPath);
+  const seed = createHash("sha1").update(rootPath).update(String(entries.length)).digest();
+  const inspected = selectSkillFiles(entries, { originalFilename: path.basename(rootPath), root, seed });
+  return stageInspected(inspected, seed, importRoot, { source: "folder", ...(skippedLinks ? { skippedLinks } : {}) });
+}
+
+async function stageInspected(inspected, seed, importRoot, extra = {}) {
   const importId = createHash("sha1")
-    .update(archiveBuffer)
+    .update(seed)
     .update(String(Date.now()))
     .digest("hex")
     .slice(0, 20);
@@ -2512,6 +2784,9 @@ export async function stageSkillArchive(
     shortHash: fingerprint.hash.slice(0, 8),
     entries: listing.entries,
     directoryCount: listing.directoryCount,
+    ...(inspected.root ? { root: inspected.root } : {}),
+    ...(inspected.ignoredCount ? { ignoredCount: inspected.ignoredCount } : {}),
+    ...extra,
   };
   importedSkills.set(importId, imported);
   return imported;
@@ -2523,7 +2798,7 @@ function resolveImportedSkill(importId) {
     throw new Error("导入记录无效。");
   }
   const imported = importedSkills.get(normalizedId);
-  if (!imported) throw new Error("导入预览已失效，请重新选择 .skill 文件。");
+  if (!imported) throw new Error("导入预览已失效，请重新选择要导入的技能。");
   return imported;
 }
 
@@ -2902,6 +3177,8 @@ const SAME_SITE_ONLY_ROUTES = new Set([
   "/api/capability-asset",
   "/api/skill-asset",
   "/api/import-asset",
+  "/api/import-folder",
+  "/api/skill-diff-unified",
   "/api/plugin-asset",
   "/api/expert-avatar",
   "/api/agents/discover",
@@ -2925,14 +3202,37 @@ function publicErrorMessage(error) {
   return message;
 }
 
+/** Folders POST /api/reveal may open besides a skill: only these (review issue 15). */
+const REVEAL_TARGETS = { "data-dir": () => STATE_DIRECTORY };
+
+/**
+ * POST /api/reveal { instanceId } or { target: "data-dir" }: shows the folder in Finder /
+ * Explorer / the file manager. Sandboxes and tests (SKILL_MANAGER_COMMAND_DIRS) open nothing.
+ */
+async function reveal(body) {
+  if (typeof body?.target === "string") {
+    const target = REVEAL_TARGETS[body.target];
+    if (!target) throw new HttpError(400, "不能打开这个位置。", "invalid-request");
+    const directory = target();
+    await mkdir(directory, { recursive: true });
+    const opened = commandDirectories() ? false : (await openInFileManager(directory, { select: false }), true);
+    return { ok: true, opened, path: compactHomePath(directory, [HOME_DIRECTORY, REAL_HOME_DIRECTORY]) };
+  }
+  await revealPath(body?.instanceId);
+  return { ok: true };
+}
+
 async function revealPath(instanceId) {
   const scan = await getScan();
   const resolved = resolveInstance(scan, instanceId);
   if (!resolved) throw new Error("找不到这个技能目录。");
-  const targetPath = resolved.instance.absolutePath;
+  await openInFileManager(resolved.instance.absolutePath);
+}
+
+async function openInFileManager(targetPath, { select = true } = {}) {
   const [command, args] =
     process.platform === "darwin"
-      ? ["open", ["-R", targetPath]]
+      ? ["open", select ? ["-R", targetPath] : [targetPath]]
       : process.platform === "win32"
         ? ["explorer.exe", [targetPath]]
         : ["xdg-open", [targetPath]];
@@ -3071,6 +3371,63 @@ async function libraryConfig() {
   return { ...config, primaryAgentIds: scan?.effectivePrimaryAgentIds || [] };
 }
 
+/** Persists config.library.autoLink (POST /api/library/auto-link). */
+async function saveAutoLinkSettings(autoLink) {
+  const config = await loadConfig();
+  await persistConfig({ ...config, library: { ...config.library, autoLink } });
+  invalidateScanCache();
+}
+
+/** The scan instance of a library skill (per-agent installs copy from it). */
+async function instanceIdFor(source) {
+  if (typeof source?.instanceId === "string") return source.instanceId;
+  if (typeof source?.library === "string") {
+    const scan = await getScan(true);
+    const libraryEntry = path.join(HOME_DIRECTORY, ".agents", "skills", source.library);
+    for (const skill of scan.skills) for (const instance of skill.instances) if (expandHome(instance.path) === libraryEntry) return instance.id;
+    throw new HttpError(404, "扫描结果里没有这个库技能，请重新扫描。", "not-found");
+  }
+  throw new HttpError(400, "缺少技能来源。", "invalid-request");
+}
+
+/** Where an install takes its files from: an imported .skill / zip / folder, an Agent's copy, a library entry. */
+async function resolveInstallSource(source) {
+  if (typeof source?.importId === "string") {
+    const imported = resolveImportedSkill(source.importId);
+    return { sourcePath: imported.rootPath, name: imported.directoryName, sourceHash: await contentHash(imported.rootPath), label: imported.displayName || imported.name };
+  }
+  if (typeof source?.instanceId === "string") {
+    const resolved = resolveInstance(await getScan(true), source.instanceId);
+    if (!resolved) throw new HttpError(404, "找不到这个技能，请重新扫描后再试。", "not-found");
+    return { sourcePath: resolved.instance.absolutePath, name: resolved.instance.directoryName, sourceHash: await contentHash(resolved.instance.absolutePath), label: resolved.skill.name };
+  }
+  if (typeof source?.library === "string" && /^[\p{L}\p{N}_.@+ -]{1,128}$/u.test(source.library) && !source.library.startsWith(".")) {
+    const sourcePath = path.join(HOME_DIRECTORY, ".agents", "skills", source.library);
+    if (!(await pathExists(sourcePath))) throw new HttpError(404, "库中没有这个技能。", "not-found");
+    return { sourcePath, name: source.library, sourceHash: await contentHash(sourcePath), label: source.library };
+  }
+  throw new HttpError(400, "缺少技能来源（importId、instanceId 或 library）。", "invalid-request");
+}
+
+const perAgentInstall = {
+  async plan({ source, targetAgentIds }) {
+    if (typeof source?.importId === "string") return planImportInstall({ importId: source.importId, targetAgentIds });
+    return planSync({ sourceInstanceId: await instanceIdFor(source), targetAgentIds, mode: "copy" });
+  },
+  async apply({ source, targetAgentIds }) {
+    if (typeof source?.importId === "string") return executeImportInstall({ importId: source.importId, targetAgentIds, confirm: true });
+    return executeSync({ sourceInstanceId: await instanceIdFor(source), targetAgentIds, mode: "copy", confirm: true });
+  },
+};
+
+/** SKILL_MANAGER_AUTO_LINK=off: no background runs (manual runs still work); …_WATCH=0: no file watching. */
+const autoLinkOptions = () => ({
+  disabled: ["0", "off", "false"].includes(String(process.env.SKILL_MANAGER_AUTO_LINK || "").toLowerCase()),
+  noWatch: process.env.SKILL_MANAGER_AUTO_LINK_WATCH === "0",
+  ...(Number(process.env.SKILL_MANAGER_AUTO_LINK_DEBOUNCE_MS) > 0 ? { debounceMs: Number(process.env.SKILL_MANAGER_AUTO_LINK_DEBOUNCE_MS) } : {}),
+  onError: (error) => console.warn(`[skills] 自动接入失败：${error?.message || error}`),
+});
+
 let manageRoutes = null;
 function getManageRoutes() {
   manageRoutes ||= createManageRoutes({
@@ -3087,11 +3444,18 @@ function getManageRoutes() {
     readBody: readRequestBody,
     afterWrite: invalidateScanCache,
     json: jsonResponse,
+    saveAutoLinkSettings,
+    autoLink: autoLinkOptions(),
+    install: { resolveSource: resolveInstallSource, perAgent: perAgentInstall },
+    ...(process.env.SKILL_MANAGER_LAUNCHER_DIR ? { launcher: { binDirectory: process.env.SKILL_MANAGER_LAUNCHER_DIR } } : {}),
   });
   return manageRoutes;
 }
 
 let insightRoutes = null;
+// The fetch for network checks: Electron's net.fetch in the desktop app (startServer), so the
+// system proxy applies; Node's fetch otherwise.
+let networkFetch = null;
 function getInsightRoutes() {
   insightRoutes ||= createInsightRoutes({
     homeDirectory: HOME_DIRECTORY,
@@ -3109,6 +3473,9 @@ function getInsightRoutes() {
     readBody: readRequestBody,
     afterWrite: invalidateScanCache,
     updatesOffline: process.env.SKILL_MANAGER_UPDATES_OFFLINE === "1",
+    ...(networkFetch ? { fetchImpl: networkFetch } : {}),
+    // config network.updateChecks and the first-run notice, read at every automatic check.
+    autoCheck: autoCheckState,
     commandDirectories: commandDirectories(),
     getLibrary: () => getManageRoutes().libraryInternal(),
     getCliTools: () => getManageRoutes().detectTools(),
@@ -3173,7 +3540,7 @@ export async function handleRequest(request, response) {
     const headers = {
       "access-control-allow-methods": "GET,PUT,POST,OPTIONS",
       "access-control-allow-headers":
-        "content-type,x-skill-manager-confirm,x-skill-filename",
+        "content-type,x-skill-manager-confirm,x-skill-filename,x-skill-root",
       "access-control-max-age": "600",
     };
     if (origin && ALLOWED_ORIGINS.has(origin)) {
@@ -3203,18 +3570,19 @@ export async function handleRequest(request, response) {
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/api/config") {
-      jsonResponse(response, 200, await loadConfig(), origin);
+      jsonResponse(response, 200, publicConfig(await loadConfig()), origin);
       return;
     }
     if (request.method === "PUT" && requestUrl.pathname === "/api/config") {
       const config = await saveConfig(await readRequestBody(request));
-      jsonResponse(response, 200, config, origin);
+      jsonResponse(response, 200, publicConfig(config), origin);
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/api/scan") {
       const force = requestUrl.searchParams.get("force") === "1";
+      if (force) installedAgents({ refresh: true });
       const [scan, config] = await Promise.all([getScan(force), loadConfig()]);
-      jsonResponse(response, 200, withNewAgents(withSkillUsage(scan, await skillUsage()), config), origin);
+      jsonResponse(response, 200, withNewAgents(withSkillUsage(await withInstallState(scan), await skillUsage()), config), origin);
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/api/secrets") {
@@ -3226,19 +3594,7 @@ export async function handleRequest(request, response) {
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/api/agents/discover") {
-      const [config, scan] = await Promise.all([loadConfig(), getScan()]);
-      jsonResponse(
-        response,
-        200,
-        await discoverAgents({
-          homeDirectory: HOME_DIRECTORY,
-          homes: [HOME_DIRECTORY, REAL_HOME_DIRECTORY],
-          known: knownAgentLocations(config, scan),
-          ignored: config.ignoredDiscoveries,
-          applicationDirectories: applicationDirectories(),
-        }),
-        origin,
-      );
+      jsonResponse(response, 200, await discoverAgentsDaily({ force: requestUrl.searchParams.get("force") === "1" }), origin);
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/api/connectors") {
@@ -3426,6 +3782,17 @@ export async function handleRequest(request, response) {
       );
       return;
     }
+    if (request.method === "GET" && requestUrl.pathname === "/api/skill-diff-unified") {
+      const scan = await getScan();
+      const leftResolved = resolveInstance(scan, requestUrl.searchParams.get("leftInstanceId"));
+      const rightResolved = resolveInstance(scan, requestUrl.searchParams.get("rightInstanceId"));
+      if (!leftResolved || !rightResolved) throw new HttpError(404, "找不到需要比较的技能版本。", "not-found");
+      if (leftResolved.skill.id !== rightResolved.skill.id) throw new HttpError(400, "只能比较同一个技能的不同安装版本。");
+      const unified = await unifiedSkillDiff(leftResolved.instance.absolutePath, rightResolved.instance.absolutePath);
+      const side = (instance) => ({ id: instance.id, agentId: instance.agentId, agentName: instance.agentName, shortHash: instance.shortHash, modifiedAt: instance.modifiedAt });
+      jsonResponse(response, 200, { ...unified, skillName: leftResolved.skill.name, left: side(leftResolved.instance), right: side(rightResolved.instance) }, origin);
+      return;
+    }
     if (request.method === "GET" && requestUrl.pathname === "/api/skill-diff") {
       const leftInstanceId = requestUrl.searchParams.get("leftInstanceId");
       const rightInstanceId = requestUrl.searchParams.get("rightInstanceId");
@@ -3602,10 +3969,26 @@ export async function handleRequest(request, response) {
       } catch {
         originalFilename = "imported.skill";
       }
+      let root = null;
+      try {
+        root = request.headers["x-skill-root"] ? decodeURIComponent(String(request.headers["x-skill-root"])) : null;
+      } catch {
+        root = null;
+      }
       const imported = await stageSkillArchive(
         await readRequestBuffer(request),
         originalFilename,
+        IMPORT_DIRECTORY,
+        { root },
       );
+      const publicImported = { ...imported };
+      delete publicImported.rootPath;
+      jsonResponse(response, 200, publicImported, origin);
+      return;
+    }
+    if (request.method === "POST" && requestUrl.pathname === "/api/import-folder") {
+      const body = await readRequestBody(request);
+      const imported = await stageSkillFolder(body?.path, { root: typeof body?.root === "string" ? body.root : null });
       const publicImported = { ...imported };
       delete publicImported.rootPath;
       jsonResponse(response, 200, publicImported, origin);
@@ -3681,23 +4064,25 @@ export async function handleRequest(request, response) {
       return;
     }
     if (request.method === "POST" && requestUrl.pathname === "/api/reveal") {
-      const body = await readRequestBody(request);
-      await revealPath(body.instanceId);
-      jsonResponse(response, 200, { ok: true }, origin);
+      jsonResponse(response, 200, await reveal(await readRequestBody(request)), origin);
       return;
     }
     jsonResponse(response, 404, { error: "接口不存在。", code: "route-missing" }, origin);
   } catch (error) {
     const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 400;
     const code = errorCode(error, statusCode);
-    jsonResponse(response, statusCode, { error: publicErrorMessage(error), ...(code ? { code } : {}) }, origin);
+    // Structured details some errors carry (import: the skills to choose from).
+    const details = error?.details && typeof error.details === "object" && !Array.isArray(error.details) ? error.details : {};
+    jsonResponse(response, statusCode, { error: publicErrorMessage(error), ...(code ? { code } : {}), ...details }, origin);
   }
 }
 
 export function startServer({
   port = SERVER_PORT,
   host = SERVER_HOST,
+  fetchImpl = null,
 } = {}) {
+  if (typeof fetchImpl === "function") networkFetch = fetchImpl;
   const server = http.createServer(handleRequest);
   server.listen(port, host, () => {
     const address = server.address();
@@ -3706,10 +4091,18 @@ export function startServer({
     console.log(
       `  ➜  Skills:  http://${host}:${activePort} (local only)`,
     );
-    // Agent product versions: checked when the cache is older than 24 h, then daily.
-    getInsightRoutes().versions.start().catch(() => {});
+    // Agent product versions: checked when the cache is older than 24 h, then daily — after the
+    // config is read, so the network switch and the first-run notice apply from the start.
+    loadConfig()
+      .catch(() => null)
+      .finally(() => getInsightRoutes().versions.start().catch(() => {}));
+    // Auto-link: a first run (records the baseline after an upgrade), then file-system watching.
+    getManageRoutes().autoLink.start().catch((error) => console.warn(`[skills] 自动接入未启动：${error?.message || error}`));
   });
-  server.on("close", () => insightRoutes?.versions.stop());
+  server.on("close", () => {
+    insightRoutes?.versions.stop();
+    manageRoutes?.autoLink.stop();
+  });
   return server;
 }
 

@@ -40,6 +40,18 @@ export const MANUAL_TEXT = Object.freeze({
   location: "应用所在的位置不可写，请从下载页下载新版本，或先把应用移到“应用程序”文件夹。",
 });
 
+/**
+ * System Settings → Privacy & Security → App Management. Checked against macOS 26.4: the
+ * Privacy & Security extension declares legacyBundleIdentifier com.apple.preference.security
+ * and allowsXAppleSystemPreferencesURLScheme, and its TCCServiceList.plist maps
+ * kTCCServiceSystemPolicyAppBundles to revealElementKeyName "Privacy_AppBundles".
+ */
+export const APP_MANAGEMENT_SETTINGS_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_AppBundles";
+
+/** Shown before installing on macOS 13+ when the build is not signed with a Developer ID. */
+export const APP_MANAGEMENT_NOTICE =
+  "macOS 可能会请求“App管理”权限：如果安装时被拦下，请在“系统设置 → 隐私与安全性 → App管理”里允许 Skill Control，再点一次“安装更新”。";
+
 /** Shown before installing on platforms whose installers are not signed. */
 export const UNSIGNED_NOTICE = Object.freeze({
   win32: "Windows 安装包没有代码签名，安装时 SmartScreen 可能提示“未知发布者”，选择“更多信息 → 仍要运行”即可继续。",
@@ -337,6 +349,19 @@ export function shouldCheck({ checkedAt, now, intervalMs = CHECK_INTERVAL_MS }) 
   if (!Number.isFinite(last)) return true;
   const age = now - last;
   return age >= intervalMs || age < -intervalMs;
+}
+
+/**
+ * Whether the automatic (start-up and daily) check may run, from config `network`
+ * (GET /api/config): "off" when 自动检查更新 is off, "waiting-notice" until the first-run
+ * notice was seen (fresh installs), else "on". When the settings cannot be read, an install
+ * that has checked before (0.2.x users) keeps checking and a fresh one waits. Checks the
+ * user starts are never gated.
+ */
+export function automaticCheckState(network, { hasHistory = false } = {}) {
+  if (!network || typeof network !== "object" || Array.isArray(network)) return hasHistory ? "on" : "waiting-notice";
+  if (network.updateChecks === false || network.envOffline === true) return "off";
+  return typeof network.noticeSeenAt === "string" && network.noticeSeenAt ? "on" : "waiting-notice";
 }
 
 /**

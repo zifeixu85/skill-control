@@ -11,23 +11,32 @@ files:
   - server/**/*
   - dist/**/*
   - resources/licenses/**/*
+  # The companion skill `skill-control` (v0.3), copied into the library on request.
+  - resources/skills/**/*
   - LICENSE
   - THIRD_PARTY_NOTICES.md
   - package.json
 
 asar: true
+# Plain files on disk, so copying the companion skill out of the app never depends on asar.
+asarUnpack:
+  - resources/skills/**
 npmRebuild: false
 artifactName: Skill-Control-${version}-${os}-${arch}.${ext}
+# macOS signing (scripts/sign-mac.mjs): the fixed self-signed certificate from the CI secrets
+# MAC_SIGN_P12_BASE64 / MAC_SIGN_P12_PASSWORD, or ad hoc without them. It runs as afterPack
+# because mac.identity is null: electron-builder then signs nothing and skips afterSign hooks.
+afterPack: ./scripts/sign-mac.mjs
 
 mac:
   category: public.app-category.developer-tools
   icon: resources/icon.png
-  # No Developer ID yet: sign the whole bundle ad hoc ("-") so the signature is
-  # valid. Without it the bundle keeps only Electron's linker signature, which no
-  # longer matches the packaged files, and macOS calls downloaded copies "damaged".
-  # Hardened runtime only matters for notarization and would need
-  # disable-library-validation with ad hoc signing; turn it back on with Developer ID.
-  identity: "-"
+  # Signed by scripts/sign-mac.mjs (afterPack): every nested binary, framework and helper,
+  # then the app, with the fixed self-signed certificate (stable designated requirement, so
+  # macOS keeps permissions across updates) or ad hoc for local builds. A bundle left with
+  # only Electron's linker signature is reported as "damaged" on other Macs (v0.2.0).
+  # Hardened runtime only matters for notarization; turn it back on with Developer ID.
+  identity: null
   hardenedRuntime: false
   entitlements: resources/entitlements.mac.plist
   entitlementsInherit: resources/entitlements.mac.plist
@@ -37,6 +46,9 @@ mac:
 
 dmg:
   sign: false
+  # 560×380 with a @2x copy (scripts/build-dmg-background.mjs): an arrow and
+  # "拖到「应用程序」· 第一次打开请看 README".
+  background: dmg-background.png
   window:
     width: 560
     height: 380

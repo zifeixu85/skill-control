@@ -99,7 +99,8 @@ export function fixesFor(tool, { homes }) {
   const display = (value) => compactHomePath(value, tool.internal.displayHomes || homes);
   const fixes = [];
   const native = tool.internal.nativeBinary;
-  const notOnPath = tool.agents.filter((agent) => agent.resolves === null);
+  // Agents whose PATH cannot be read yet ("unknown") are not counted as missing the command.
+  const notOnPath = tool.agents.filter((agent) => agent.resolves === null && agent.status !== "unknown");
   fixes.push({
     id: "wrapper",
     label: "在 ~/.local/bin 生成稳定启动脚本",
@@ -171,7 +172,7 @@ export function createCliManager({ homeDirectory, homes, backupDirectory, histor
       const content = wrapperScript(tool.internal.nativeBinary);
       if ((await readText(target)) === content) return { planId: null, toolId, fixId, kind: "none", message: "启动脚本已是最新。" };
       ops.push({ op: "write", path: target, content, mode: 0o755, backup: path.join(group, "wrapper", tool.internal.descriptor.command), diff: content.trim().split("\n").map((line) => `+ ${line}`).join("\n") });
-      const missingPath = tool.agents.filter((agent) => agent.resolves === null);
+      const missingPath = tool.agents.filter((agent) => agent.resolves === null && agent.status !== "unknown");
       if (missingPath.length) {
         notes.push(`${missingPath.map((agent) => agent.agentName || agent.agentId).join("、")} 的 PATH 里还没有 ~/.local/bin。`);
         noteAgentIds.push(...missingPath.map((agent) => agent.agentId));

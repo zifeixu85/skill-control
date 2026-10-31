@@ -58,7 +58,7 @@ function AgentChecksTable({ tool }: { tool: CliTool }) {
                     <AgentAvatar id={row.agentId} size="sm" />
                     <ItemText
                       title={name(row)}
-                      meta={row.resolves ? row.resolves.path : `PATH 来自 ${row.pathSource || "未知来源"}`}
+                      meta={row.resolves ? row.resolves.path : row.status === "unknown" ? row.note || "还无法判断" : `PATH 来自 ${row.pathSource || "未知来源"}`}
                       titleText={name(row)}
                       mono={Boolean(row.resolves)}
                     />

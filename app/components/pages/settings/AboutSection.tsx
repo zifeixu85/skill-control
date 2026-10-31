@@ -3,9 +3,10 @@
 import { useAppUpdate } from "../../../hooks/useAppUpdate";
 import { useNow } from "../../../hooks/useNow";
 import { APP_NAME, appVersion, AUTHOR, BUILD_VERSION, LICENSE_NAME, LINKS } from "../../../lib/about";
-import { appUpdateStore, REASON_TEXT, STATUS_TEXT, type AppUpdateState } from "../../../lib/app-update";
+import { ACTION_LABELS, appUpdateStore, REASON_TEXT, STATUS_TEXT, type AppUpdateState } from "../../../lib/app-update";
 import { formatDateTime, formatRelative } from "../../../lib/format";
 import { RefreshIcon, UpdateIcon } from "../../icons";
+import { openExternal } from "../../../lib/external";
 import { ExternalLink } from "../../ui/ExternalLink";
 import { MarkdownView } from "../../ui/MarkdownView";
 
@@ -22,6 +23,20 @@ function UpdateActions({ state }: { state: AppUpdateState }) {
   }
   return (
     <div className="about-acts">
+      {state.actions.map((action) => (
+        <button
+          key={action}
+          type="button"
+          className={`btn ${action === "open-app-management" ? "primary" : ""}`}
+          onClick={() => {
+            void appUpdateStore.runAction(action).then((done) => {
+              if (!done && action === "open-download-page") openExternal(downloadPage);
+            });
+          }}
+        >
+          {ACTION_LABELS[action]}
+        </button>
+      ))}
       <button type="button" className="btn" disabled={busy || state.status === "offline"} onClick={() => void appUpdateStore.check()}>
         <RefreshIcon className={state.status === "checking" ? "spin" : ""} />
         {state.status === "checking" ? "正在检查…" : "检查更新"}
@@ -37,7 +52,7 @@ function UpdateActions({ state }: { state: AppUpdateState }) {
           重启并完成更新
         </button>
       ) : null}
-      {(state.status === "available" || state.status === "ready") && !state.canInstall ? (
+      {(state.status === "available" || state.status === "ready") && !state.canInstall && !state.actions.includes("open-download-page") ? (
         <ExternalLink className="btn primary" href={downloadPage}>
           打开下载页
         </ExternalLink>
@@ -80,7 +95,12 @@ export function AppUpdateSetting() {
         {state.status === "error" && state.error ? <p className="form-error">{state.error}</p> : null}
         {(state.status === "unsupported" || state.status === "offline") && reason ? <p className="muted small">{reason}</p> : null}
         {state.manual && (!state.canInstall || state.status === "unsupported") ? <p className="muted small">{state.manual}</p> : null}
-        {state.notice && (state.status === "available" || state.status === "ready") ? <p className="safe-note warn">{state.notice}</p> : null}
+        {/* Shown before the install button, e.g. macOS may ask for App Management permission. */}
+        {state.notice && (state.status === "available" || state.status === "ready" || state.status === "downloading") ? (
+          <p className="safe-note warn" role="note">
+            {state.notice}
+          </p>
+        ) : null}
         <UpdateActions state={state} />
         {state.notes && (state.status === "available" || state.status === "ready" || state.status === "downloading") ? (
           <details className="about-notes" open>

@@ -222,7 +222,7 @@ function McpSection() {
       ) : (
         <McpMatrix items={sorted} />
       )}
-      <p className="footnote">点开任意一项查看各 Agent 里的配置原文。密钥在读取时就被隐藏，界面只显示字段名；保存位置见“密钥”标签。</p>
+      <p className="footnote">点开任意一项查看各 Agent 里的配置原文。密钥的值不会显示，也不会保存，界面只显示字段名；保存位置见“密钥”标签。</p>
     </>
   );
 }

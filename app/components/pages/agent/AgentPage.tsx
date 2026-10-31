@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { useScrollMemory } from "../../../hooks/useScrollMemory";
-import { MAX_PRIMARY_AGENTS } from "../../../lib/agents";
+import { activityLine, MAX_PRIMARY_AGENTS } from "../../../lib/agents";
 import { errorMessage } from "../../../lib/api";
 import { joinNames } from "../../../lib/format";
 import type { ScanAgent } from "../../../lib/types";
@@ -11,7 +11,6 @@ import { useNav } from "../../providers/NavProvider";
 import { useToast } from "../../providers/ToastProvider";
 import { AgentAvatar } from "../../ui/Avatar";
 import { EmptyState, Loading, Tabs, TopBar } from "../../ui/basics";
-import { activityLine } from "../home/AgentCard";
 import { useAcknowledge } from "../home/NewAgentsNotice";
 import { AgentFiles } from "./AgentFiles";
 import { AgentOverview } from "./AgentOverview";

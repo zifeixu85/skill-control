@@ -1,0 +1,182 @@
+/* First run: the two-step onboarding, banners on 概览, the no-Agent state, 设置 rows. */
+
+.onb {
+  display: grid;
+  gap: 14px;
+}
+.onb-lead {
+  font-size: 13.5px;
+  color: var(--ink-2);
+  line-height: 1.6;
+}
+.onb-promises {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  background: var(--panel);
+  border-radius: 12px;
+  box-shadow: 0 0 0 1px var(--line-2);
+}
+.onb-promises li {
+  display: grid;
+  grid-template-columns: 7.5em minmax(0, 1fr);
+  gap: 12px;
+  padding: 9px 14px;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.onb-promises li + li {
+  border-top: 1px solid var(--line-2);
+}
+.onb-promises b {
+  font-weight: 650;
+}
+.onb-promises span {
+  color: var(--ink-2);
+}
+.onb-check {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.onb-check input {
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+.onb-check small {
+  display: block;
+  font-weight: 400;
+  font-size: 12px;
+  color: var(--ink-2);
+  margin-top: 2px;
+}
+.onb-empty,
+.no-agents {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  background: var(--panel);
+  border-radius: var(--r-card);
+  box-shadow: 0 0 0 1px var(--line-2);
+  padding: 18px 20px;
+}
+.onb-empty b,
+.no-agents b {
+  font-size: 15px;
+  font-weight: 650;
+}
+.onb-empty p,
+.no-agents p {
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.6;
+}
+.no-agents {
+  margin-bottom: 14px;
+}
+
+/* 概览 banners: a decision that was put off. */
+.banner {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  background: color-mix(in oklab, var(--info-wash) 70%, var(--panel));
+  border-radius: var(--r-card);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--info) 22%, transparent);
+  padding: 10px 14px;
+  margin-bottom: 12px;
+}
+.banner-ic {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: var(--info-wash);
+  color: var(--info);
+}
+.banner-ic svg {
+  width: 17px;
+  height: 17px;
+}
+.banner p {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+.banner p b {
+  font-size: 13.5px;
+  font-weight: 650;
+}
+.banner p span {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.banner-acts {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* 设置 rows: a label with one line of explanation, and its control on the right. */
+.set-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  background: var(--panel);
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px var(--line-2);
+  padding: 10px 14px;
+  margin: 8px 0;
+}
+.set-row-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.set-row-text b {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.set-row-text span {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+.set-row-text code {
+  font-size: 12px;
+}
+.tier-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+@container page (max-width: 640px) {
+  .banner {
+    grid-template-columns: 30px minmax(0, 1fr);
+  }
+  .banner > .btn,
+  .banner-acts {
+    grid-column: 2;
+    justify-content: flex-start;
+    justify-self: start;
+  }
+  .onb-promises li {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
+.onb-check.disabled {
+  cursor: default;
+  opacity: 0.75;
+}

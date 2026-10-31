@@ -2,6 +2,7 @@ import { execFile as execFileCallback, spawn as spawnProcess } from "node:child_
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { access, constants, lstat, readdir, readFile, rename, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -14,6 +15,12 @@ import {
   readInfoPlistXml,
   UpdateError,
 } from "./app-update-core.mjs";
+import {
+  hasCertificateSigner,
+  normalizeSha1,
+  parseCodesignDisplay,
+  TRUSTED_SIGNER_SHA1,
+} from "./code-signature.mjs";
 
 /**
  * macOS install mechanics for the custom updater. Builds are ad-hoc signed, so Squirrel.Mac
@@ -24,6 +31,7 @@ import {
 const execFile = promisify(execFileCallback);
 const DITTO = "/usr/bin/ditto";
 const PLUTIL = "/usr/bin/plutil";
+const CODESIGN = "/usr/bin/codesign";
 const TEMP_PREFIX = "skill-control-update-";
 const STALL_TIMEOUT_MS = 60_000;
 
@@ -185,7 +193,87 @@ export async function checkReplaceable(bundlePath, { accessImpl = access } = {})
 }
 
 // ---------------------------------------------------------------------------
+// Code signature
+
+/** `codesign -d -r- --verbose=4`: identifier, ad hoc or not, signer and designated requirement; null when unreadable. */
+export async function readCodeSignature(appPath, { execFileImpl = execFile } = {}) {
+  try {
+    const { stdout = "", stderr = "" } = await execFileImpl(CODESIGN, ["-d", "-r-", "--verbose=4", appPath], {
+      maxBuffer: 1024 * 1024,
+      timeout: 60_000,
+    });
+    return parseCodesignDisplay(`${stderr}\n${stdout}`);
+  } catch {
+    return null;
+  }
+}
+
+/** `codesign --verify --deep --strict`, optionally also against a requirement ("=" + requirement text). */
+async function verifyCode(appPath, requirement, execFileImpl) {
+  const args = ["--verify", "--deep", "--strict", ...(requirement ? ["-R", `=${requirement}`] : []), appPath];
+  await execFileImpl(CODESIGN, args, { maxBuffer: 1024 * 1024, timeout: 5 * 60_000 });
+}
+
+/** SHA-1 of the signing (leaf) certificate, extracted with codesign into `tempDir`. */
+export async function leafCertificateSha1(appPath, { tempDir, execFileImpl = execFile } = {}) {
+  const prefix = path.join(tempDir, "signer-");
+  await execFileImpl(CODESIGN, ["-d", `--extract-certificates=${prefix}`, appPath], { maxBuffer: 1024 * 1024, timeout: 60_000 });
+  return createHash("sha1").update(await readFile(`${prefix}0`)).digest("hex").toUpperCase();
+}
+
+/**
+ * The new bundle must carry a valid signature. When the running copy is signed with a
+ * certificate, the new one must also satisfy the running copy's designated requirement, or
+ * be signed by a certificate in TRUSTED_SIGNER_SHA1 (used to rotate certificates). An ad-hoc
+ * running copy (0.2.x) has no signer to compare with, so only validity is checked.
+ */
+export async function checkSigner({
+  currentPath,
+  newPath,
+  tempDir,
+  bundleId,
+  execFileImpl = execFile,
+  trusted = TRUSTED_SIGNER_SHA1,
+}) {
+  try {
+    await verifyCode(newPath, null, execFileImpl);
+  } catch {
+    throw new UpdateError("signature", "新版本的代码签名无效，已停止。请从下载页手动更新。");
+  }
+  const current = await readCodeSignature(currentPath, { execFileImpl });
+  if (!hasCertificateSigner(current)) return { checked: false, reason: current ? "adhoc" : "unsigned" };
+  try {
+    await verifyCode(newPath, current.designated, execFileImpl);
+    return { checked: true, by: "designated-requirement" };
+  } catch {
+    // Not the same signer: accept only a certificate this version already trusts.
+  }
+  const next = await readCodeSignature(newPath, { execFileImpl });
+  const sha1 = hasCertificateSigner(next) ? await leafCertificateSha1(newPath, { tempDir, execFileImpl }).catch(() => null) : null;
+  if (sha1 && next.identifier === bundleId && trusted.map(normalizeSha1).includes(sha1)) {
+    return { checked: true, by: "trusted-certificate", sha1 };
+  }
+  throw new UpdateError("signature", "新版本的签名证书和当前应用不一致，已停止。请从下载页手动更新。");
+}
+
+/**
+ * macOS 13+ guards app bundles ("App Management"); an update that is not signed by the same
+ * Developer ID team as the running copy may need the user's permission. True when worth
+ * telling the user before installing.
+ */
+export function appManagementMayAsk({ signature, osRelease = os.release() }) {
+  const darwinMajor = Number.parseInt(String(osRelease).split(".")[0], 10);
+  return Number.isFinite(darwinMajor) && darwinMajor >= 22 && !signature?.teamIdentifier;
+}
+
+// ---------------------------------------------------------------------------
 // Swap with rollback
+
+/** What macOS returns when it (App Management, permissions) refuses to move an app bundle. */
+const BLOCKED_CODES = new Set(["EPERM", "EACCES"]);
+const isBlocked = (error) => BLOCKED_CODES.has(error?.code);
+export const BLOCKED_TEXT =
+  "macOS 阻止了 Skill Control 替换自己。请打开“系统设置 → 隐私与安全性 → App管理”，允许 Skill Control 后再点一次“安装更新”；也可以从下载页下载新版本手动替换。";
 
 const exists = (target) => lstat(target).then(() => true, () => false);
 
@@ -234,7 +322,8 @@ export async function swapBundle({ currentPath, newPath, currentVersion, date = 
   const backupPath = await freePath(parent, backupNameFor(path.basename(currentPath, ".app"), currentVersion, date), ops);
   try {
     await ops.rename(currentPath, backupPath);
-  } catch {
+  } catch (error) {
+    if (isBlocked(error)) throw new UpdateError("blocked", `${BLOCKED_TEXT}原来的版本没有改动。`);
     throw new UpdateError("swap", "没能移动当前版本，更新没有进行，原来的版本没有改动。");
   }
   try {
@@ -251,6 +340,7 @@ export async function swapBundle({ currentPath, newPath, currentVersion, date = 
     } catch {
       throw new UpdateError("swap", `更新失败，而且没能自动恢复。原来的版本在：${backupPath}`);
     }
+    if (isBlocked(error)) throw new UpdateError("blocked", `${BLOCKED_TEXT}已恢复原来的版本。`);
     const detail = error instanceof UpdateError ? error.message : "无法放入新版本。";
     throw new UpdateError("swap", `更新没有完成，已恢复原来的版本。${detail}`);
   }

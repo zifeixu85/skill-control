@@ -13,6 +13,8 @@ import "./styles/insights.css";
 import "./styles/pricing.css";
 import "./styles/updates.css";
 import "./styles/library.css";
+import "./styles/install.css";
+import "./styles/firstrun.css";
 import "./styles/content.css";
 import "./styles/assist.css";
 import "./styles/features.css";

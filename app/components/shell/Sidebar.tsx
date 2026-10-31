@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, type ComponentType, type ReactNode, type SVGProps } from "react";
+import { isInstalled } from "../../lib/agents";
+import { isStarting } from "./ServiceGate";
 import { useAppUpdate } from "../../hooks/useAppUpdate";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { usePageMemory } from "../../hooks/usePageMemory";
@@ -66,8 +68,11 @@ function BrandMark() {
 function ScanState() {
   const { scan } = useData();
   const now = useNow();
-  const label =
-    scan.status === "error"
+  // No answer yet at all: the local service is still starting (ServiceGate retries).
+  const starting = scan.status === "error" && !scan.data && isStarting(scan.error);
+  const label = starting
+    ? "正在启动本地服务…"
+    : scan.status === "error"
       ? "扫描失败"
       : !scan.data || scan.refreshing
         ? "扫描中…"
@@ -75,7 +80,7 @@ function ScanState() {
           ? `${formatRelative(scan.data.scannedAt, now)}扫描完成`
           : "扫描完成";
   return (
-    <div className={`scan-state ${scan.status === "error" ? "bad" : !scan.data || scan.refreshing ? "busy" : ""}`}>
+    <div className={`scan-state ${starting ? "busy" : scan.status === "error" ? "bad" : !scan.data || scan.refreshing ? "busy" : ""}`}>
       <i aria-hidden="true" />
       <span>{label}</span>
     </div>
@@ -154,13 +159,18 @@ export function Sidebar() {
       {isNew ? <span className="new-mark">新</span> : <span className="n">{count}</span>}
     </button>
   );
+  // A 常用 Agent that isn't installed (an old config, or the service's placeholder) isn't listed.
+  const shownPrimary = primary.filter((id) => {
+    const agent = agents.find((item) => item.id === id);
+    return agent ? isInstalled(agent) : false;
+  });
   const lists = (
     <>
-      {primary.length ? (
+      {shownPrimary.length ? (
         <>
           <p className="side-label">常用 Agent</p>
           <div className="agent-list">
-            {primary.map((id) => {
+            {shownPrimary.map((id) => {
               const agent = agents.find((item) => item.id === id);
               return agentButton(id, agent?.name || id, agent?.skillCount || 0, false);
             })}

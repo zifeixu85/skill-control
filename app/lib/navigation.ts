@@ -52,6 +52,19 @@ export function serializeRoute(route: Route): string {
   return route.page === "agent" && route.agentId ? `agent:${route.agentId}` : route.page;
 }
 
+/**
+ * A navigation request from the desktop menu (设置… ⌘, sends { page: "settings" }): only known
+ * pages and plain section ids are followed.
+ */
+export function navigateTarget(raw: unknown): { page: MainPage; section?: string } | null {
+  if (!raw || typeof raw !== "object") return null;
+  const record = raw as Record<string, unknown>;
+  const page = typeof record.page === "string" && (MAIN_PAGES as readonly string[]).includes(record.page) ? (record.page as MainPage) : null;
+  if (!page) return null;
+  const section = typeof record.section === "string" && /^[a-z][a-z-]{0,31}$/u.test(record.section) ? record.section : undefined;
+  return section ? { page, section } : { page };
+}
+
 export function isValidRoute(value: string): boolean {
   return serializeRoute(parseRoute(value)) === value;
 }

@@ -431,6 +431,10 @@ export function createAgentVersionService({
   searchDirectories = null,
   fetchImpl = globalThis.fetch,
   offline = process.env.SKILL_MANAGER_UPDATES_OFFLINE === "1",
+  // Automatic (start-up and daily) checks: "on", "off" (config network.updateChecks is false)
+  // or "waiting-notice" (the first-run notice is not seen yet). Read at every check; checks
+  // the user starts run whatever it says (only SKILL_MANAGER_UPDATES_OFFLINE stops those).
+  autoCheck = () => "on",
   now = () => Date.now(),
   intervalMs = VERSION_CHECK_INTERVAL_MS,
   timeoutMs = REQUEST_TIMEOUT_MS,
@@ -518,12 +522,14 @@ export function createAgentVersionService({
       checkedAt,
       nextCheckAt: checkedAt ? new Date(Date.parse(checkedAt) + intervalMs).toISOString() : null,
       offline,
+      autoCheck: offline ? "off" : autoCheck(),
+      checking: Boolean(running),
       agents: rows.map((row) => publicRow(row, cache.results[row.id])),
     };
   }
 
-  async function runCheck() {
-    if (offline) return view();
+  async function runCheck({ automatic = false } = {}) {
+    if (offline || (automatic && autoCheck() !== "on")) return view();
     const rows = await detectInstalledVersions(await context());
     // One request per distinct feed (two rows can share an npm package).
     const feeds = new Map();
@@ -548,21 +554,27 @@ export function createAgentVersionService({
     return view();
   }
 
-  /** POST /api/agent-versions/check (one check at a time). */
-  function check() {
-    running ||= runCheck().finally(() => {
+  /** POST /api/agent-versions/check (one check at a time); `automatic`: the start-up and daily checks. */
+  function check({ automatic = false } = {}) {
+    running ||= runCheck({ automatic }).finally(() => {
       running = null;
     });
     return running;
   }
 
+  /** An automatic check when the cache is older than the interval (also after the notice is seen). */
+  async function checkIfStale() {
+    if (offline) return null;
+    const cache = await loadCache();
+    const age = cache.checkedAt ? now() - Date.parse(cache.checkedAt) : Number.POSITIVE_INFINITY;
+    return age < intervalMs ? null : check({ automatic: true });
+  }
+
   /** Checks now when the cache is older than the interval, then every interval while running. */
   async function start() {
     if (timer || offline) return;
-    const cache = await loadCache();
-    const age = cache.checkedAt ? now() - Date.parse(cache.checkedAt) : Number.POSITIVE_INFINITY;
-    if (!(age < intervalMs)) check().catch(() => {});
-    timer = setInterval(() => check().catch(() => {}), intervalMs);
+    checkIfStale().catch(() => {});
+    timer = setInterval(() => check({ automatic: true }).catch(() => {}), intervalMs);
     timer.unref?.();
   }
 
@@ -761,7 +773,7 @@ export function createAgentVersionService({
     return { opened: true, bundleId: row.internal.bundleId };
   }
 
-  return { view, check, start, stop, cacheFile, plan, apply, terminal, job, openApp };
+  return { view, check, checkIfStale, start, stop, cacheFile, plan, apply, terminal, job, openApp };
 }
 
 /** Starts an app by bundle id (macOS `open -b`, detached, no shell). */

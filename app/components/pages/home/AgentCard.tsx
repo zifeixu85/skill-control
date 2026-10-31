@@ -1,12 +1,11 @@
 "use client";
 
 import type { CSSProperties } from "react";
-import { agentMeta, tintFor } from "../../../lib/agents";
+import { activityLine, agentMeta, tintFor } from "../../../lib/agents";
 import { COST_HINT, formatCost } from "../../../lib/cost";
 import { formatCompact, shortTitle } from "../../../lib/format";
 import type { PageId } from "../../../lib/navigation";
 import { componentsOf, mergePlugins } from "../../../lib/plugins";
-import type { ActivityAgent } from "../../../lib/types";
 import { isIndexing, SESSIONS_HINT, type UsageSummary } from "../../../lib/usage";
 import { useData } from "../../providers/DataProvider";
 import { useNav } from "../../providers/NavProvider";
@@ -17,22 +16,6 @@ interface Stat {
   label: string;
   value: number | null;
   onClick?: () => void;
-}
-
-/**
- * The "近 30 天 …" line. The usage index's count (sessions active in the window) wins when it
- * is ready, so this line matches the figures on the cards and the 数据 page; the activity scan
- * (session files touched in the window) is the fallback while usage is still being counted.
- */
-export function activityLine(activity: ActivityAgent | undefined, usage?: { sessions: number; activeDays: number } | null): string {
-  if (usage && usage.sessions > 0) return `近 30 天 ${usage.sessions} 个会话 · ${usage.activeDays} 天在用`;
-  if (!activity || activity.status === "unknown" || (!activity.files30d && !activity.tokens30d)) {
-    return "近 30 天暂无记录";
-  }
-  if (activity.basis === "tokens") {
-    return [activity.activeDays30d ? `近 30 天 ${activity.activeDays30d} 天在用` : "近 30 天", `${formatCompact(activity.tokens30d)} tokens`].join(" · ");
-  }
-  return `近 30 天 ${activity.files30d} 个会话 · ${activity.activeDays30d} 天在用`;
 }
 
 /**

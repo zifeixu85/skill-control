@@ -12,6 +12,13 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  # macOS builds must be signed with the fixed certificate (MAC_SIGN_P12_* secrets) instead of
+  # ad hoc once this is "true": set the repository variable MAC_SIGN_REQUIRED=true.
+  MAC_SIGN_REQUIRED: ${{ vars.MAC_SIGN_REQUIRED || 'false' }}
+  # Leaf certificate SHA-1 the macOS signature must match, when set (repository variable).
+  MAC_SIGN_CERT_SHA1: ${{ vars.MAC_SIGN_CERT_SHA1 }}
+
 jobs:
   verify:
     name: Verify source
@@ -90,23 +97,38 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The signing secrets reach the macOS build only (scripts/sign-mac.mjs, afterPack hook).
+      - name: Build desktop artifacts (macOS)
+        if: runner.os == 'macOS'
+        run: ${{ matrix.command }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          MAC_SIGN_P12_BASE64: ${{ secrets.MAC_SIGN_P12_BASE64 }}
+          MAC_SIGN_P12_PASSWORD: ${{ secrets.MAC_SIGN_P12_PASSWORD }}
+
       - name: Build desktop artifacts
+        if: runner.os != 'macOS'
         run: ${{ matrix.command }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
-      # An unsealed bundle (only Electron's linker signature) is reported as "damaged"
-      # on other Macs; fail the release instead of shipping it.
+      # An unsealed bundle (only Electron's linker signature) is reported as "damaged" on
+      # other Macs; fail instead of shipping it. Checks the app and the copy inside the zip,
+      # the identifier, a certificate when MAC_SIGN_REQUIRED, and its SHA-1 when MAC_SIGN_CERT_SHA1.
       - name: Verify macOS code signature
         if: runner.os == 'macOS'
         shell: bash
         run: |
           shopt -s nullglob
           apps=(release/mac*/"Skill Control.app")
+          zips=(release/*-mac-*.zip)
           test "${#apps[@]}" -gt 0
-          for app in "${apps[@]}"; do
-            codesign --verify --deep --strict --verbose=2 "$app"
-            codesign -dv "$app" 2>&1 | grep -q "Identifier=dev.skillcontrol.desktop"
+          test "${#zips[@]}" -gt 0
+          node scripts/sign-mac.mjs verify "${apps[@]}"
+          for zip in "${zips[@]}"; do
+            out="$(mktemp -d "${RUNNER_TEMP}/zip-check.XXXXXX")"
+            ditto -x -k "$zip" "$out"
+            node scripts/sign-mac.mjs verify "$out/Skill Control.app"
           done
 
       - name: Configure Linux Chromium sandbox for smoke test
@@ -242,6 +264,22 @@ jobs:
             echo "Per-architecture macOS manifests must not be published." >&2
             exit 1
           fi
+
+      # Fixed names, so README can link releases/latest/download/<name> (latest full release).
+      - name: Add version-less download names
+        working-directory: release-artifacts
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          while read -r source target; do
+            test -f "${source}"
+            cp "${source}" "${target}"
+          done <<EOF
+          Skill-Control-${version}-mac-arm64.dmg Skill-Control-mac-arm64.dmg
+          Skill-Control-${version}-mac-x64.dmg Skill-Control-mac-x64.dmg
+          Skill-Control-${version}-win-x64-setup.exe Skill-Control-win-x64-setup.exe
+          Skill-Control-${version}-linux-x86_64.AppImage Skill-Control-linux-x86_64.AppImage
+          EOF
 
       - name: Generate SHA-256 checksums
         working-directory: release-artifacts

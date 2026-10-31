@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import { useRevealLabel } from "../../../hooks/usePlatform";
 import { api, errorMessage } from "../../../lib/api";
 import type { SkillView } from "../../../lib/skill-model";
 import type { SkillInstance } from "../../../lib/types";
@@ -46,6 +47,7 @@ export function SkillActions({ view }: { view: SkillView }) {
   const { primary } = useData();
   const toast = useToast();
   const reveal = useReveal();
+  const revealLabel = useRevealLabel();
   const [busy, setBusy] = useState<"skill" | "zip" | null>(null);
   const instance = primaryInstance(view, primary);
   if (!instance) return null;
@@ -66,7 +68,7 @@ export function SkillActions({ view }: { view: SkillView }) {
     <div className="insp-acts">
       <button type="button" className="btn sm" onClick={() => reveal(instance.id)}>
         <FinderIcon />
-        在访达中显示
+        {revealLabel}
       </button>
       <button type="button" className="btn sm" disabled={busy !== null} onClick={() => exportAs("skill")}>
         <ExportIcon />

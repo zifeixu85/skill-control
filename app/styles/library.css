@@ -403,3 +403,180 @@
 .restore-units .steps {
   margin: 6px 0 0 26px;
 }
+
+/* v0.3 技能库现状: who can't see what, 补齐接入, Hermes consent, 自动接入. */
+.lib-status {
+  display: grid;
+  background: var(--panel);
+  border-radius: var(--r-card);
+  box-shadow: 0 0 0 1px var(--line-2);
+  margin-top: 10px;
+  overflow: hidden;
+}
+.lib-status.gap {
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--warn) 32%, transparent);
+}
+.lib-status-main {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+}
+.lib-status-main .ic {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+.lib-status-main .ic.warn {
+  background: var(--warn-wash);
+  color: var(--warn);
+}
+.lib-status-main .ic.info {
+  background: var(--info-wash);
+  color: var(--info);
+}
+.lib-status-main .ic svg {
+  width: 18px;
+  height: 18px;
+}
+.lib-status-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.lib-status-text b {
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.4;
+  text-wrap: pretty;
+}
+.lib-status-text > span {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+.lib-status-text > span.muted {
+  color: var(--ink-3);
+}
+.lib-status-acts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.lib-auto {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 14px;
+  border-top: 1px solid var(--line-2);
+  background: color-mix(in oklab, var(--hover) 60%, transparent);
+}
+.lib-auto-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.lib-auto-text b {
+  font-size: 13px;
+  color: var(--ink);
+  font-weight: 600;
+}
+.lib-auto-text .muted {
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib-auto .seg button {
+  font-size: 12.5px;
+  padding: 3px 10px;
+}
+
+/* Agent cards: 接入方式 under the name, one line on how, one on what it sees. */
+.tier-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.tier-name.native {
+  color: var(--accent);
+}
+.tier-name.link,
+.tier-name.config {
+  color: var(--info);
+}
+.tier-name.copy {
+  color: var(--warn);
+}
+.tier-name.none {
+  color: var(--ink-3);
+}
+.tier-line {
+  font-size: 12px;
+  color: var(--ink-3);
+  line-height: 1.45;
+  margin-top: -4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gap-line.warn {
+  color: var(--warn);
+}
+.lib-consent {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  background: var(--info-wash);
+  border-radius: 10px;
+  padding: 9px 10px;
+}
+.lib-consent code {
+  font-size: 11.5px;
+}
+.catchup-sum {
+  font-size: 13px;
+  color: var(--ink-2);
+  background: var(--accent-wash);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+.catchup-sum b {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+@container page (max-width: 900px) {
+  .lib-status-main {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+  .lib-status-acts {
+    grid-column: 2;
+    justify-content: flex-start;
+  }
+}
+@container page (max-width: 640px) {
+  .lib-auto {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .lib-auto .seg {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+}
+.note .ic.info {
+  background: var(--info-wash);
+  color: var(--info);
+}

@@ -149,11 +149,23 @@ function resolveUncached(raw, table, agentId) {
   return resolveFamily(id, table);
 }
 
-/** Family fallback for an unknown id (also used when an agent average has nothing to average). */
+/** The generation of a model id: its first number (claude-opus-4-1 → "4", gpt-5.4-mini → "5", deepseek-chat → null). */
+export const generationOf = (id) => stripDate(normalize(String(id || ""))).match(/\d+/u)?.[0] ?? null;
+
+/**
+ * Family fallback for an unknown id (also used when an agent average has nothing to average),
+ * only within the same generation: the family's model when it is of that generation, else the
+ * first model of the family and generation in the table. Across generations prices differ too
+ * much (review issue 22), so the tokens stay unpriced (价格未知，未计入).
+ */
 export function resolveFamily(id, table = priceTable()) {
   const family = table.families.find((item) => item.regex.test(normalize(id)));
   if (!family) return { basis: "unpriced" };
-  const entry = table.byId.get(normalize(family.priceAs));
+  const generation = generationOf(id);
+  const sameGeneration = (entry) => entry && generationOf(entry.id) === generation;
+  const preferred = table.byId.get(normalize(family.priceAs));
+  const entry = sameGeneration(preferred) ? preferred : [...table.byId.values()].find((item) => family.regex.test(normalize(item.id)) && sameGeneration(item));
+  if (!entry) return { basis: "unpriced", family: family.id, reason: "没有同一代型号的价格，不按其他代估算" };
   return { basis: "family", entry, priceAs: entry.id, family: family.id, priceRef: { section: "families", id: family.id } };
 }
 

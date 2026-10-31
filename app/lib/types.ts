@@ -36,6 +36,12 @@ export interface ScanAgent {
   iconAvailable?: boolean;
   /** Detected but not yet in knownAgentIds (v0.2). */
   isNew?: boolean;
+  /** v0.3: installed (config, sessions, command or app found), independent of a skills folder. */
+  installed?: boolean;
+  /** v0.3: "missing" = installed but no skills folder yet. */
+  skillsDir?: "present" | "missing" | null;
+  /** v0.3: why it counts as installed, e.g. ["~/.claude.json", "command:claude", "app:Codex.app"]. */
+  detectedBy?: string[];
 }
 
 export interface InstanceUsage {
@@ -206,9 +212,25 @@ export interface AgentConfig {
   paths: string[];
 }
 
+/** v0.3 config.library: how installs work and 自动接入 (changed through its own endpoint). */
+export interface LibrarySettings {
+  installMode?: "library" | "per-agent";
+  /** Set when a pre-0.3 config was moved to the library method; cleared once the user picks. */
+  installModeMigrated?: { from: "copy" | "symlink" } | null;
+  autoLink?: { enabled: boolean; scope: "primary" | "all" };
+}
+
 export interface ManagerConfig {
   version: number;
+  /** Pre-0.3 install setting; v0.3 reads `library.installMode`. */
   syncMode: SyncMode;
+  library?: LibrarySettings;
+  /**
+   * v0.3 联网: `updateChecks` = 自动检查更新 (missing means on); `noticeSeenAt` = when the user saw the
+   * notice (null on a fresh install: no automatic check until then); `envOffline` (read-only) =
+   * SKILL_MANAGER_UPDATES_OFFLINE turned everything off. Writes send `noticeSeen: true`.
+   */
+  network?: { updateChecks?: boolean; noticeSeenAt?: string | null; envOffline?: boolean; noticeSeen?: boolean };
   agents: AgentConfig[];
   visibleAgentIds: string[];
   primaryAgentIds?: string[] | null;
@@ -507,4 +529,9 @@ export interface ImportedSkill {
   byteCount: number;
   shortHash: string;
   entries: FileEntry[];
+  /** v0.3: what it came from, the skill folder inside it, files outside that folder, links not followed. */
+  source?: "skill" | "zip" | "folder";
+  root?: string | null;
+  ignoredCount?: number;
+  skippedLinks?: unknown[];
 }

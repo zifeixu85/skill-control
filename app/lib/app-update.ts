@@ -43,7 +43,17 @@ export interface AppUpdateState {
   notice: string | null;
   /** 0–1 while downloading. */
   progress: number | null;
+  /** After a failed download or install: what the user can do (macOS App Management, the download page). */
+  actions: AppUpdateAction[];
 }
+
+export type AppUpdateAction = "open-app-management" | "open-download-page";
+const ACTIONS: AppUpdateAction[] = ["open-app-management", "open-download-page"];
+
+export const ACTION_LABELS: Record<AppUpdateAction, string> = {
+  "open-app-management": "打开系统设置",
+  "open-download-page": "打开下载页",
+};
 
 export interface AppUpdateBridge {
   check: () => Promise<unknown>;
@@ -51,6 +61,10 @@ export interface AppUpdateBridge {
   download?: () => Promise<unknown>;
   install?: () => Promise<unknown>;
   onProgress?: (callback: (state: unknown) => void) => unknown;
+  /** 系统设置 → 隐私与安全性 → App管理 (macOS); resolves with the state. */
+  openAppManagement?: () => Promise<unknown>;
+  /** The release page in the browser; resolves with the state. */
+  openDownloadPage?: () => Promise<unknown>;
 }
 
 const REASONS: Exclude<UnsupportedReason, null>[] = ["offline", "development", "platform", "portable", "package", "location"];
@@ -97,6 +111,11 @@ export function normalizeState(raw: unknown, previous: AppUpdateState = INITIAL)
     manual: has("manual") ? asOptionalString(record.manual) : previous.manual,
     notice: has("notice") ? asOptionalString(record.notice) : previous.notice,
     progress: status === "downloading" ? progressOf(record) ?? previous.progress : status === "ready" ? 1 : null,
+    actions: has("actions")
+      ? (Array.isArray(record.actions) ? record.actions : []).filter((item): item is AppUpdateAction => ACTIONS.includes(item as AppUpdateAction))
+      : record.status === undefined
+        ? previous.actions
+        : [],
   };
 }
 
@@ -120,6 +139,7 @@ export const INITIAL: AppUpdateState = {
   manual: null,
   notice: null,
   progress: null,
+  actions: [],
 };
 
 export const STATUS_TEXT: Record<AppUpdateStatus, string> = {
@@ -223,6 +243,18 @@ export function createAppUpdateStore(getBridge: () => AppUpdateBridge | null = r
         if (Object.keys(result).length) apply(result);
       } catch (error) {
         failure(error, "安装失败，当前版本没有改动。");
+      }
+    },
+    /** The buttons a failed install offers; the bridge answers with the state (never rejects). */
+    async runAction(action: AppUpdateAction): Promise<boolean> {
+      const bridge = getBridge();
+      const run = action === "open-app-management" ? bridge?.openAppManagement : bridge?.openDownloadPage;
+      if (typeof run !== "function") return false;
+      try {
+        apply(await run.call(bridge));
+        return true;
+      } catch {
+        return false;
       }
     },
     /** Test hook. */

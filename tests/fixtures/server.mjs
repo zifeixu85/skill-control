@@ -40,8 +40,24 @@ async function stopChild(child) {
   if (child.exitCode === null) child.kill("SIGKILL");
 }
 
-/** Starts the manager service with HOME pointed at a synthetic directory. */
-export async function startTestServer(context, home) {
+// `after` hooks run in the order they were added and stop at the first failure. Tests add
+// their `rm(home)` before starting a server, so a failing rm would skip stopChild and the
+// server would keep the test process alive forever. Servers never hold the process open,
+// and any still running when it exits are killed here.
+const liveChildren = new Set();
+process.once("exit", () => {
+  for (const child of liveChildren) if (child.exitCode === null) child.kill("SIGKILL");
+});
+
+/**
+ * Starts the manager service with HOME pointed at a synthetic directory. Background
+ * auto-link runs (start-up, after scans, folder watches) are off unless `env` turns them on
+ * with SKILL_MANAGER_AUTO_LINK: "on": they write into the home after a test's last request,
+ * which races with the test's own `rm(home)`. Explicit runs (POST /api/library/auto-link/run)
+ * work either way. A test that turns them on adds its `rm(home)` after starting the server,
+ * so the server is stopped first.
+ */
+export async function startTestServer(context, home, env = {}) {
   const port = await reserveFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const logs = [];
@@ -64,12 +80,22 @@ export async function startTestServer(context, home) {
       // looked up and run inside the synthetic home: never a real lark-cli, claude or git.
       SKILL_MANAGER_UPDATES_OFFLINE: "1",
       SKILL_MANAGER_COMMAND_DIRS: [path.join(home, "npm", "bin"), path.join(home, "bin")].join(path.delimiter),
+      SKILL_MANAGER_AUTO_LINK: "off",
+      SKILL_MANAGER_AUTO_LINK_WATCH: "0",
+      // The skill-control launcher goes to the synthetic home's own bin folder.
+      SKILL_MANAGER_LAUNCHER_DIR: path.join(home, ".local", "bin"),
       PATH: "/usr/bin:/bin",
+      ...env,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stdout.on("data", (chunk) => logs.push(chunk.toString()));
   child.stderr.on("data", (chunk) => logs.push(chunk.toString()));
+  liveChildren.add(child);
+  child.once("exit", () => liveChildren.delete(child));
+  child.unref();
+  child.stdout.unref?.();
+  child.stderr.unref?.();
   context.after(() => stopChild(child));
 
   let healthy = false;

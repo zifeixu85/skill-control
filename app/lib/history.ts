@@ -23,6 +23,9 @@ export interface HistoryItem {
   units: { id: string; title: string }[];
   restorable: boolean;
   reason: string | null;
+  /** v0.3 library writes: which one ("auto-link", "catch-up", "install", …); "auto" when nobody clicked. */
+  operation: string | null;
+  origin: string | null;
 }
 
 export interface RestoreStep {
@@ -87,6 +90,24 @@ export const HISTORY_ACTION_LABELS: Record<string, string> = {
   "cli-fix": "修复命令行工具",
 };
 
+/** v0.3: library writes say which operation they were. */
+const LIBRARY_OPERATION_LABELS: Record<string, string> = {
+  "auto-link": "自动接入",
+  "catch-up": "补齐接入",
+  install: "安装到技能库",
+  batch: "整理技能库",
+  adopt: "放进技能库",
+  link: "接入",
+  unlink: "取消接入",
+  disable: "停用",
+  remove: "移到回收站",
+};
+
+export function historyTitle(entry: Pick<HistoryItem, "action" | "operation">): string {
+  if (entry.action === "library" && entry.operation && LIBRARY_OPERATION_LABELS[entry.operation]) return LIBRARY_OPERATION_LABELS[entry.operation];
+  return HISTORY_ACTION_LABELS[entry.action] || entry.action;
+}
+
 export const RESTORE_STEP_LABELS: Record<string, string> = {
   "restore-backup": "放回备份",
   "trash-created": "移到回收站",
@@ -131,6 +152,8 @@ export function normalizeHistory(raw: unknown): HistoryItem[] {
         .filter((unit) => unit.id),
       restorable: entry.restorable === true,
       reason: asOptionalString(entry.reason),
+      operation: asOptionalString(entry.operation),
+      origin: asOptionalString(entry.origin),
     };
   });
 }

@@ -70,7 +70,7 @@ export function MaskNote({ text, children }: { text?: string | null; children?: 
   return (
     <p className="safe-note">
       <KeyIcon />
-      <span>{children || "密钥、令牌和请求头的值在读取时就被隐藏，界面不会显示，也不会保存。"}</span>
+      <span>{children || "密钥、令牌和请求头的值不会显示，也不会保存。"}</span>
     </p>
   );
 }

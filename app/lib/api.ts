@@ -10,7 +10,10 @@ import { normalizeHealthReport } from "./health";
 import { normalizePricing } from "./pricing";
 import { normalizeProjectsReport } from "./projects";
 import { normalizeHistory, normalizeRestorePlan, normalizeTrash, normalizeUninstallPlan } from "./history";
-import { normalizeLibrary, normalizeLibraryApply, normalizeLibraryPlan, type LibraryAction } from "./library";
+import { normalizeAutoLink, normalizeLibrary, normalizeLibraryApply, normalizeLibraryPlan, type AutoLinkScope, type LibraryAction } from "./library";
+import { normalizeInstallPlan, normalizeInstallResult } from "./install-plan";
+import { normalizeDiffFile, normalizeSkillDiff } from "./skill-diff";
+import { normalizeCompanion, normalizeLauncher } from "./integration";
 import {
   normalizeApply,
   normalizeChanges,
@@ -89,14 +92,17 @@ export class ApiError extends Error {
   readonly timedOut: boolean;
   /** Machine-readable reason from the service (e.g. "stale-plan"); null from older services. */
   readonly code: string | null;
+  /** The rest of the error body (e.g. `skills` with code "multiple-skills"). */
+  readonly details: Record<string, unknown>;
 
-  constructor(message: string, status: number, unsupported = false, timedOut = false, code: string | null = null) {
+  constructor(message: string, status: number, unsupported = false, timedOut = false, code: string | null = null, details: Record<string, unknown> = {}) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.unsupported = unsupported;
     this.timedOut = timedOut;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -117,15 +123,19 @@ const ERROR_CODE = /^[a-z][a-z0-9-]{1,40}$/u;
 async function errorFrom(response: Response): Promise<ApiError> {
   let message = `本地服务返回了错误（${response.status}）。`;
   let code: string | null = null;
+  let details: Record<string, unknown> = {};
   try {
     const payload = (await response.json()) as { error?: unknown; code?: unknown };
     if (typeof payload?.error === "string" && payload.error) message = payload.error;
     if (typeof payload?.code === "string" && ERROR_CODE.test(payload.code)) code = payload.code;
+    if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+      details = Object.fromEntries(Object.entries(payload).filter(([key]) => key !== "error" && key !== "code"));
+    }
   } catch {
     // Non-JSON error bodies keep the generic message.
   }
   const unsupported = response.status === 404 && (code === "route-missing" || (code === null && message === ROUTE_MISSING));
-  return new ApiError(message, response.status, unsupported, false, code);
+  return new ApiError(message, response.status, unsupported, false, code, details);
 }
 
 function url(pathname: string, params?: Record<string, string | number | boolean | null | undefined>) {
@@ -257,7 +267,15 @@ export const api = {
       { importId, targetAgentIds, dryRun: false, confirm: true },
       WRITE,
     ),
-  importSkill: (file: File) =>
+  /**
+   * v0.3: one install flow for every entry point. `source` is { importId } | { instanceId } |
+   * { library }; scope "primary" | "agents" | "agent-only"; the service picks library or per-Agent.
+   */
+  planInstall: async (body: { source: Record<string, string>; scope: string; agentIds?: string[]; choices?: Record<string, string> }) =>
+    normalizeInstallPlan(await sendJson<unknown>("POST", "/api/install/plan", body, PLAN)),
+  applyInstall: async (planId: string) => normalizeInstallResult(await sendJson<unknown>("POST", "/api/install/apply", { planId, confirm: true }, WRITE)),
+  /** A .skill / .zip package; `root` picks one skill when the package holds several (409 multiple-skills). */
+  importSkill: (file: File, root?: string | null) =>
     send(
       url("/api/import-skill"),
       {
@@ -265,15 +283,26 @@ export const api = {
         headers: {
           "content-type": "application/octet-stream",
           "x-skill-filename": encodeURIComponent(file.name),
+          ...(root ? { "x-skill-root": encodeURIComponent(root) } : {}),
         },
         body: file,
       },
       TIMEOUTS.read,
       json<ImportedSkill>,
     ),
+  /** v0.3 desktop: a folder the user picked in the system dialog (full path), staged like a package. */
+  importFolder: (path: string, root?: string | null) =>
+    sendJson<ImportedSkill>("POST", "/api/import-folder", { path, ...(root ? { root } : {}) }),
   exportSkill: (instanceId: string, format: "skill" | "zip") =>
     send(url("/api/export-skill", { instanceId, format }), {}, TIMEOUTS.read, (response) => response.blob()),
   reveal: (instanceId: string) => sendJson<{ ok: boolean }>("POST", "/api/reveal", { instanceId }),
+  /** 版本不同: which files differ between two copies of one skill (left = newer). */
+  skillDiff: async (leftInstanceId: string, rightInstanceId: string) =>
+    normalizeSkillDiff(await getJson<unknown>("/api/skill-diff", { leftInstanceId, rightInstanceId })),
+  skillDiffFile: async (leftInstanceId: string, rightInstanceId: string, path: string) =>
+    normalizeDiffFile(await getJson<unknown>("/api/skill-diff-file", { leftInstanceId, rightInstanceId, path })),
+  /** 设置 → 数据与隐私: open ~/.agent-skill-manager in the file manager (v0.3). */
+  revealDataDir: () => sendJson<{ ok: boolean; opened?: boolean; path?: string }>("POST", "/api/reveal", { target: "data-dir" }),
   fetchBlob: (target: string) => send(target, {}, TIMEOUTS.read, (response) => response.blob()),
 
   // Endpoints added by newer services; callers feature-detect `ApiError.unsupported`.
@@ -323,6 +352,38 @@ export const api = {
   }) => normalizeLibraryPlan(await sendJson<unknown>("POST", "/api/library/plan", input, PLAN)),
   libraryApply: async (planId: string) =>
     normalizeLibraryApply(await sendJson<unknown>("POST", "/api/library/apply", { planId, confirm: true }, WRITE)),
+  /** 自动接入 on/off and scope; a config write, no confirm header. */
+  setAutoLink: async (input: { enabled: boolean; scope: AutoLinkScope }) => {
+    const raw = await sendJson<unknown>("POST", "/api/library/auto-link", input);
+    return normalizeAutoLink(asRecordOf(raw).autoLink ?? raw);
+  },
+  /** The toast's 撤销 for one 自动接入 run; tombstones keep those pairs from coming back. */
+  restoreAutoLink: async (historyId: string, skill?: string) =>
+    sendJson<unknown>("POST", "/api/library/auto-link/undo", { historyId, ...(skill ? { skill } : {}), confirm: true }, WRITE),
+  /** 补齐接入: the one-time plan for gaps that existed before 自动接入 was turned on (optionally some Agents only). */
+  libraryCatchUpPlan: async (input: { agents?: string[]; choices?: Record<string, string> } = {}) =>
+    normalizeLibraryPlan(
+      await sendJson<unknown>(
+        "POST",
+        "/api/library/catch-up/plan",
+        { ...(input.agents?.length ? { agents: input.agents } : {}), ...(input.choices && Object.keys(input.choices).length ? { choices: input.choices } : {}) },
+        PLAN,
+      ),
+    ),
+  libraryCatchUpApply: async (planId: string) =>
+    normalizeLibraryApply(await sendJson<unknown>("POST", "/api/library/catch-up/apply", { planId, confirm: true }, WRITE)),
+  /** 设置 → Agent 集成: the `skill-control` launcher in ~/.local/bin. */
+  cliLauncher: async () => normalizeLauncher(await getJson<unknown>("/api/cli-launcher")),
+  /** Writes or removes the launcher (never a file Skill Control didn't write). */
+  applyCliLauncher: async (action: "install" | "uninstall") =>
+    normalizeLauncher(await sendJson<unknown>("POST", `/api/cli-launcher/${action === "uninstall" ? "uninstall" : "install"}`, { confirm: true }, WRITE)),
+  /** The bundled skill-control skill: in the library? who can use it? */
+  companionSkill: async () => normalizeCompanion(await getJson<unknown>("/api/library/companion-skill")),
+  /** Into the library, connected to the primary Agents (undoable). */
+  applyCompanionSkill: async () => {
+    const raw = await sendJson<unknown>("POST", "/api/library/companion-skill/install", { confirm: true }, WRITE);
+    return { result: normalizeInstallResult({ mode: "library", ...asRecordOf(raw) }), status: normalizeCompanion(asRecordOf(raw).status) };
+  },
   history: async (limit = 100) => normalizeHistory(await getJson<unknown>("/api/history", { limit })),
   planRestore: async (historyId: string, select?: string[] | null) =>
     normalizeRestorePlan(
@@ -390,3 +451,5 @@ export const assetUrl = {
 export function errorMessage(error: unknown, fallback = "操作失败。"): string {
   return error instanceof Error && error.message ? error.message : fallback;
 }
+
+const asRecordOf = (value: unknown): Record<string, unknown> => (value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {});

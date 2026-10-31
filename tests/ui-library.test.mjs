@@ -26,7 +26,7 @@ test("library view: kinds, tiers and per-Agent counts with reasons", () => {
   assert.equal(data.entries[2].kind, "real", "unknown kinds fall back");
   assert.equal(data.entries[2].fanout.codex.state, "none");
   assert.equal(data.agents[1].name, "hermes", "name falls back to the id");
-  assert.equal(library.TIER_LABELS[data.agents[1].tier], "配置额外目录");
+  assert.equal(library.TIER_LABELS[data.agents[1].tier], "通过额外目录读取");
   const codex = library.agentCounts(data, "codex");
   assert.deepEqual([codex.visible, codex.duplicate], [1, 1]);
   const openclaw = library.agentCounts(data, "openclaw");

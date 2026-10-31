@@ -16,7 +16,7 @@ export function IndexProgress({ status, index }: { status: UsageStatus | null; i
   return (
     <div className="index-progress" role="status" aria-live="polite">
       <div>
-        <b>{index?.updatedAt ? "正在更新统计…" : "正在首次统计（约 40 秒）…"}</b>
+        <b>{index?.updatedAt ? "正在更新统计…" : "正在首次统计…"}</b>
         <span>
           {total ? `${indexed.toLocaleString("zh-CN")} / ${total.toLocaleString("zh-CN")} 个文件` : "正在列出会话文件"}
           ，数字会随统计增加

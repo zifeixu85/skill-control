@@ -77,10 +77,11 @@ export function UsageAgentCard({ usage, days, endDate }: { usage: UsageAgent; da
       <header className="ucard-head">
         <AgentAvatar id={usage.agentId} size="md" />
         <div className="ucard-title">
-          <h3>
+          {/* h2: the cards come before the page's first section heading. */}
+          <h2>
             {name}
             <SourceInfo sources={usage.sources} name={name} />
-          </h3>
+          </h2>
         </div>
         {hasTokens || hasCost ? (
           <Segmented

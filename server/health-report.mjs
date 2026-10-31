@@ -352,11 +352,13 @@ function checkLibraryAndCli(library, cliTools, context) {
       context.add({ severity: "warn", category: "cli-version-skew", title: `${tool.name} 有 ${versions.length} 个不同版本`, detail: (tool.binaries || []).map((binary) => `${binary.path} ${binary.version || "未知"}`).join("；"), hint: { command: tool.command || tool.id }, fix: FIX.configure });
     }
     for (const agent of tool.agents || []) {
-      if (tool.binaries?.length && agent.resolves === null) {
-        context.add({ severity: "warn", category: "cli-not-on-agent-path", agentId: agent.agentId, title: `${agent.agentId} 找不到 ${tool.name}`, detail: `按 ${agent.pathSource} 的 PATH 查找不到这个命令。`, hint: { command: tool.command || tool.id }, fix: FIX.configure });
+      const agentName = agent.agentName || agent.agentId;
+      // Only installed Agents get rows; an Agent whose PATH cannot be read yet is "unknown", not a finding.
+      if (tool.binaries?.length && agent.resolves === null && (agent.status || "missing") === "missing") {
+        context.add({ severity: "warn", category: "cli-not-on-agent-path", agentId: agent.agentId, title: `${agentName} 找不到 ${tool.name}`, detail: `${agentName} 运行命令时使用的 PATH（${agent.pathSource}）里没有这个命令。`, hint: { command: tool.command || tool.id }, fix: FIX.configure });
       }
       if (agent.workspace && agent.workspace !== "local" && agent.workspaceConfigured === false) {
-        context.add({ severity: "warn", category: "cli-workspace-unconfigured", agentId: agent.agentId, title: `${agent.agentId} 使用的 ${tool.name} 工作区未配置`, detail: `该 Agent 运行时会改用 ${agent.workspace} 工作区，需要单独绑定（lark-cli config bind --source ${agent.workspace}）。`, hint: { command: tool.command || tool.id, workspace: agent.workspace }, fix: FIX.configure });
+        context.add({ severity: "warn", category: "cli-workspace-unconfigured", agentId: agent.agentId, title: `${agentName} 使用的 ${tool.name} 工作区未配置`, detail: `该 Agent 运行时会改用 ${agent.workspace} 工作区，需要单独绑定（lark-cli config bind --source ${agent.workspace}）。`, hint: { command: tool.command || tool.id, workspace: agent.workspace }, fix: FIX.configure });
       }
     }
   }

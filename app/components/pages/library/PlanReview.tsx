@@ -2,6 +2,7 @@
 
 import { RunningProgress } from "../../ui/RunningProgress";
 import { useEffect, useRef, useState } from "react";
+import { useData } from "../../providers/DataProvider";
 import { refreshAfterWrite } from "../../../hooks/refresh";
 import { noop, useEscape } from "../../../hooks/useEscape";
 import { useFocusTrap } from "../../../hooks/useFocusTrap";
@@ -9,15 +10,22 @@ import { Scrim } from "../../ui/Scrim";
 import { usePlanApply } from "../../../hooks/usePlanApply";
 import { useUndoToast } from "../../../hooks/useUndoToast";
 import { api } from "../../../lib/api";
-import { BATCH_SECTIONS, type LibraryApplyResult, type LibraryPlan, type LibraryPlanItem } from "../../../lib/library";
-import { activeItems, inScope, libraryPlanBody, outOfScopeActive } from "../../../lib/library-review";
+import { BATCH_SECTIONS, catchUpCounts, enabledChoice, type LibraryApplyResult, type LibraryPlan, type LibraryPlanItem } from "../../../lib/library";
+import { activeItems, inScope, libraryPlanBody, outOfScopeActive, preselectItems } from "../../../lib/library-review";
 import { useNav, type LibraryRequest } from "../../providers/NavProvider";
 import { ApplyOutcome } from "./ApplyOutcome";
 import { PlanItem } from "./PlanItem";
 
 export type PlanRequest = LibraryRequest;
 
-function sectionsOf(request: PlanRequest, items: LibraryPlanItem[]) {
+/** Long lists (补齐接入 can be 100+ items) show the first few until asked. */
+const SECTION_PREVIEW = 8;
+
+function sectionsOf(request: PlanRequest, items: LibraryPlanItem[], agentName: (id: string) => string) {
+  if (request.action === "catch-up") {
+    const agents = [...new Set(items.map((item) => item.agentId || ""))];
+    return agents.map((agentId) => ({ title: agentId ? agentName(agentId) : "其他", items: items.filter((item) => (item.agentId || "") === agentId) }));
+  }
   if (request.action !== "batch") return [{ title: "", items }];
   const known = BATCH_SECTIONS.map((section) => ({ title: section.title, items: items.filter((item) => section.kinds.includes(item.kind)) }));
   const leftover = items.filter((item) => !BATCH_SECTIONS.some((section) => section.kinds.includes(item.kind)));
@@ -25,7 +33,43 @@ function sectionsOf(request: PlanRequest, items: LibraryPlanItem[]) {
 }
 
 /** Library plan → review (checkboxes, conflict choices, exact steps) → confirm → result. */
+function PlanSection({
+  title,
+  items,
+  disabled,
+  onChoose,
+  compact,
+}: {
+  title: string;
+  items: LibraryPlanItem[];
+  disabled: boolean;
+  onChoose: (item: LibraryPlanItem, choice: string) => void;
+  compact: boolean;
+}) {
+  const [all, setAll] = useState(false);
+  // One line per item only for plain links / copies (an Agent's 补齐接入 list).
+  const rowsOnly = compact && items.every((item) => item.kind === "link" || item.kind === "copy");
+  const shown = all ? items : items.slice(0, rowsOnly ? SECTION_PREVIEW * 2 : SECTION_PREVIEW);
+  const rows = shown.map((item) => <PlanItem key={item.id} item={item} onChoose={onChoose} disabled={disabled} compact={rowsOnly} />);
+  return (
+    <section className="plan-section">
+      {title ? (
+        <h3>
+          {title} <em>{items.length}</em>
+        </h3>
+      ) : null}
+      {rowsOnly ? <div className="plan-rows">{rows}</div> : rows}
+      {items.length > shown.length ? (
+        <button type="button" className="btn sm ghost" onClick={() => setAll(true)}>
+          显示全部 {items.length} 项
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
 export function PlanReview({ request, onClose, onWiden }: { request: PlanRequest; onClose: () => void; onWiden: () => void }) {
+  const { agentName } = useData();
   const undoToast = useUndoToast();
   const { setRestoreHistoryId } = useNav();
   const ref = useFocusTrap<HTMLDivElement>();
@@ -35,23 +79,32 @@ export function PlanReview({ request, onClose, onWiden }: { request: PlanRequest
   const [lastItems, setLastItems] = useState<LibraryPlanItem[]>([]);
   const body = libraryPlanBody(request, choices, lastItems);
   const scope = request.scope;
+  const catchUp = request.action === "catch-up";
 
   const flow = usePlanApply<LibraryPlan, LibraryApplyResult>({
     requestKey: JSON.stringify(body),
-    makePlan: () => api.libraryPlan(body),
+    makePlan: () => (catchUp ? api.libraryCatchUpPlan({ agents: request.agents, choices }) : api.libraryPlan(body)),
     onPlanned: (plan) => {
       setLastItems(plan.items);
-      // A scoped review asks again with every other active item skipped.
+      // A scoped review asks again with every other active item skipped…
       const extra = scope ? outOfScopeActive(plan.items, scope).filter((item) => item.choices.includes("skip")) : [];
-      if (extra.length) setChoices((current) => ({ ...current, ...Object.fromEntries(extra.map((item) => [item.id, "skip"])) }));
+      // …and, when the user already said yes (Hermes consent), with its own items ticked.
+      const ticked = preselectItems(plan.items, scope, choices);
+      if (extra.length || ticked.length)
+        setChoices((current) => ({
+          ...current,
+          ...Object.fromEntries(extra.map((item) => [item.id, "skip"])),
+          ...Object.fromEntries(ticked.map((item) => [item.id, enabledChoice(item)])),
+        }));
     },
     planIdOf: (plan) => (scope && outOfScopeActive(plan.items, scope).length ? null : plan.planId),
     expiresAtOf: (plan) => plan.expiresAt,
-    apply: (planId) => api.libraryApply(planId),
+    apply: (planId) => (catchUp ? api.libraryCatchUpApply(planId) : api.libraryApply(planId)),
     onApplied: (outcome) => {
       const applied = outcome.results.filter((item) => item.status === "applied").length;
       const failed = outcome.results.length - applied;
-      const message = failed ? `完成 ${applied} 项，${failed} 项没有成功，已自动撤回` : "技能库已整理";
+      const done = scope?.select ? `已完成：${request.title}` : catchUp ? `已补齐接入 ${applied} 项` : "技能库已整理";
+      const message = failed ? `完成 ${applied} 项，${failed} 项没有成功，已自动撤回` : done;
       undoToast(message, applied ? outcome.historyId : null, failed ? "error" : "default");
     },
     refresh: refreshAfterWrite,
@@ -78,7 +131,7 @@ export function PlanReview({ request, onClose, onWiden }: { request: PlanRequest
 
   return (
     <Scrim onDismiss={onClose} busy={flow.applying}>
-      <div className="sheet wide" role="dialog" aria-modal="true" aria-labelledby="plan-title" aria-busy={flow.planning || flow.applying} ref={ref} tabIndex={-1}>
+      <div className="sheet wide plan-sheet" role="dialog" aria-modal="true" aria-labelledby="plan-title" aria-busy={flow.planning || flow.applying} ref={ref} tabIndex={-1}>
         <h2 id="plan-title">{request.title}</h2>
         {flow.result ? (
           <div role="status" aria-live="polite">
@@ -89,8 +142,17 @@ export function PlanReview({ request, onClose, onWiden }: { request: PlanRequest
           </div>
         ) : (
           <>
-            <p>下面是将要执行的全部步骤。勾选要处理的项目，冲突默认“先不处理”。每一项都会先备份，失败时自动撤回；执行后会重新检查各 Agent 能否看到这些技能。</p>
-            {scope ? (
+            {scope?.select ? (
+              <p>它通过配置里的额外目录读取技能库。下面是要改的内容：改之前会备份，失败时自动撤回，完成后可以撤销。</p>
+            ) : catchUp ? (
+              <p>
+                开启自动接入之前就有的缺口，这里一次补齐：给每个 Agent 接入它还看不到的库里技能。它们自己另有副本的不动，留给「一键整理」。每一项失败都会自动撤回，完成后可以撤销。
+              </p>
+            ) : (
+              <p>下面是将要执行的全部步骤。勾选要处理的项目，冲突默认“先不处理”。每一项都会先备份，失败时自动撤回；执行后会重新检查各 Agent 能否看到这些技能。</p>
+            )}
+            {catchUp && !scope && plan ? <CatchUpSummary items={activeItems(plan.items)} agentName={agentName} /> : null}
+            {scope && !scope.select ? (
               <p className="inline-note">
                 只处理「{scope.label}」{hidden ? `；其他 ${hidden} 项这次不处理` : ""}。
                 <button type="button" className="link-btn" onClick={onWiden} disabled={flow.applying}>
@@ -102,17 +164,15 @@ export function PlanReview({ request, onClose, onWiden }: { request: PlanRequest
             {flow.planning && !plan ? <p className="muted">正在生成计划…</p> : null}
             {plan && !items.length ? <p className="empty-line">没有需要整理的内容。</p> : null}
             <div className={flow.planning ? "stale" : ""}>
-              {sectionsOf(request, items).map((section) => (
-                <section key={section.title || "items"} className="plan-section">
-                  {section.title ? (
-                    <h3>
-                      {section.title} <em>{section.items.length}</em>
-                    </h3>
-                  ) : null}
-                  {section.items.map((item) => (
-                    <PlanItem key={item.id} item={item} onChoose={choose} disabled={flow.planning || flow.applying} />
-                  ))}
-                </section>
+              {sectionsOf(request, items, agentName).map((section) => (
+                <PlanSection
+                  key={section.title || "items"}
+                  title={section.title}
+                  items={section.items}
+                  onChoose={choose}
+                  disabled={flow.planning || flow.applying}
+                  compact={catchUp && !scope}
+                />
               ))}
             </div>
           </>
@@ -139,7 +199,7 @@ export function PlanReview({ request, onClose, onWiden }: { request: PlanRequest
                   if (historyId) setRestoreHistoryId(historyId);
                 }}
               >
-                撤销这次整理
+                {catchUp ? "撤销这次接入" : "撤销这次整理"}
               </button>
             ) : null}
             {!flow.result && (flow.planError || flow.expired) ? (
@@ -156,5 +216,22 @@ export function PlanReview({ request, onClose, onWiden }: { request: PlanRequest
         </div>
       </div>
     </Scrim>
+  );
+}
+
+/** "将接入：Claude Code 1 个 · WorkBuddy 20 个" for a 补齐接入 plan. */
+function CatchUpSummary({ items, agentName }: { items: LibraryPlanItem[]; agentName: (id: string) => string }) {
+  const counts = catchUpCounts(items);
+  if (!counts.length) return null;
+  return (
+    <p className="catchup-sum" role="status">
+      将接入：
+      {counts.map((row, index) => (
+        <span key={row.agentId}>
+          {index ? " · " : ""}
+          {agentName(row.agentId)} <b>{row.count}</b> 个
+        </span>
+      ))}
+    </p>
   );
 }

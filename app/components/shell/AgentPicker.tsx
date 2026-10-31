@@ -1,15 +1,13 @@
 "use client";
 
-import { activitySummary, MAX_PRIMARY_AGENTS } from "../../lib/agents";
+import { activityLine, detectedHint, MAX_PRIMARY_AGENTS, noSkillsYet, pickableAgents } from "../../lib/agents";
 import type { ScanAgent } from "../../lib/types";
 import { useData } from "../providers/DataProvider";
 import { AgentAvatar } from "../ui/Avatar";
 
-/** Agents worth offering as "常用": installed with skills or recent activity, busiest first. */
+/** Agents worth offering as "常用": every installed one, busiest first (see lib/agents). */
 export function candidateAgents(agents: ScanAgent[], weight: (id: string) => number): ScanAgent[] {
-  return agents
-    .filter((agent) => agent.available && (agent.skillCount > 0 || weight(agent.id) > 0))
-    .sort((left, right) => weight(right.id) - weight(left.id) || right.skillCount - left.skillCount);
+  return pickableAgents(agents, weight);
 }
 
 export function AgentPicker({
@@ -25,7 +23,7 @@ export function AgentPicker({
   onLimit: (message: string) => void;
   disabled?: boolean;
 }) {
-  const { agents, activityById, scan } = useData();
+  const { agents, activityById, scan, usage } = useData();
   const suggested = new Set(scan.data?.suggestedPrimaryAgentIds || []);
   const list = candidateAgents(agents, (id) => activityById.get(id)?.weight30d || 0);
   const toggle = (id: string, checked: boolean) => {
@@ -43,22 +41,31 @@ export function AgentPicker({
     }
     onChange(selected.filter((item) => item !== id));
   };
+  if (!list.length) return <p className="muted small">还没有检测到已安装的 Agent。装好后到“概览”点“重新扫描”。</p>;
   return (
     <fieldset className="pick" disabled={disabled} aria-busy={disabled || undefined}>
       <legend className="sr-only">常用 Agent</legend>
       {list.map((agent) => {
         const on = selected.includes(agent.id);
-        const line = agent.refuseInstall ? "技能由它自己管理 · 只读" : activitySummary(activityById.get(agent.id));
+        const line = agent.refuseInstall
+          ? "技能由它自己管理 · 只读"
+          : activityLine(activityById.get(agent.id), usage.data?.agents.find((item) => item.agentId === agent.id) || null);
+        const empty = noSkillsYet(agent);
         return (
-          <label key={agent.id} className={on ? "on" : ""} title={`${agent.name} · ${line} · ${agent.skillCount} 个技能`}>
+          <label
+            key={agent.id}
+            className={on ? "on" : ""}
+            title={[agent.name, line, empty ? "还没有技能" : `${agent.skillCount} 个技能`, detectedHint(agent.detectedBy, 4)].filter(Boolean).join(" · ")}
+          >
             <AgentAvatar id={agent.id} size="md" />
             <span className="pick-text">
               <span className="pick-name">
                 <b>{agent.name}</b>
                 {suggested.has(agent.id) ? <span className="tag info pick-chip">推荐</span> : null}
+                {empty ? <span className="tag mute pick-chip">还没有技能</span> : null}
               </span>
               <span className="pick-line">{line}</span>
-              <span className="pick-line">{agent.skillCount} 个技能</span>
+              <span className="pick-line">{empty ? detectedHint(agent.detectedBy) || "还没有技能，也可以先选上" : `${agent.skillCount} 个技能`}</span>
             </span>
             <span className="pick-check">
               <input

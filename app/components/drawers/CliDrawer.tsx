@@ -83,7 +83,7 @@ export function CliDrawer({ id, onClose }: { id: string; onClose: () => void }) 
                   <span className="clamp-1">{agentName(entry.agentId)}</span>
                   <span className={`cstate ${entry.available === true ? "ok" : entry.available === false ? "bad" : "na"}`}>
                     <i aria-hidden="true" />
-                    {entry.available === true ? "找得到" : entry.available === false ? "找不到" : "不确定"}
+                    {entry.available === true ? "找得到" : entry.available === false ? "找不到" : "无法判断"}
                   </span>
                   <span className="muted small">{entry.allowed === true ? "已放行" : entry.allowed === false ? "没有放行规则，每次运行都要先问你" : ""}</span>
                 </li>

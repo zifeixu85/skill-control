@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { markInstalled } from "./fixtures/agents.mjs";
 import { createSmartOrderFixture } from "./fixtures/smartorder.mjs";
 
 const PROJECT_DIRECTORY = path.resolve(
@@ -69,6 +70,7 @@ async function stopChild(child) {
 
 test("synchronizes, backs up, exports, and reinstalls a skill through the local API", async (context) => {
   const temporaryHome = await mkdtemp(path.join(tmpdir(), "skill-control-e2e-"));
+  await markInstalled(temporaryHome, "codex", "claude", "workbuddy");
   const smartOrderFixture = await createSmartOrderFixture(temporaryHome);
   const codexRoot = path.join(temporaryHome, ".codex", "skills");
   const claudeRoot = path.join(temporaryHome, ".claude", "skills");

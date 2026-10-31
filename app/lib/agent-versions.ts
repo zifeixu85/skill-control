@@ -31,6 +31,10 @@ export interface AgentVersionsReport {
   checkedAt: string | null;
   nextCheckAt: string | null;
   offline: boolean;
+  /** v0.3: the service is checking right now (e.g. just after start); the page polls until done. */
+  checking: boolean;
+  /** v0.3: automatic checks: on, off (设置), or waiting until the user has seen the 联网 notice. */
+  autoCheck: "on" | "off" | "waiting-notice" | null;
   agents: AgentVersion[];
 }
 
@@ -66,8 +70,8 @@ const SOURCE_LABELS: Record<string, string> = {
   website: "官网",
   "app-bundle": "应用信息",
   bundle: "应用信息",
-  cli: "命令行 --version",
-  binary: "命令行 --version",
+  cli: "从安装目录识别",
+  binary: "从安装目录识别",
   "package-json": "安装目录",
 };
 
@@ -121,9 +125,14 @@ export function normalizeAgentVersions(raw: unknown): AgentVersionsReport {
     checkedAt: asOptionalString(record.checkedAt),
     nextCheckAt: asOptionalString(record.nextCheckAt),
     offline: record.offline === true,
+    checking: record.checking === true,
+    autoCheck: record.autoCheck === "on" || record.autoCheck === "off" || record.autoCheck === "waiting-notice" ? record.autoCheck : null,
     agents,
   };
 }
+
+/** Poll only while the service says a check is running. */
+export const shouldPollVersions = (report: AgentVersionsReport | null | undefined): boolean => Boolean(report && !report.offline && report.checking);
 
 /** For the sidebar badge and the home hint. */
 export function agentsWithUpdates(report: AgentVersionsReport | undefined | null, among?: readonly string[]): AgentVersion[] {

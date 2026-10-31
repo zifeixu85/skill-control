@@ -41,7 +41,7 @@ test("agent versions: tolerant parsing, needs-attention first, unknown statuses 
   assert.equal(codex.remedy.commands[0].command, "npm i -g @openai/codex@latest");
   assert.equal(report.agents.find((agent) => agent.agentId === "hermes").name, "hermes", "name falls back to the id");
   assert.equal(report.agents.find((agent) => agent.agentId === "hermes").installed, null);
-  assert.deepEqual(versions.normalizeAgentVersions(null), { checkedAt: null, nextCheckAt: null, offline: false, agents: [] });
+  assert.deepEqual(versions.normalizeAgentVersions(null), { checkedAt: null, nextCheckAt: null, offline: false, checking: false, autoCheck: null, agents: [] });
 });
 
 test("agent versions: badge counts update-available agents; the home hint only primary ones", () => {

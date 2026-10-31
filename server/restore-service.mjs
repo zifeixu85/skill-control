@@ -6,6 +6,7 @@ import { compactHomePath, homeVariants, isStrictlyWithin } from "./fs-safe.mjs";
 import { assertSafeWrite } from "./home-guard.mjs";
 import { fingerprint, isReversible, LibraryError, recordOp, reverseOp, runOps } from "./library-ops.mjs";
 import { createPlanStore } from "./plan-store.mjs";
+import { withStateLock } from "./state-lock.mjs";
 import { listTrash, readTrashManifest, restoreTrash, trashOps } from "./trash.mjs";
 
 /**
@@ -19,7 +20,12 @@ export const RESTORE_PLAN_TTL_MS = 10 * 60_000;
 const HISTORY_LIMIT = 500;
 const timestamp = (now) => new Date(now).toISOString().replace(/[:.]/gu, "-");
 
-export function createRestoreService({ homeDirectory, homes, stateDirectory, backupDirectory, historyFile, getScan, getAgents, materialize, now = () => Date.now() }) {
+/**
+ * `onLinksChanged({ connected, removed })` (optional) hears about links that a restore or an
+ * uninstall removed or recreated, so auto-link writes tombstones / clears them.
+ * `readOnly` refuses every write (the CLI's --read-only mode). Applies hold the library lock.
+ */
+export function createRestoreService({ homeDirectory, homes, stateDirectory, backupDirectory, historyFile, getScan, getAgents, materialize, now = () => Date.now(), onLinksChanged = null, readOnly = false }) {
   const plans = createPlanStore({ ttlMs: RESTORE_PLAN_TTL_MS, now });
   let allHomes = homes;
   const homesReady = homeVariants(homeDirectory).then((variants) => {
@@ -60,6 +66,8 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
       skill: entry.skillName || entry.title || entry.unitKey || null,
       agents: actions ? [...new Set(actions.map((item) => item.agentId))] : entry.agentId ? [entry.agentId] : entry.targets || [],
       mode: entry.mode || actions?.[0]?.mode || null,
+      // Library runs: which operation (auto-link, catch-up, install, link …) and who ran it (app, cli, auto).
+      ...(entry.type === "library" ? { operation: entry.action || null, origin: entry.origin || null } : {}),
     };
     if (entry.type === "uninstall" || entry.trashId) {
       const inTrash = await readTrashManifest(stateDirectory, entry.trashId).then(() => true, () => false);
@@ -167,6 +175,20 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
 
   const publicUnit = (unit) => ({ id: unit.id, title: unit.title, selected: Boolean(unit.selected), ...(unit.conflict ? { conflict: unit.conflict } : {}), ...(unit.unrestorable ? { unrestorable: unit.unrestorable } : {}), steps: unit.steps });
 
+  /** Links a restore undid (connect items → removed) or brought back (unlink items → connected). */
+  function linkChanges(entry, done) {
+    const changes = { connected: [], removed: [] };
+    if (entry.type !== "library" || !Array.isArray(entry.items)) return changes;
+    for (const unit of done) {
+      const item = entry.items.find((candidate) => candidate.id === unit.id);
+      if (!item?.skill || !Array.isArray(item.agents)) continue;
+      const pairs = item.agents.map((agentId) => ({ agentId, skill: item.skill }));
+      if (item.kind === "unlink") changes.connected.push(...pairs);
+      else if (["link", "copy", "dedupe", "conflict", "adopt"].includes(item.kind) || entry.action === "auto-link") changes.removed.push(...pairs);
+    }
+    return changes;
+  }
+
   async function applyOpRestore(stored) {
     const done = [];
     for (const unit of stored.units) {
@@ -193,6 +215,7 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
       createdAt: new Date(now()).toISOString(),
     };
     await appendHistory(record);
+    await onLinksChanged?.(linkChanges(stored.entry, done));
     return { planId: stored.planId, restoredUnits: done.map((unit) => ({ id: unit.id, title: unit.title })), historyEntry: record };
   }
 
@@ -253,7 +276,12 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
   async function applyRestore({ planId, confirm }) {
     await homesReady;
     if (confirm !== true) throw new LibraryError(400, "需要明确确认后才能恢复。", "confirm-required");
+    if (readOnly) throw new LibraryError(409, "只读模式下不做恢复。", "read-only");
     const stored = takePlan(planId, "restore");
+    return withStateLock(stateDirectory, () => applyStoredRestore(stored), { label: "Skill Control 恢复" });
+  }
+
+  async function applyStoredRestore(stored) {
     if (stored.units) return applyOpRestore(stored);
     if (stored.trashId) {
       const result = await restoreTrash({ trashId: stored.trashId, stateDirectory, homeDirectory, allowedRoots: await allowedRoots(), display, stamp: timestamp(now()) });
@@ -324,7 +352,7 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
     const name = path.basename(target);
     const trashId = `${timestamp(now())}-${agentId}-${name}`.replace(/[^\w.@-]/gu, "_");
     const ops = trashOps({ stateDirectory, trashId, name, target, kind: isLink ? "link" : "real", linkTarget: isLink ? await readlink(target) : null, source: "uninstall", agentId, removedAt: new Date(now()).toISOString() });
-    const planId = remember({ kind: "uninstall", ops, trashId, skillName: skill.name, agentId, isLink });
+    const planId = remember({ kind: "uninstall", ops, trashId, skillName: skill.name, agentId, isLink, linkName: name });
     return {
       planId,
       skillId,
@@ -340,11 +368,16 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
   async function applyUninstall({ planId, confirm }) {
     await homesReady;
     if (confirm !== true) throw new LibraryError(400, "需要明确确认后才能卸载。", "confirm-required");
+    if (readOnly) throw new LibraryError(409, "只读模式下不卸载。", "read-only");
     const stored = takePlan(planId, "uninstall");
-    await runOps(stored.ops, { homeDirectory, display, backupGroup: path.join(backupDirectory, `${timestamp(now())}-uninstall`) });
-    const record = { id: createHash("sha1").update(`${now()}:uninstall:${stored.trashId}`).digest("hex").slice(0, 12), type: "uninstall", skillName: stored.skillName, agentId: stored.agentId, trashId: stored.trashId, kind: stored.isLink ? "link" : "real", createdAt: new Date(now()).toISOString() };
-    await appendHistory(record);
-    return { planId: stored.planId, trashId: stored.trashId, historyEntry: record };
+    return withStateLock(stateDirectory, async () => {
+      await runOps(stored.ops, { homeDirectory, display, backupGroup: path.join(backupDirectory, `${timestamp(now())}-uninstall`) });
+      const record = { id: createHash("sha1").update(`${now()}:uninstall:${stored.trashId}`).digest("hex").slice(0, 12), type: "uninstall", skillName: stored.skillName, agentId: stored.agentId, trashId: stored.trashId, kind: stored.isLink ? "link" : "real", createdAt: new Date(now()).toISOString() };
+      await appendHistory(record);
+      // Removing a link by hand is "取消接入": auto-link must not bring it back.
+      if (stored.isLink) await onLinksChanged?.({ connected: [], removed: [{ agentId: stored.agentId, skill: stored.linkName }] });
+      return { planId: stored.planId, trashId: stored.trashId, historyEntry: record };
+    }, { label: "Skill Control 卸载" });
   }
 
   async function trashRestore({ trashId }) {

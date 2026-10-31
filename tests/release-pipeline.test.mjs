@@ -106,11 +106,72 @@ test("the release workflow uploads update metadata, merges macOS manifests and p
   assert.ok(ci.jobs.quality.steps.some((step) => /electron-builder .*--publish never/u.test(step.run || "")));
 });
 
+test("signing secrets reach the macOS build only; the signature and certificate are verified", async () => {
+  const text = await read(".github/workflows/release.yml");
+  const workflow = yaml.load(text);
+  assert.equal(workflow.env.MAC_SIGN_REQUIRED, "${{ vars.MAC_SIGN_REQUIRED || 'false' }}", "turned on with a repository variable");
+  assert.equal(workflow.env.MAC_SIGN_CERT_SHA1, "${{ vars.MAC_SIGN_CERT_SHA1 }}");
+  const steps = workflow.jobs.build.steps;
+  const withSecrets = steps.filter((step) => JSON.stringify(step).includes("secrets."));
+  assert.deepEqual(withSecrets.map((step) => step.name), ["Build desktop artifacts (macOS)"]);
+  assert.equal(withSecrets[0].if, "runner.os == 'macOS'");
+  assert.deepEqual(Object.keys(withSecrets[0].env).sort(), ["CSC_IDENTITY_AUTO_DISCOVERY", "MAC_SIGN_P12_BASE64", "MAC_SIGN_P12_PASSWORD"]);
+  assert.equal(steps.find((step) => step.name === "Build desktop artifacts").if, "runner.os != 'macOS'");
+  const verify = steps.find((step) => step.name === "Verify macOS code signature");
+  assert.match(verify.run, /node scripts\/sign-mac\.mjs verify "\$\{apps\[@\]\}"/u);
+  assert.match(verify.run, /ditto -x -k "\$zip"/u, "the copy inside the zip is checked too");
+  for (const [name, job] of Object.entries(workflow.jobs)) {
+    if (name === "build") continue;
+    assert.doesNotMatch(JSON.stringify(job), /secrets\.MAC_SIGN/u, `${name} never sees the signing secrets`);
+  }
+});
+
+test("the release adds version-less copies for fixed download links", async () => {
+  const workflow = yaml.load(await read(".github/workflows/release.yml"));
+  const steps = workflow.jobs.publish.steps.map((step) => step.name);
+  assert.ok(steps.indexOf("Add version-less download names") < steps.indexOf("Generate SHA-256 checksums"), "copies get checksums too");
+  const run = workflow.jobs.publish.steps.find((step) => step.name === "Add version-less download names").run;
+  for (const name of ["Skill-Control-mac-arm64.dmg", "Skill-Control-mac-x64.dmg", "Skill-Control-win-x64-setup.exe", "Skill-Control-linux-x86_64.AppImage"]) {
+    assert.match(run, new RegExp(`\\$\\{version\\}-[\\w.-]+ ${name.replace(/\./gu, "\\.")}$`, "mu"), name);
+  }
+  assert.match(run, /test -f "\$\{source\}"/u, "a missing artifact fails the release");
+});
+
+test("the manual signing check builds, signs and compares designated requirements", async () => {
+  const workflow = yaml.load(await read(".github/workflows/mac-sign-check.yml"));
+  assert.deepEqual(Object.keys(workflow.on), ["workflow_dispatch", "push"]);
+  assert.deepEqual(workflow.on.push, { branches: ["sign-check/**"] }, "runnable before the file reaches the default branch");
+  assert.deepEqual(workflow.permissions, { contents: "read" });
+  const job = workflow.jobs["mac-sign-check"];
+  assert.equal(job.env.MAC_SIGN_REQUIRED, "true");
+  const run = job.steps.map((step) => step.run || "").join("\n");
+  assert.match(run, /electron-builder --mac --arm64 --dir --publish never/u);
+  assert.match(run, /sign-mac\.mjs verify/u);
+  assert.match(run, /sign-mac\.mjs compare/u);
+  for (const step of job.steps) {
+    if (step.uses) assert.match(step.uses, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/u);
+  }
+  const withSecrets = job.steps.filter((step) => JSON.stringify(step).includes("secrets."));
+  assert.deepEqual(
+    withSecrets.map((step) => step.name),
+    ["Build and sign the arm64 app", "Verify, re-sign a changed copy and compare"],
+    "only the signing steps get the certificate",
+  );
+  assert.doesNotMatch(JSON.stringify(job.env), /secrets\./u);
+});
+
 test("electron-builder writes GitHub update metadata while every build script stays --publish never", async () => {
   const config = yaml.load(await read("electron-builder.yml"));
   assert.deepEqual(config.publish, [{ provider: "github", owner: "zifeixu85", repo: "skill-control" }]);
   assert.equal(config.appId, "dev.skillcontrol.desktop");
   assert.match(config.artifactName, /\$\{os\}-\$\{arch\}/u, "the mac updater picks zips by -mac-<arch>.zip");
+  assert.equal(config.mac.identity, null, "electron-builder signs nothing itself");
+  assert.equal(config.afterPack, "./scripts/sign-mac.mjs", "the hook signs every macOS package");
+  assert.equal(config.dmg.background, "dmg-background.png");
+  for (const [name, width] of [["dmg-background.png", 560], ["dmg-background@2x.png", 1120]]) {
+    const png = await readFile(path.join(ROOT, "resources", name));
+    assert.equal(png.readUInt32BE(16), width, `${name} width (dmg-builder pairs it with the @2x copy)`);
+  }
   const pkg = JSON.parse(await read("package.json"));
   for (const [name, script] of Object.entries(pkg.scripts)) {
     if (/electron-builder(?! --dir)/u.test(script) && !script.includes("--dir")) {

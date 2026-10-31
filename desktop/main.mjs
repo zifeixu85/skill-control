@@ -1,8 +1,10 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildMenuTemplate } from "./app-menu.mjs";
 import { createAppUpdater } from "./app-updater.mjs";
 import { copyTextAllowed } from "./copy-text.mjs";
 import { isOwnTopFrame } from "./ipc-guard.mjs";
+import { proxyConfigFromEnv } from "./network-proxy.mjs";
 import {
   app,
   BrowserWindow,
@@ -10,6 +12,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  nativeTheme,
   net,
   session,
   shell,
@@ -30,6 +33,11 @@ const PRODUCTION_WEB_PORT = readPort(
   0,
 );
 const APP_UPDATE_STATE_CHANNEL = "desktop:app-update-state";
+const NAVIGATE_CHANNEL = "desktop:navigate";
+const STARTUP_PAGE = path.join(DESKTOP_DIRECTORY, "startup.html");
+// The local service's network checks (Agent versions, skill and plugin updates) go through
+// Chromium's network stack too, so the system proxy applies (server/local-server.mjs startServer).
+const serverFetch = (input, init) => net.fetch(input, init);
 
 let mainWindow = null;
 let managerServer = null;
@@ -133,6 +141,13 @@ async function startManagerService(origin) {
 
   process.env.SKILL_MANAGER_HOST = MANAGER_HOST;
   process.env.SKILL_MANAGER_ORIGINS = origin;
+  // How the `skill-control` launcher starts this app's own Node (server/cli-launcher.mjs):
+  // the executable, app.asar, and the bundle id it looks the app up by after a move or update.
+  process.env.SKILL_CONTROL_APP_EXECUTABLE = app.getPath("exe");
+  process.env.SKILL_CONTROL_APP_PATH = app.getAppPath();
+  process.env.SKILL_CONTROL_APP_PACKAGED = app.isPackaged ? "1" : "0";
+  process.env.SKILL_CONTROL_BUNDLE_ID = "dev.skillcontrol.desktop";
+  if (process.env.APPIMAGE) process.env.SKILL_CONTROL_APPIMAGE = process.env.APPIMAGE;
 
   const { startServer } = await import("../server/local-server.mjs");
   const preferredPort =
@@ -140,6 +155,7 @@ async function startManagerService(origin) {
   managerServer = startServer({
     host: MANAGER_HOST,
     port: preferredPort,
+    fetchImpl: serverFetch,
   });
   try {
     await waitForServer(managerServer);
@@ -147,7 +163,7 @@ async function startManagerService(origin) {
     if (preferredPort !== DEFAULT_MANAGER_PORT || error?.code !== "EADDRINUSE") {
       throw error;
     }
-    managerServer = startServer({ host: MANAGER_HOST, port: 0 });
+    managerServer = startServer({ host: MANAGER_HOST, port: 0, fetchImpl: serverFetch });
     await waitForServer(managerServer);
   }
   const address = managerServer.address();
@@ -246,6 +262,35 @@ function installSessionSecurity(developmentMode) {
   }
 }
 
+/**
+ * HTTPS_PROXY / HTTP_PROXY / ALL_PROXY / NO_PROXY, when set, override the system proxy for the
+ * app's network checks (desktop/network-proxy.mjs); otherwise the system settings apply.
+ */
+async function applyProxyFromEnvironment() {
+  const config = proxyConfigFromEnv(process.env);
+  if (!config) return;
+  const { hasCredentials, ...proxy } = config;
+  try {
+    await session.defaultSession.setProxy(proxy);
+    console.info(`[desktop] 联网检查使用环境变量中的代理：${proxy.proxyRules}`);
+    if (hasCredentials) console.warn("[desktop] 代理地址里的用户名和密码不会被使用。");
+  } catch (error) {
+    console.warn(`[desktop] 无法使用环境变量中的代理：${error?.message || error}`);
+  }
+}
+
+/**
+ * config `network` ({ updateChecks, noticeSeenAt, envOffline }) from the local service, for the
+ * automatic app update check; null when it cannot be read (the updater then decides safely).
+ */
+async function readNetworkSettings() {
+  if (!applicationOrigin) return null;
+  const response = await fetchWithTimeout(`${getManagerUrl()}/api/config`, { headers: { Origin: applicationOrigin } }, 3_000);
+  if (!response.ok) return null;
+  const config = await response.json().catch(() => null);
+  return config && typeof config.network === "object" ? config.network : null;
+}
+
 function getAppUpdater() {
   appUpdater ||= createAppUpdater({
     currentVersion: app.getVersion(),
@@ -258,6 +303,7 @@ function getAppUpdater() {
     resourcesPath: process.resourcesPath,
     openExternal: (url) => shell.openExternal(url),
     trashItem: (target) => shell.trashItem(target),
+    readNetworkSettings,
     quit: () => app.quit(),
     emit: (state) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -268,8 +314,8 @@ function getAppUpdater() {
   return appUpdater;
 }
 
-/** App-update calls take no arguments and only come from our own window's top frame. */
-function appUpdateRequestAllowed(event, args) {
+/** Argument-less privileged calls (app updates, the folder dialog) only come from our own window's top frame. */
+function ownWindowRequestAllowed(event, args) {
   return (
     args.length === 0 &&
     isOwnTopFrame(event, mainWindow) &&
@@ -283,10 +329,12 @@ function installAppUpdateHandlers() {
     "desktop:app-update-check": (updater) => updater.check(),
     "desktop:app-update-download": (updater) => updater.download(),
     "desktop:app-update-install": (updater) => updater.install(),
+    "desktop:app-update-open-app-management": (updater) => updater.openAppManagement(),
+    "desktop:app-update-open-download-page": (updater) => updater.openDownloadPage(),
   };
   for (const [channel, run] of Object.entries(actions)) {
     ipcMain.handle(channel, async (event, ...args) => {
-      if (!appUpdateRequestAllowed(event, args)) {
+      if (!ownWindowRequestAllowed(event, args)) {
         return {
           status: "error",
           current: app.getVersion(),
@@ -336,62 +384,36 @@ function installIpcHandlers() {
     clipboard.writeText(text);
     return true;
   });
+
+  // 导入技能 → 选择文件夹. Only the path the user picked goes back to the page.
+  ipcMain.handle("desktop:pick-folder", async (event, ...args) => {
+    if (!ownWindowRequestAllowed(event, args)) return null;
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: "选择技能文件夹",
+      buttonLabel: "导入",
+      properties: ["openDirectory"],
+    });
+    return result.canceled ? null : result.filePaths[0] || null;
+  });
+}
+
+/** 设置… (⌘,): shows the window and asks the renderer to open 设置 (preload onNavigate). */
+function openSettings() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+  mainWindow.webContents.send(NAVIGATE_CHANNEL, { page: "settings" });
 }
 
 function createApplicationMenu(developmentMode) {
-  const template = [
-    ...(process.platform === "darwin"
-      ? [
-          {
-            label: app.name,
-            submenu: [
-              { role: "about", label: `关于 ${app.name}` },
-              { type: "separator" },
-              { role: "hide", label: "隐藏" },
-              { role: "hideOthers", label: "隐藏其他应用" },
-              { role: "unhide", label: "全部显示" },
-              { type: "separator" },
-              { role: "quit", label: `退出 ${app.name}` },
-            ],
-          },
-        ]
-      : []),
-    {
-      label: "编辑",
-      submenu: [
-        { role: "undo", label: "撤销" },
-        { role: "redo", label: "重做" },
-        { type: "separator" },
-        { role: "cut", label: "剪切" },
-        { role: "copy", label: "复制" },
-        { role: "paste", label: "粘贴" },
-        { role: "selectAll", label: "全选" },
-      ],
-    },
-    {
-      label: "显示",
-      submenu: [
-        { role: "reload", label: "重新载入" },
-        { role: "togglefullscreen", label: "切换全屏" },
-        ...(developmentMode
-          ? [
-              { type: "separator" },
-              { role: "toggleDevTools", label: "开发者工具" },
-            ]
-          : []),
-      ],
-    },
-    {
-      label: "窗口",
-      submenu: [
-        { role: "minimize", label: "最小化" },
-        { role: "zoom", label: "缩放" },
-        ...(process.platform === "darwin"
-          ? [{ type: "separator" }, { role: "front", label: "前置全部窗口" }]
-          : [{ role: "close", label: "关闭" }]),
-      ],
-    },
-  ];
+  const template = buildMenuTemplate({
+    platform: process.platform,
+    appName: app.name,
+    developmentMode,
+    openSettings,
+    openExternal: (url) => void shell.openExternal(url),
+  });
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
@@ -409,14 +431,18 @@ function installSmokeTest(window) {
     finish(1, { ok: false, error: "桌面生产冒烟测试超时。" });
   }, 20_000);
 
-  window.webContents.once("did-fail-load", (_event, code, description) => {
+  // The window shows desktop/startup.html first: only the application page counts.
+  window.webContents.on("did-fail-load", (_event, code, description, validatedUrl, isMainFrame) => {
+    if (isMainFrame === false || !isTrustedApplicationUrl(validatedUrl)) return;
     clearTimeout(timeout);
     finish(1, {
       ok: false,
       error: `界面载入失败 (${code})：${description}`,
     });
   });
-  window.webContents.once("did-finish-load", async () => {
+  const onApplicationLoaded = async () => {
+    if (!isTrustedApplicationUrl(window.webContents.getURL())) return;
+    window.webContents.off("did-finish-load", onApplicationLoaded);
     try {
       const expectedApiBase = JSON.stringify(getManagerUrl());
       const imageProbeConfig = JSON.stringify({
@@ -512,7 +538,7 @@ function installSmokeTest(window) {
         })()
       `);
       clearTimeout(timeout);
-      finish(result.ok ? 0 : 1, result);
+      finish(result.ok ? 0 : 1, { ...result, startupPage: startupPageShown.has(window.id) });
     } catch (error) {
       clearTimeout(timeout);
       finish(1, {
@@ -520,18 +546,30 @@ function installSmokeTest(window) {
         error: error?.message || String(error),
       });
     }
-  });
+  };
+  window.webContents.on("did-finish-load", onApplicationLoaded);
 }
 
-function createWindow(url, developmentMode) {
+// Which windows showed desktop/startup.html (reported by the smoke test).
+const startupPageShown = new Set();
+// The service address each window's preload received (fixed when the window is created).
+const windowApiBase = new WeakMap();
+
+/**
+ * A window that shows desktop/startup.html ("正在启动本地服务…") right away; the app page is
+ * loaded into it once the services are ready (loadApplication).
+ */
+function createWindow(developmentMode, bounds = null) {
+  const apiBase = getManagerUrl();
   const window = new BrowserWindow({
     title: "Skill Control",
     width: 1440,
     height: 960,
+    ...(bounds || {}),
     minWidth: 1060,
     minHeight: 700,
     show: false,
-    backgroundColor: "#f3f1e8",
+    backgroundColor: nativeTheme.shouldUseDarkColors ? "#18191b" : "#fbfbf9",
     autoHideMenuBar: process.platform !== "darwin",
     webPreferences: {
       preload: path.join(DESKTOP_DIRECTORY, "preload.cjs"),
@@ -542,9 +580,7 @@ function createWindow(url, developmentMode) {
       allowRunningInsecureContent: false,
       spellcheck: true,
       devTools: developmentMode,
-      additionalArguments: [
-        `--skill-control-api-base=${getManagerUrl()}`,
-      ],
+      additionalArguments: [`--skill-control-api-base=${apiBase}`],
     },
   });
 
@@ -565,10 +601,34 @@ function createWindow(url, developmentMode) {
   window.on("closed", () => {
     if (mainWindow === window) mainWindow = null;
   });
+  window.webContents.once("did-finish-load", () => {
+    if (window.webContents.getURL().startsWith("file:")) startupPageShown.add(window.id);
+  });
 
+  windowApiBase.set(window, apiBase);
+  void window.loadFile(STARTUP_PAGE);
+  return window;
+}
+
+function loadApplication(window, url) {
   installSmokeTest(window);
   void window.loadURL(url.toString());
-  return window;
+}
+
+/**
+ * Loads the app into the startup window. The preload's service address is fixed per window,
+ * so when the manager had to move off the default port the window is replaced, keeping its bounds.
+ */
+function openApplicationWindow(url, developmentMode) {
+  let window = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  if (window && windowApiBase.get(window) !== getManagerUrl()) {
+    const previous = window;
+    window = createWindow(developmentMode, previous.getBounds());
+    mainWindow = window;
+    previous.destroy();
+  }
+  mainWindow = window || createWindow(developmentMode);
+  loadApplication(mainWindow, url);
 }
 
 function closeOwnedServers() {
@@ -583,6 +643,10 @@ async function bootstrap() {
   const developmentUrl = normalizeLocalUrl(
     process.env.SKILL_MANAGER_DESKTOP_DEV_URL,
   );
+  const developmentMode = Boolean(developmentUrl);
+  createApplicationMenu(developmentMode);
+  // Show a window at once ("正在启动本地服务…"), then load the app when the services are ready.
+  mainWindow = createWindow(developmentMode);
   const applicationUrl = developmentUrl || (await startProductionWebService());
   applicationOrigin = applicationUrl.origin;
 
@@ -591,10 +655,8 @@ async function bootstrap() {
   console.info("[desktop] 本地 Skills 服务已就绪。");
   await waitForPage(applicationUrl);
 
-  const developmentMode = Boolean(developmentUrl);
   installSessionSecurity(developmentMode);
-  createApplicationMenu(developmentMode);
-  mainWindow = createWindow(applicationUrl, developmentMode);
+  openApplicationWindow(applicationUrl, developmentMode);
   if (process.env.SKILL_CONTROL_SMOKE_TEST !== "1") {
     void getAppUpdater()
       .start()
@@ -624,10 +686,8 @@ if (!hasSingleInstanceLock) {
   });
   app.on("activate", () => {
     if (!quitting && !mainWindow && applicationOrigin) {
-      mainWindow = createWindow(
-        new URL(applicationOrigin),
-        Boolean(process.env.SKILL_MANAGER_DESKTOP_DEV_URL),
-      );
+      mainWindow = createWindow(Boolean(process.env.SKILL_MANAGER_DESKTOP_DEV_URL));
+      loadApplication(mainWindow, new URL(applicationOrigin));
     }
   });
   app.on("certificate-error", (event, _webContents, _url, _error, _certificate, callback) => {
@@ -640,6 +700,7 @@ if (!hasSingleInstanceLock) {
     .whenReady()
     .then(async () => {
       console.info("[desktop] Electron 已就绪。");
+      await applyProxyFromEnvironment();
       await bootstrap();
     })
     .catch((error) => {

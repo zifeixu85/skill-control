@@ -45,6 +45,8 @@ test("handles origin-less OPTIONS requests without stopping the service", async 
   const preflight = await fetch(`${baseUrl}/api/scan`, { method: "OPTIONS" });
   assert.equal(preflight.status, 204);
   assert.equal(preflight.headers.get("access-control-allow-origin"), null);
+  // The import chooser re-uploads with x-skill-root; the browser only sends headers listed here.
+  assert.match(preflight.headers.get("access-control-allow-headers") || "", /(^|,)x-skill-root(,|$)/u);
 
   const health = await fetch(`${baseUrl}/api/health`);
   assert.equal(health.status, 200);

@@ -6,6 +6,7 @@ import { takeSectionTarget } from "../../providers/NavProvider";
 export const SETTINGS_SECTIONS = [
   { id: "agents", label: "常用 Agent" },
   { id: "mode", label: "安装方式" },
+  { id: "integration", label: "Agent 集成" },
   { id: "theme", label: "外观" },
   { id: "privacy", label: "数据与隐私" },
   { id: "versions", label: "版本检查" },

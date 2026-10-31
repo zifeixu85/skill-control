@@ -1,14 +1,16 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useNow } from "../../../hooks/useNow";
 import { usePageMemory } from "../../../hooks/usePageMemory";
-import { invalidateResources, isUnsupported, primeResource, useResource } from "../../../hooks/useResource";
+import { usePolling } from "../../../hooks/usePolling";
+import { invalidateResources, isUnsupported, loadResource, primeResource, useResource } from "../../../hooks/useResource";
 import {
   AGENT_VERSION_LABELS,
   AGENT_VERSION_TONES,
   inAppHint,
   oneClickUpdate,
+  shouldPollVersions,
   versionSourceLabel,
   type AgentVersion,
   type AgentVersionsReport,
@@ -31,8 +33,11 @@ export const loadAgentVersions = () => api.agentVersions();
 
 /** "已检查 3 小时前 · 每天自动检查一次", or why nothing was checked. */
 export function checkedNote(report: AgentVersionsReport, now: number | null): string {
+  if (report.checking) return "正在检查新版本…";
   if (report.offline) return "离线模式：没有联网检查，只显示本机安装的版本";
   const last = report.checkedAt ? `${now ? formatRelative(report.checkedAt, now) : formatDateTime(report.checkedAt)}检查` : "还没有检查过";
+  if (report.autoCheck === "off") return `${last} · 自动检查已关闭，可以点“立即检查”`;
+  if (report.autoCheck === "waiting-notice") return `${last} · 看过联网说明后才会自动检查`;
   return `${last} · 每天自动检查一次`;
 }
 
@@ -192,6 +197,11 @@ export function AgentVersions() {
   const toast = useToast();
   const [checking, setChecking] = useState(false);
   const [showAll, setShowAll] = usePageMemory<boolean>("updates:agents-all", false);
+  // Every visit reads fresh: the service may have finished its startup check since.
+  useEffect(() => {
+    void loadResource(AGENT_VERSIONS_KEY, loadAgentVersions, true);
+  }, []);
+  usePolling(shouldPollVersions(report.data), () => void loadResource(AGENT_VERSIONS_KEY, loadAgentVersions, true), 2_000);
   if (isUnsupported(report.error)) return null;
   const check = async () => {
     setChecking(true);

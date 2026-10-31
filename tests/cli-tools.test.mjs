@@ -23,7 +23,7 @@ async function setup(context) {
       homes: [home],
       // Only the fixture's folders: never a real lark-cli on this machine.
       searchDirectories: [{ directory: path.join(home, ".local", "bin"), nvm: false }, { directory: nvmBin, nvm: true }],
-      agents: ["codex", "claude", "hermes", "gemini", "openclaw"],
+      agents: ["codex", "claude", "hermes", "gemini", "openclaw", "workbuddy"],
       library: await readLibrary({ config: { agents: libraryAgents(home), primaryAgentIds: ["codex", "claude"] }, homeDirectory: home, homes: [home], stateDirectory }),
       latest: { "lark-cli": "1.0.97" },
       launchctlPath: [],
@@ -55,8 +55,11 @@ test("lark-cli card: binaries, what each Agent resolves, workspace, keychain, al
   // Hermes' gateway PATH (from its launchd plist) finds its own bundled copy and switches workspace.
   assert.deepEqual(agent("hermes").resolves, { path: "~/.hermes/node/bin/lark-cli", version: "1.0.56" });
   assert.deepEqual([agent("hermes").workspace, agent("hermes").workspaceConfigured, agent("hermes").plist], ["hermes", false, "~/Library/LaunchAgents/ai.hermes.gateway.plist"]);
-  assert.equal(agent("gemini").pathSource, "终端（参考最新 shell snapshot）");
+  assert.equal(agent("gemini").pathSource, "终端（参考最新的终端环境记录）");
   assert.equal(agent("openclaw").resolves, null, "the GUI default PATH has no lark-cli");
+  assert.equal(agent("openclaw").status, "missing");
+  // WorkBuddy has no terminal record yet: its PATH is unknown, not missing the command.
+  assert.deepEqual([agent("workbuddy").status, agent("workbuddy").agentName, agent("workbuddy").note], ["unknown", "WorkBuddy", "还无法判断（这个 Agent 还没记录过终端环境）"]);
   const fixes = Object.fromEntries(fixesFor(lark, { homes: [home] }).map((fix) => [fix.id, fix]));
   assert.deepEqual(Object.keys(fixes).sort(), ["allow-rules", "hermes-path", "keychain-downgrade", "workspace-binding", "wrapper"]);
   assert.equal(fixes.wrapper.applicable, true);

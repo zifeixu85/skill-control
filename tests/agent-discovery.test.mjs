@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import * as fsPromises from "node:fs/promises";
 import { chmod, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -22,10 +23,11 @@ async function createDiscoveryHome(home) {
   await writeFixtureFile(home, ".dismissed/skills/d1/SKILL.md", skill("d1"));
   await writeFixtureFile(home, ".cache/skills/x/SKILL.md", skill("x"));
   await writeFixtureFile(home, ".empty/skills/README.md", "no skills");
-  // Application Support data folders.
+  // Application Support data folders (searched because CherryStudio.app is installed).
   await writeFixtureFile(home, "Library/Application Support/CherryStudio/Data/skills/s1/SKILL.md", skill("s1"));
   // An app with a ~/.<name> skills folder; an app only reached by a ~/.local/bin link.
   const apps = path.join(home, "Applications");
+  await writeFixtureFile(apps, "CherryStudio.app/Contents/Info.plist", plist("com.kangfenmao.CherryStudio", "1.5.0"));
   await writeFixtureFile(apps, "Qoder.app/Contents/Info.plist", plist("com.qoder.ide", "0.9.0"));
   await writeFixtureFile(home, ".qoder/skills/q1/SKILL.md", skill("q1"));
   await writeFixtureFile(apps, "Claude.app/Contents/Info.plist", plist("com.anthropic.claudefordesktop", "1.0.0"));
@@ -86,4 +88,36 @@ test("discovery respects its time budget", { skip: !POSIX }, async (context) => 
   let clock = 0;
   const result = await discoverAgents({ homeDirectory: home, known: { roots: [], ids: new Set(), apps: { names: new Set(), bundleIds: new Set() } }, budgetMs: 10, now: () => (clock += 100) });
   assert.equal(result.truncated, true);
+});
+
+test("discovery never opens Apple, system or privacy-protected folders, nor unrelated Application Support folders", { timeout: 30_000, skip: !POSIX }, async (context) => {
+  const home = await mkdtemp(path.join(tmpdir(), "discovery-protected-"));
+  context.after(() => rm(home, { recursive: true, force: true }));
+  const support = path.join(home, "Library", "Application Support");
+  const protectedNames = ["AddressBook", "CallHistoryDB", "CallHistoryTransactions", "Knowledge", "MobileSync", "FaceTime", "Animoji", "DifferentialPrivacy", "CloudDocs", "FileProvider", "iCloud", "Mail", "Messages", "Safari", "Calendars", "Reminders", "Photos", "com.apple.TCC", "com.apple.sharedfilelist"];
+  for (const name of [...protectedNames, "RandomVendor", "Example Agent", "dev.foo.app"]) {
+    await writeFixtureFile(support, `${name}/skills/s/SKILL.md`, skill("s"));
+  }
+  const apps = path.join(home, "Applications");
+  await writeFixtureFile(apps, "Foo.app/Contents/Info.plist", plist("dev.foo.app", "1.0.0"));
+  // Apple's Safari, and a third-party app named like a protected folder: neither opens it.
+  await writeFixtureFile(apps, "Safari.app/Contents/Info.plist", plist("com.apple.Safari", "19.0"));
+  await writeFixtureFile(apps, "Mail.app/Contents/Info.plist", plist("com.example.mail", "2.0"));
+  const touched = [];
+  const spy = (name) => async (target, ...rest) => {
+    touched.push([name, String(target)]);
+    return fsPromises[name](target, ...rest);
+  };
+  const fs = Object.fromEntries(["readdir", "lstat", "stat", "realpath", "readlink"].map((name) => [name, spy(name)]));
+  const result = await discoverAgents({
+    homeDirectory: home,
+    homes: [home],
+    known: { roots: [], ids: new Set(), apps: { names: new Set(), bundleIds: new Set() } },
+    applicationDirectories: [apps],
+    fs,
+  });
+  const inside = (name) => touched.filter(([, target]) => target === path.join(support, name) || target.startsWith(`${path.join(support, name)}${path.sep}`));
+  for (const name of [...protectedNames, "RandomVendor"]) assert.deepEqual(inside(name), [], `${name} was opened`);
+  assert.deepEqual(result.candidates.map((candidate) => candidate.path).sort(), ["~/Library/Application Support/Example Agent/skills", "~/Library/Application Support/dev.foo.app/skills"]);
+  assert.ok(touched.some(([name, target]) => name === "readdir" && target === support), "only the folder names are listed");
 });

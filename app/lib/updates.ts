@@ -128,7 +128,7 @@ export const STATUS_LABELS: Record<UpdateStatus, string> = {
   "update-available": "有新版本",
   "locally-modified": "本地改过",
   conflict: "两边都改过",
-  "managed-by-host": "由宿主管理",
+  "managed-by-host": "由安装它的产品负责更新",
   "unknown-source": "来源未知",
   "check-failed": "检查失败",
   unchecked: "未检查",

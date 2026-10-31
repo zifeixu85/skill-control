@@ -2,7 +2,8 @@
 
 import { isUnsupported, useResource } from "../../../hooks/useResource";
 import { api } from "../../../lib/api";
-import { KIND_LABELS, STATE_LABELS, TIER_LABELS, type LibraryAction } from "../../../lib/library";
+import { KIND_LABELS, STATE_LABELS, TIER_HINTS, TIER_LABELS, type LibraryAction } from "../../../lib/library";
+import { consentRequest } from "../../../lib/library-review";
 import type { SkillView } from "../../../lib/skill-model";
 import { useNav } from "../../providers/NavProvider";
 import { AgentAvatar } from "../../ui/Avatar";
@@ -23,9 +24,9 @@ export function LibraryActions({ view }: { view: SkillView }) {
       <h3>技能库</h3>
       {!entry ? (
         <div className="source-box">
-          <span className="source-label">还不在技能库里。收编后装一次，常用 Agent 都能用。</span>
-          <button type="button" className="btn sm" onClick={() => ask("adopt", `把 ${view.title} 收编进技能库`)}>
-            收编进技能库
+          <span className="source-label">还不在技能库里。放进 ~/.agents/skills 后，会自动读取技能库的 Agent 直接能看到，其他 Agent 再逐个接入。</span>
+          <button type="button" className="btn sm" onClick={() => ask("adopt", `把 ${view.title} 放进技能库`)}>
+            放进技能库
           </button>
         </div>
       ) : (
@@ -43,6 +44,9 @@ export function LibraryActions({ view }: { view: SkillView }) {
                 const fanout = entry.fanout[agent.agentId];
                 const state = fanout?.state || "none";
                 const linked = agent.tier === "link" && state === "visible";
+                const connectable = (agent.tier === "link" || agent.tier === "copy") && (state === "missing" || state === "private-copy");
+                // Hermes reads the library through one config change, asked for once on the 技能库 page.
+                const needsConsent = agent.tier === "config" && agent.primary && state === "missing";
                 return (
                   <div key={agent.agentId} className="lib-skill-agent">
                     <AgentAvatar id={agent.agentId} size="sm" />
@@ -51,14 +55,34 @@ export function LibraryActions({ view }: { view: SkillView }) {
                       {STATE_LABELS[state]}
                     </span>
                     <span className="lib-skill-acts">
-                      {agent.tier === "link" && (state === "missing" || state === "private-copy") ? (
-                        <button type="button" className="btn sm" onClick={() => ask("link", `把 ${view.title} 链接到 ${agent.name}`, agent.agentId)}>
-                          链接
+                      {connectable ? (
+                        <button
+                          type="button"
+                          className="btn sm"
+                          title={`${TIER_LABELS[agent.tier]}：${TIER_HINTS[agent.tier]}`}
+                          onClick={() => ask("link", `把 ${view.title} 接入 ${agent.name}`, agent.agentId)}
+                        >
+                          接入
+                        </button>
+                      ) : null}
+                      {needsConsent ? (
+                        <button
+                          type="button"
+                          className="btn sm"
+                          title={TIER_HINTS.config}
+                          onClick={() => setLibraryRequest(consentRequest(agent.agentId, agent.name))}
+                        >
+                          接入
                         </button>
                       ) : null}
                       {linked ? (
-                        <button type="button" className="btn sm ghost" onClick={() => ask("unlink", `取消 ${agent.name} 里 ${view.title} 的链接`, agent.agentId)}>
-                          取消链接
+                        <button
+                          type="button"
+                          className="btn sm ghost"
+                          title="自动接入以后不会再把它接回来"
+                          onClick={() => ask("unlink", `取消 ${agent.name} 对 ${view.title} 的接入`, agent.agentId)}
+                        >
+                          取消接入
                         </button>
                       ) : null}
                       {state === "visible" ? (

@@ -5,6 +5,7 @@ import test from "node:test";
 import yaml from "js-yaml";
 import * as macOps from "../desktop/app-update-mac.mjs";
 import {
+  automaticCheckState,
   backupNameFor,
   bundlePathFromExecutable,
   BUNDLE_ID,
@@ -447,4 +448,15 @@ test("spawnRelaunchHelper waits for this process, then opens the bundle with pos
 test("backupNameFor uses the bundle name, version and local time", () => {
   assert.equal(backupNameFor("Skill Control", "v0.1.0", new Date(2026, 0, 2, 3, 4, 5)), "Skill Control 0.1.0 (replaced 20260102-030405).app");
   assert.equal(backupNameFor("Skill Control", "weird", new Date(2026, 0, 2, 3, 4, 5)), "Skill Control old (replaced 20260102-030405).app");
+});
+
+test("automaticCheckState: the network settings gate automatic checks only", () => {
+  assert.equal(automaticCheckState({ updateChecks: true, noticeSeenAt: "2026-11-01T00:00:00.000Z" }), "on");
+  assert.equal(automaticCheckState({ updateChecks: true, noticeSeenAt: "before-0.3" }), "on", "configs from before 0.3");
+  assert.equal(automaticCheckState({ updateChecks: true, noticeSeenAt: null }), "waiting-notice");
+  assert.equal(automaticCheckState({ updateChecks: false, noticeSeenAt: "x" }), "off");
+  assert.equal(automaticCheckState({ updateChecks: true, noticeSeenAt: "x", envOffline: true }), "off");
+  assert.equal(automaticCheckState(null), "waiting-notice", "unreadable: a fresh install waits");
+  assert.equal(automaticCheckState(null, { hasHistory: true }), "on", "unreadable: an install that checked before keeps checking");
+  assert.equal(automaticCheckState([], { hasHistory: true }), "on");
 });

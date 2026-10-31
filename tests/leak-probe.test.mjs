@@ -26,6 +26,7 @@ import { createAgentFilesHome, createTranscriptsHome } from "./fixtures/insights
 import { createRaccoonHome } from "./fixtures/office-raccoon.mjs";
 import { createLarkCliHome, createLibraryHome } from "./fixtures/library.mjs";
 import { createUpdatesHome } from "./fixtures/updates.mjs";
+import { markInstalled } from "./fixtures/agents.mjs";
 import { startTestServer } from "./fixtures/server.mjs";
 import { writeFixtureFile } from "./fixtures/smartorder.mjs";
 
@@ -385,6 +386,14 @@ test("library and CLI tool routes: plans, confirmed writes in the sandbox, nothi
   assert.ok(applied.json.results.some((item) => item.id === "adopt-link:rev-1" && item.status === "applied"));
   assert.equal(applied.json.historyEntry.restorable, true, "the apply can be undone from history");
   const guide = await post("cli:plan:guide", "/api/cli-tools/plan", { toolId: "lark-cli", fixId: "workspace-binding" });
+  // v0.3: auto-link state, catch-up and install plans, the companion skill and the launcher.
+  const libraryNow = await call("library:v030", "/api/library");
+  assert.equal(typeof libraryNow.json.autoLink.enabled, "boolean");
+  await post("auto-link:dry", "/api/library/auto-link/run", { dryRun: true });
+  await post("catch-up:plan", "/api/library/catch-up/plan", {});
+  await post("install:plan", "/api/install/plan", { source: { library: "shared-a" }, scope: "primary" });
+  await call("companion", "/api/library/companion-skill");
+  await call("cli-launcher", "/api/cli-launcher");
   assert.deepEqual([guide.status, guide.json.kind], [200, "guide"]);
   await call("health", "/api/health-report?force=1");
   assert.deepEqual(bodies.filter((item) => /ZZ9/u.test(item.body)).map((item) => item.label), []);
@@ -403,6 +412,7 @@ test("history, restore, uninstall, trash and default visibility through the API"
   await writeFixtureFile(home, ".claude/skills/demo/SKILL.md", skillText("v1"));
   await writeFixtureFile(home, ".claude/skills/solo/SKILL.md", "---\nname: solo\ndescription: solo\n---\n# solo\n");
   await writeFixtureFile(home, ".hermes/config.yaml", "model:\n  default: x\n");
+  await markInstalled(home, "codex", "claude");
   const { request } = await startTestServer(context, home);
   const bodies = [];
   const call = async (label, pathname, options = {}) => {

@@ -85,6 +85,11 @@ const optionalName = (value) => {
  *   json(response, status, body, origin), image(response, asset, origin) }
  */
 export function createInsightRoutes(context) {
+  // SKILL_MANAGER_UPDATES_OFFLINE=1 stops every request (offlineFetch). Otherwise requests go
+  // through the injected fetch (Electron net.fetch in the desktop app, for the system proxy).
+  // Automatic checks also follow config network.updateChecks and the first-run notice
+  // (context.autoCheck); checks the user starts do not.
+  const networkFetch = context.updatesOffline ? offlineFetch : context.fetchImpl || globalThis.fetch;
   const versions = createAgentVersionService({
     homeDirectory: context.homeDirectory,
     homes: context.homes,
@@ -93,7 +98,8 @@ export function createInsightRoutes(context) {
     ...(context.commandDirectories ? { searchDirectories: context.commandDirectories, pinnedDirectories: context.commandDirectories.map((entry) => entry.directory) } : {}),
     historyFile: context.historyFile,
     offline: Boolean(context.updatesOffline),
-    ...(context.updatesOffline ? { fetchImpl: offlineFetch } : {}),
+    fetchImpl: networkFetch,
+    ...(context.autoCheck ? { autoCheck: context.autoCheck } : {}),
   });
   const usage = createUsageService({
     homeDirectory: context.homeDirectory,
@@ -109,7 +115,7 @@ export function createInsightRoutes(context) {
     getAgents: context.getAgents,
     getConfig: context.getConfig,
     materialize: context.materialize,
-    ...(context.updatesOffline ? { fetchImpl: offlineFetch, lsRemoteImpl: offlineLsRemote } : {}),
+    ...(context.updatesOffline ? { fetchImpl: offlineFetch, lsRemoteImpl: offlineLsRemote } : { fetchImpl: networkFetch }),
     ...(context.commandDirectories ? { searchDirectories: context.commandDirectories, restrictCommands: true } : {}),
   });
   const healthLoader = createCachedLoader(

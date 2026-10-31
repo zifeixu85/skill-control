@@ -179,8 +179,10 @@ test("health report adds library drift, external links and CLI readiness finding
       name: "飞书 CLI（lark-cli）",
       binaries: [{ path: "~/.nvm/x/lark-cli", version: "1.0.97" }, { path: "~/.hermes/node/bin/lark-cli", version: "1.0.56" }],
       agents: [
-        { agentId: "openclaw", pathSource: "图形界面默认 PATH", resolves: null, workspace: "openclaw", workspaceConfigured: false },
-        { agentId: "codex", pathSource: "shell snapshot", resolves: { path: "~/.nvm/x/lark-cli", version: "1.0.97" }, workspace: "local", workspaceConfigured: true },
+        { agentId: "openclaw", agentName: "OpenClaw", pathSource: "图形界面默认 PATH", status: "missing", resolves: null, workspace: "openclaw", workspaceConfigured: false },
+        { agentId: "codex", agentName: "Codex", pathSource: "终端环境记录", status: "found", resolves: { path: "~/.nvm/x/lark-cli", version: "1.0.97" }, workspace: "local", workspaceConfigured: true },
+        // Newly installed, no terminal record yet: cannot tell, so no finding.
+        { agentId: "claude", agentName: "Claude Code", pathSource: "还没有终端环境记录", status: "unknown", resolves: null, workspace: "local", workspaceConfigured: true },
       ],
     }],
     homeDirectory: home,
@@ -193,6 +195,7 @@ test("health report adds library drift, external links and CLI readiness finding
   assert.equal(categories["library-drift"], 1);
   assert.equal(categories["cli-version-skew"], 1);
   assert.equal(categories["cli-not-on-agent-path"], 1);
+  assert.equal(report.findings.find((finding) => finding.category === "cli-not-on-agent-path").title, "OpenClaw 找不到 飞书 CLI（lark-cli）", "display names, not ids");
   assert.equal(categories["cli-workspace-unconfigured"], 1);
   assert.match(report.findings.find((finding) => finding.category === "cli-version-skew").detail, /1\.0\.97.*1\.0\.56/u);
 });

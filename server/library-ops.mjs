@@ -3,6 +3,7 @@ import { cp, lstat, mkdir, readFile, readlink, rename, rm, symlink, unlink, writ
 import path from "node:path";
 import { contentHash, createDirLink } from "./fs-links.mjs";
 import { assertSafeWrite } from "./home-guard.mjs";
+import { copySkillTree } from "./skill-copy.mjs";
 
 /**
  * Reversible file operations for library plans. Every operation checks the home guard,
@@ -25,6 +26,14 @@ async function isLink(target) {
 
 async function exists(target) {
   return Boolean(await lstat(target).catch(() => null));
+}
+
+/** Moves a folder this run created into the backup group (undo never deletes). */
+async function moveAside(target, backupGroup) {
+  if (!(await exists(target))) return;
+  const aside = path.join(backupGroup, "undo-copy", `${path.basename(target)}-${Date.now()}`);
+  await mkdir(path.dirname(aside), { recursive: true });
+  await rename(target, aside);
 }
 
 /** Rename, or copy + verify + move the original aside when crossing volumes. */
@@ -93,8 +102,19 @@ async function runOp(op, context) {
       op.result = result;
       return async () => {
         if (await isLink(op.path)) await unlink(op.path);
-        else if (result.mode === "copy") await rename(op.path, path.join(context.backupGroup, "undo-copy", path.basename(op.path)));
+        else if (result.mode === "copy") await moveAside(op.path, context.backupGroup);
       };
+    }
+    case "copy": {
+      // A new folder copied from a skill (into the library, or for an Agent that skips links).
+      // Links that leave the source skill are not copied (server/skill-copy.mjs).
+      await guard(op.to);
+      if (await exists(op.to)) throw new LibraryError(409, `${context.display(op.to)} 已存在，已停止。`, "stale-plan");
+      await mkdir(path.dirname(op.to), { recursive: true });
+      const { skippedLinks } = await copySkillTree(op.from, op.to);
+      op.sourceHash = await contentHash(op.from);
+      op.skippedLinks = skippedLinks.length;
+      return async () => moveAside(op.to, context.backupGroup);
     }
     case "backup-file": {
       // A snapshot of a file that a following command (e.g. `hermes config set`) changes.
@@ -144,7 +164,7 @@ export async function fingerprint(target) {
 }
 
 /** The path whose state an executed op leaves behind (checked before undoing it). */
-const resultPath = (op) => ({ move: op.to, stash: op.to, link: op.path, write: op.path, unlink: op.path, command: op.restoreFile?.path })[op.op] || null;
+const resultPath = (op) => ({ move: op.to, stash: op.to, link: op.path, write: op.path, unlink: op.path, copy: op.to, command: op.restoreFile?.path })[op.op] || null;
 
 /**
  * A serializable record of an executed op for history (no file contents), with the
@@ -158,6 +178,7 @@ export async function recordOp(op, display) {
   // Absolute link targets are stored home-compacted (and expanded again on restore).
   if (op.linkTarget) record.linkTarget = path.isAbsolute(op.linkTarget) ? display(op.linkTarget) : op.linkTarget;
   if (op.existed !== undefined) record.existed = op.existed;
+  if (op.sourceHash) record.sourceHash = op.sourceHash;
   if (op.result?.mode) record.mode = op.result.mode;
   if (op.restoreFile) record.restoreFile = { path: display(op.restoreFile.path), backup: display(op.restoreFile.backup) };
   const target = resultPath(op);
@@ -169,7 +190,7 @@ export async function recordOp(op, display) {
 export function isReversible(record) {
   if (!record) return false;
   if (record.op === "command") return Boolean(record.restoreFile);
-  return ["move", "stash", "unlink", "link", "write"].includes(record.op);
+  return ["move", "stash", "unlink", "link", "write", "copy"].includes(record.op);
 }
 
 /**
@@ -193,6 +214,9 @@ export function reverseOp(record, { expand, backupGroup }) {
       return record.mode === "copy"
         ? { op: { op: "stash", path: p(record.path), to: path.join(backupGroup, "undo-copy", path.basename(p(record.path))) }, check: p(record.path), expect: record.afterHash }
         : { op: { op: "unlink", path: p(record.path) }, check: p(record.path), expect: record.afterHash };
+    case "copy":
+      // Undoing a copy moves it into the backup folder (never deleted).
+      return { op: { op: "stash", path: p(record.to), to: path.join(backupGroup, "undo-copy", path.basename(p(record.to))) }, check: p(record.to), expect: record.afterHash };
     case "write":
       return record.existed
         ? { op: { op: "write", path: p(record.path), contentFrom: p(record.backup), backup: path.join(backupGroup, "files", path.basename(p(record.path))) }, check: p(record.path), expect: record.afterHash, needs: p(record.backup) }

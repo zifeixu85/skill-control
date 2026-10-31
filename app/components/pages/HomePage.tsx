@@ -6,7 +6,9 @@ import { errorMessage } from "../../lib/api";
 import { joinNames } from "../../lib/format";
 import { matchesFilter } from "../../lib/skill-model";
 import { PlusIcon, RefreshIcon } from "../icons";
+import { isInstalled } from "../../lib/agents";
 import { useData } from "../providers/DataProvider";
+import { FirstRunBanners, NoAgentsState } from "./home/FirstRunBanners";
 import { useNav } from "../providers/NavProvider";
 import { useToast } from "../providers/ToastProvider";
 import { AgentAvatar, ExpertAvatar } from "../ui/Avatar";
@@ -120,7 +122,13 @@ function ExpertsTeaser() {
 }
 
 export function HomePage() {
-  const { scan, primary, agentName, agents, views, capabilities } = useData();
+  const { scan, primary: configured, agentName, agents, agentsById, views, capabilities, needsOnboarding } = useData();
+  // Only installed Agents get a card: a 常用 Agent that isn't on this Mac would show all zeros.
+  const primary = configured.filter((id) => {
+    const agent = agentsById.get(id);
+    return agent ? isInstalled(agent) : false;
+  });
+  const anyInstalled = agents.some((agent) => isInstalled(agent));
   const { go, setImportOpen } = useNav();
   const scrollRef = useScrollMemory<HTMLDivElement>("home");
   const others = agents.filter((agent) => agent.available && agent.skillCount > 0 && !primary.includes(agent.id));
@@ -131,7 +139,17 @@ export function HomePage() {
     <section className="page" aria-labelledby="page-title">
       <TopBar
         title={<span id="page-title">概览</span>}
-        sub={primary.length ? `常用 Agent：${joinNames(primary.map(agentName))}` : "正在读取本机的 Agent…"}
+        sub={
+          primary.length
+            ? needsOnboarding
+              ? `还没有选常用 Agent，先按使用情况显示：${joinNames(primary.map(agentName))}`
+              : `常用 Agent：${joinNames(primary.map(agentName))}`
+            : scan.data
+              ? anyInstalled
+                ? "还没有选常用 Agent"
+                : "没有检测到 Agent"
+              : "正在读取本机的 Agent…"
+        }
       >
         <RescanButton />
         <button type="button" className="btn" onClick={() => setImportOpen(true)}>
@@ -145,8 +163,14 @@ export function HomePage() {
             <p className="lead">正在读取本机的技能和 Agent…</p>
             <Loading rows={4} />
           </div>
+        ) : !anyInstalled ? (
+          <>
+            <NoAgentsState action={<RescanButton />} />
+            <NewAgentsNotice />
+          </>
         ) : (
           <>
+            <FirstRunBanners />
             <TotalsStrip />
             <NewAgentsNotice />
             <div className="agents-grid">

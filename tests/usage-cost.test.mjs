@@ -247,6 +247,8 @@ test("an agent average with nothing to average: fallback model, then family, the
   assert.deepEqual([reported.costUsd, reported.costBasis.reported], [0.5, 0.5]);
   const unpriced = priceRows("any", { rows: rows("auto") }, { table: custom({}) });
   assert.deepEqual([unpriced.costUsd, unpriced.unpricedTokens, unpriced.byModel[0].basis], [0, 1_000_000, "unpriced"]);
-  const opus = priceRows("claude", { rows: rows("claude-opus-9") });
+  const opus = priceRows("claude", { rows: rows("claude-opus-5-9") });
   assert.deepEqual([opus.byModel[0].basis, opus.byModel[0].priceAs, opus.costBasis.family], ["family", "claude-opus-5-5", 4]);
+  const otherGeneration = priceRows("claude", { rows: rows("claude-opus-9") });
+  assert.deepEqual([otherGeneration.byModel[0].basis, otherGeneration.costUsd, otherGeneration.unpricedTokens], ["unpriced", 0, 1_000_000]);
 });

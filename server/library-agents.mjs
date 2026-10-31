@@ -8,7 +8,8 @@ import { resolveOpenClawInstall } from "./openclaw.mjs";
 /**
  * How each Agent sees the shared library (~/.agents/skills), per the verified matrix in
  * docs/LIBRARY-UPDATES-CLI.md §1.2: native readers need no links, Hermes reads extra
- * folders from config, the rest get one relative link per skill.
+ * folders from config, most others get one relative link per skill, and Agents that do not
+ * follow links (办公小浣熊) get a copy. Agents not listed here ("none") are left alone.
  */
 
 export const AGENT_TIERS = {
@@ -28,8 +29,11 @@ export const AGENT_TIERS = {
   workbuddy: { tier: "link", note: "逐技能相对链接" },
   trae: { tier: "link", note: "逐技能相对链接（全局目录）" },
   // Verified in the app (v1.0.17): only real folders under ~/.box-agent/skills load; links are skipped.
-  "office-raccoon": { tier: "none", note: "只读取 ~/.box-agent/skills 下的真实文件夹，不跟随软链接；可以复制安装，不能链接到技能库", disable: "office-raccoon" },
+  "office-raccoon": { tier: "copy", note: "只读取 ~/.box-agent/skills 下的真实文件夹，不跟随软链接；接入方式是复制一份（记录来源哈希）", disable: "office-raccoon" },
 };
+
+/** How an Agent is connected to the library, for the UI. */
+export const TIER_LABELS = { native: "原生读取", config: "额外目录", link: "软链接", copy: "复制", none: "不支持" };
 
 export const tierOf = (agentId) => AGENT_TIERS[agentId]?.tier || "none";
 

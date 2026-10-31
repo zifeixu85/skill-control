@@ -29,7 +29,13 @@ export function AgentVersionsSetting() {
           <dt className="k">上次检查</dt>
           <dd>{data ? last : report.status === "error" ? "读取失败" : "正在读取…"}</dd>
         </div>
-        {data?.nextCheckAt && !data.offline ? (
+        {!data?.offline && (data?.autoCheck === "off" || data?.autoCheck === "waiting-notice") ? (
+          <div className="kv-row">
+            <dt className="k">自动检查</dt>
+            <dd>{data.autoCheck === "off" ? "已关闭（设置 → 数据与隐私）" : "等你看过联网说明后开始"}</dd>
+          </div>
+        ) : null}
+        {data?.nextCheckAt && !data.offline && data.autoCheck !== "off" && data.autoCheck !== "waiting-notice" ? (
           <div className="kv-row">
             <dt className="k">下次检查</dt>
             <dd>{formatDateTime(data.nextCheckAt)}</dd>

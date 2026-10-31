@@ -3,7 +3,7 @@
 import { isUnsupported, useResource } from "../../../hooks/useResource";
 import { api, errorMessage } from "../../../lib/api";
 import { formatDateTime, joinNames } from "../../../lib/format";
-import { HISTORY_ACTION_LABELS } from "../../../lib/history";
+import { historyTitle } from "../../../lib/history";
 import { useData } from "../../providers/DataProvider";
 import { useNav } from "../../providers/NavProvider";
 import { ItemText } from "../../ui/Item";
@@ -46,7 +46,7 @@ export function HistoryList() {
         <div key={entry.id} className="lrow">
           <div className="it-main">
             <div className="it-title">
-              {HISTORY_ACTION_LABELS[entry.action] || entry.action}
+              {historyTitle(entry)}
               {entry.skill ? ` · ${entry.skill}` : ""}
             </div>
             {entry.agents.length || entry.mode || entry.backups.length ? (
