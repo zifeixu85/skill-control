@@ -198,17 +198,22 @@ MINE
 // ---------------------------------------------------------------------------
 // p12 import (CI): exact commands, and everything is undone afterwards
 
-test("prepareP12Identity imports into a temp keychain, trusts the certificate and undoes it all", async (t) => {
+const identityListing = (trusted) => ({
+  stdout: trusted
+    ? `  1) ${CERT_SHA1} "Skill Control Code Signing (zifeixu85)"\n     1 valid identities found\n`
+    : "     0 valid identities found\n",
+});
+
+test("prepareP12Identity imports into a temp keychain, trusts the certificate and cleans up the keychain", async (t) => {
   const root = await tempDir(t, "p12");
   const pem = `SHA-1 hash: ${CERT_SHA1}\n-----BEGIN CERTIFICATE-----\nMINE\n-----END CERTIFICATE-----\n`;
+  let trusted = false;
   const { run, calls } = recorder({
     "security list-keychains": (args) => (args.includes("-s") ? {} : { stdout: '    "/Users/runner/Library/Keychains/login.keychain-db"\n' }),
-    "security find-identity": (args) => ({
-      stdout: args.includes("-v")
-        ? `  1) ${CERT_SHA1} "Skill Control Code Signing (zifeixu85)"\n     1 valid identities found\n`
-        : `  1) ${CERT_SHA1} "Skill Control Code Signing (zifeixu85)" (CSSMERR_TP_NOT_TRUSTED)\n`,
-    }),
+    "security find-identity": (args) =>
+      args.includes("-v") ? identityListing(trusted) : { stdout: `  1) ${CERT_SHA1} "Skill Control Code Signing (zifeixu85)" (CSSMERR_TP_NOT_TRUSTED)\n` },
     "security find-certificate": { stdout: pem },
+    [`sudo ${SECURITY} add-trusted-cert`]: () => ((trusted = true), {}),
   });
   const env = { MAC_SIGN_P12_BASE64: Buffer.alloc(512, 7).toString("base64"), MAC_SIGN_P12_PASSWORD: "p12-secret" };
   const logs = [];
@@ -227,6 +232,7 @@ test("prepareP12Identity imports into a temp keychain, trusts the certificate an
     "security list-keychains",
     "security find-identity",
     "security find-certificate",
+    "security find-identity",
     "sudo security add-trusted-cert",
     "security find-identity",
   ]);
@@ -239,9 +245,17 @@ test("prepareP12Identity imports into a temp keychain, trusts the certificate an
   calls.length = 0;
   await prepared.cleanup();
   const cleanup = calls.map((call) => (call[0] === SUDO ? call[3] : call[1]));
-  assert.deepEqual(cleanup, ["remove-trusted-cert", "list-keychains", "delete-keychain"]);
-  assert.deepEqual(calls[1].slice(-1), ["/Users/runner/Library/Keychains/login.keychain-db"], "the search list is restored");
+  // The trust setting stays: removing it waits for an authorization dialog on the runner.
+  assert.deepEqual(cleanup, ["list-keychains", "delete-keychain"]);
+  assert.deepEqual(calls[0].slice(-1), ["/Users/runner/Library/Keychains/login.keychain-db"], "the search list is restored");
   assert.deepEqual(await readdir(root), [], "the p12, keychain and certificate files are removed");
+
+  // A second signing in the same job (the trust is already there) never asks sudo again.
+  calls.length = 0;
+  const again = await prepareP12Identity({ env, run, tempRoot: root, log() {} });
+  assert.equal(again.identity, CERT_SHA1);
+  assert.equal(calls.some((call) => call[0] === SUDO), false);
+  await again.cleanup();
 });
 
 test("prepareP12Identity cleans up when the certificate cannot be trusted", async (t) => {
@@ -258,7 +272,7 @@ test("prepareP12Identity cleans up when the certificate cannot be trusted", asyn
     /信任设置没有生效/u,
   );
   assert.ok(calls.some((call) => call[1] === "delete-keychain"));
-  assert.ok(calls.some((call) => call[3] === "remove-trusted-cert"));
+  assert.equal(calls.filter((call) => call[0] === SUDO).length, 1, "trusted once, never removed");
   assert.deepEqual(await readdir(root), []);
   await assert.rejects(
     prepareP12Identity({ env: { MAC_SIGN_P12_BASE64: "c2hvcnQ=", MAC_SIGN_P12_PASSWORD: "pw" }, run, tempRoot: root, log() {} }),

@@ -82,7 +82,7 @@ afterSign 钩子）：先签所有内嵌的二进制、框架和 Helper，再签
 
 | 环境 | 方式 |
 | --- | --- |
-| GitHub Actions，且设置了 `MAC_SIGN_P12_BASE64` + `MAC_SIGN_P12_PASSWORD` | 导入临时钥匙串，在 runner 上把证书设为代码签名可信（`sudo security add-trusted-cert`，自签名证书不受信任时 codesign 会报 “no identity found”），签名后删除钥匙串、搜索列表条目和信任设置 |
+| GitHub Actions，且设置了 `MAC_SIGN_P12_BASE64` + `MAC_SIGN_P12_PASSWORD` | 导入临时钥匙串，在 runner 上把证书设为代码签名可信（`sudo security add-trusted-cert`，自签名证书不受信任时 codesign 会报 “no identity found”），签名后删除钥匙串和搜索列表条目。信任设置每台 runner 只加一次、不撤销：在 runner 上修改或撤销已有的信任设置会等待无人应答的授权弹窗，而 GitHub 托管的 runner 用完即销毁 |
 | 本机，设置了 `MAC_SIGN_IDENTITY`（SHA-1 或名称） | 用钥匙串里已经信任的身份签名，不改任何钥匙串或信任设置 |
 | 都没有 | ad-hoc 签名（与 v0.2.1 相同），本地构建默认如此 |
 

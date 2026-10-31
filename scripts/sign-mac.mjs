@@ -39,6 +39,8 @@ export const CODESIGN = "/usr/bin/codesign";
 export const SECURITY = "/usr/bin/security";
 export const SUDO = "/usr/bin/sudo";
 export const SYSTEM_KEYCHAIN = "/Library/Keychains/System.keychain";
+// sudo + security fails fast instead of waiting out runTool's 10 minutes on an authorization dialog.
+const SUDO_TIMEOUT_MS = 2 * 60_000;
 export const DEFAULT_ENTITLEMENTS = path.join(ROOT, "resources", "entitlements.mac.plist");
 const NESTED_BUNDLES = new Set([".app", ".framework", ".xpc", ".appex", ".bundle", ".plugin"]);
 const MACH_O_MAGIC = new Set([0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca, 0xcafebabf, 0xbfbafeca]);
@@ -176,16 +178,19 @@ export function pemForSha1(text, sha1) {
 /**
  * Imports MAC_SIGN_P12_BASE64 into a new keychain under `tempRoot`, puts it on the user search
  * list, trusts the certificate for code signing (passwordless sudo on GitHub's runners) and
- * returns the identity plus a cleanup that undoes all of it.
+ * returns the identity plus a cleanup that removes the keychain and restores the search list.
+ *
+ * The trust setting is added once per runner and left in place: on GitHub's runners a first
+ * add needs no prompt, but changing or removing an existing one waits for an authorization
+ * dialog nobody can answer. GitHub-hosted runners are discarded after the job.
  */
 export async function prepareP12Identity({ env, run = runTool, tempRoot = os.tmpdir(), log = console.info }) {
   const dir = await mkdtemp(path.join(tempRoot, "skill-control-sign-"));
   const keychain = path.join(dir, "signing.keychain-db");
   const keychainPassword = randomBytes(24).toString("hex");
-  const steps = { created: false, listed: false, trusted: null };
+  const steps = { created: false, listed: false };
   const previous = parseKeychainList((await run(SECURITY, ["list-keychains", "-d", "user"])).stdout);
   const cleanup = async () => {
-    if (steps.trusted) await run(SUDO, ["-n", SECURITY, "remove-trusted-cert", "-d", steps.trusted]).catch(() => {});
     if (steps.listed) await run(SECURITY, ["list-keychains", "-d", "user", "-s", ...previous]).catch(() => {});
     if (steps.created) await run(SECURITY, ["delete-keychain", keychain]).catch(() => {});
     await rm(dir, { recursive: true, force: true });
@@ -208,13 +213,17 @@ export async function prepareP12Identity({ env, run = runTool, tempRoot = os.tmp
     const [{ sha1, name }] = identities;
     const pem = pemForSha1((await run(SECURITY, ["find-certificate", "-a", "-Z", "-p", keychain])).stdout, sha1);
     if (!pem) throw new Error("没能从钥匙串导出签名证书。");
-    const certificate = path.join(dir, "signing.pem");
-    await writeFile(certificate, pem, { mode: 0o600 });
-    await run(SUDO, ["-n", SECURITY, "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "codeSign", "-k", SYSTEM_KEYCHAIN, certificate]);
-    steps.trusted = certificate;
-    const valid = parseFindIdentity((await run(SECURITY, ["find-identity", "-v", "-p", "codesigning", keychain])).stdout);
-    if (!valid.some((identity) => identity.sha1 === sha1 && !identity.problem)) {
-      throw new Error("证书已导入，但仍不能用来签名（信任设置没有生效）。");
+    const usable = async () =>
+      parseFindIdentity((await run(SECURITY, ["find-identity", "-v", "-p", "codesigning", keychain])).stdout).some(
+        (identity) => identity.sha1 === sha1 && !identity.problem,
+      );
+    if (!(await usable())) {
+      const certificate = path.join(dir, "signing.pem");
+      await writeFile(certificate, pem, { mode: 0o600 });
+      await run(SUDO, ["-n", SECURITY, "add-trusted-cert", "-d", "-r", "trustRoot", "-p", "codeSign", "-k", SYSTEM_KEYCHAIN, certificate], {
+        timeout: SUDO_TIMEOUT_MS,
+      });
+      if (!(await usable())) throw new Error("证书已导入，但仍不能用来签名（信任设置没有生效）。");
     }
     log(`[sign-mac] 签名证书：${name}（SHA-1 ${sha1}）`);
     return { identity: sha1, keychain, sha1, name, cleanup };
