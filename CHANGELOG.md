@@ -67,8 +67,16 @@ on Keep a Changelog and the project follows Semantic Versioning.
   per file, 200 KB) with credential-shaped values masked.
 - `POST /api/reveal { target: "data-dir" }` opens `~/.agent-skill-manager` in the file manager.
 - Settings `network.updateChecks` (自动检查更新, default on) and `network.noticeSeenAt`.
+- First-run onboarding in two steps: what is read and what goes online (with the update-check
+  switch), then picking primary agents from the detected ones, each with the file or command
+  it was detected by. Skipping it leaves a quiet banner instead of a second notice.
+- Desktop: `pickFolder()` on the preload bridge opens the system folder dialog for importing a
+  skill folder; only the picked path goes back to the page.
 
 ### Changed
+
+- The faintest text colour (`--ink-3`) is darker in the light theme and lighter in the dark
+  theme, so hints and captions are easier to read.
 
 - Agent detection uses each product's own files, commands and apps (Claude Code:
   `~/.claude/settings.json`, `~/.claude/projects`, `~/.claude.json`, `claude`; Codex:

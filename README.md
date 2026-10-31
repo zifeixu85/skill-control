@@ -1,302 +1,202 @@
-# Skill Control（技能管理器）
+# Skill Control
 
 [简体中文](./README.md) · [English](./README_EN.md)
 
-本地优先的 Agent 工作台。Skill Control 扫描你电脑上的 Codex、Claude Code、WorkBuddy、
-Hermes、OpenClaw 等 Agent，把技能、插件、专家、连接器与 MCP、密钥位置、更新、用量和
-预估费用放进同一个界面，并围绕你常用的 Agent 判断哪里需要处理。
+[![最新版本](https://img.shields.io/github/v/release/zifeixu85/skill-control?label=%E6%9C%80%E6%96%B0%E7%89%88%E6%9C%AC)](https://github.com/zifeixu85/skill-control/releases/latest)
 
-<!-- TODO(v0.2.0): 用临时 HOME 下的示例数据重新截图（概览、技能、数据），替换 docs/images/ 中 v0.1 的旧截图后在此引用。不要使用真实用户数据。 -->
+在一处查看和整理 Codex、Claude Code、WorkBuddy、Hermes、OpenClaw 等 AI Agent 的技能、插件、MCP 和用量；技能装一次，各 Agent 都能用。所有扫描和统计都在本机完成。
 
-> 最新版本：`v0.2.0`。可下载的桌面产物和各平台的验证状态以 [Releases](../../releases)
-> 为准。
+![概览：常用 Agent 的技能数、用量和需要注意的事](./docs/images/home.png)
 
-## 为什么需要 Skill Control
+## 三步开始
 
-同一个技能经常同时装在好几个 Agent 里，插件、MCP 服务、密钥和用量也分散在各自的
-配置目录。手动维护很容易漏装、版本不一致、覆盖错误，也很难说清楚“这个月到底用了多少”。
-Skill Control 把这些信息读到一起：
+### 1. 下载
 
-- 你常用的 Agent 里，哪些技能内容不一致、哪边较新；
-- 哪些技能、插件和 Agent 本身有新版本；
-- 每个 Agent、技能、项目用了多少 token，按官方价格大约值多少钱；
-- 哪些配置有问题，怎么修。
-
-所有扫描都在本机完成；任何写入都先展示计划，确认后才执行，并可以撤销。
-
-## 功能
-
-### 围绕常用 Agent
-
-- 在设置里选出你主要使用的 Agent（最多 4 个），技能状态只针对它们判断；没有选择时
-  按近 30 天的会话活跃度给出建议；
-- 检测到新的 Agent 时在概览和设置里提示，可以加入常用或标为已知；也能找出用户目录里
-  含 `skills/*/SKILL.md` 的未知目录，添加为自定义 Agent；
-- 每个 Agent 一页：技能、指令 / 记忆 / 规则等文件（敏感内容脱敏）、工具与权限、用量。
-
-### 技能与技能库
-
-- 按常用 Agent 显示技能是否一致、哪边较新、重复副本和共享目录；
-- 浏览技能文件树，Markdown 渲染与原文切换，常见图片与安全过滤后的 SVG 预览；
-- 近 90 天的技能使用次数（标明精确或推算）；
-- 冲突版本可以分别打开查看，文件级变化、逐行差异和图片并排比较，然后选定权威来源；
-- 同步支持“复制”和“软链接”两种方式，替换前自动备份；
-- 导入、预览、安装和导出 `.skill` 技能包，也可以导出通用 `.zip`；
-- **技能库**：统一管理 `~/.agents/skills` 共享技能库，按每个 Agent 自己的读取规则模拟它
-  实际能看到哪些技能；收编副本、改为链接、停用、卸载到废纸篓都先出计划、确认后执行；
-- 技能、插件、专家、MCP 和技能库列表可以按最近使用、最新安装、最常用或名称排序。
-
-### 更新
-
-- **技能与插件**：识别每个技能和插件的来源（skills CLI、Claude / Codex 插件、WorkBuddy、
-  SkillHub、ClawHub、git 等），检查上游新版本；本地改过的内容需要你选择保留还是覆盖；
-- **Agent 软件**：每天检查一次各 Agent 有没有新版本，只读取官方来源；有官方更新命令的
-  命令行工具可以“一键更新”，执行前先显示命令和影响；
-- **Skill Control 自身**：应用内更新，见下文“应用更新”。
-
-### 数据与预估费用
-
-- 汇总 Claude Code、Codex、WorkBuddy、Hermes、OpenClaw、QClaw 和办公小浣熊的 token、会话、
-  技能调用与项目，支持今天、近 7 天、近 30 天、近 90 天和所有时间；
-- 每个数字标明是精确、推算还是产品自报；只保存计数，不保存对话内容；
-- **预估费用**按各厂商官方 API 价格计算（含长上下文、缓存读写、错峰价），订阅内的用量也按
-  API 等价估算，不等于实际账单；
-- **模型价格表**列出全部已定价模型、官方来源和核对日期，价格可能过期时会提示。
-
-### 体检与 AI 指令
-
-- 检查失效链接、缺失或无效的 `SKILL.md`、过大的技能、不一致的副本、缺少的命令与环境变量、
-  配置里的明文密钥、插件状态和技能库问题；
-- 每个问题都有“复制 AI 指令”：只复制一段说明，交给你自己的 AI 处理，不改任何东西；
-- 能安全自动修复的问题提供“预览修复”：先列出将改动的文件，确认后执行，可以从历史撤销。
-
-### 专家、插件、连接器与密钥
-
-- **专家与 Agent**：WorkBuddy 的“我的专家”、市场专家与专家团，Hermes Profile，OpenClaw
-  Agent，办公小浣熊的专家与团队，按产品分组；
-- **插件**：Codex、Claude Code、WorkBuddy、Hermes、OpenClaw 与 QClaw 的插件、启用状态和组件；
-- **连接器与 MCP**：跨 Agent 的 MCP 服务清单与连接器，配置只读、密钥打码；
-- **密钥**：哪些服务的密钥存在哪里、谁在用、最近有没有变化。只显示名称和位置，从不读取或
-  显示密钥的值。
-
-### 历史、恢复与卸载
-
-- 同步、导入、更新、技能库和修复都有操作记录，可以从历史恢复；
-- 从某个 Agent 卸载技能会先移到 Skill Control 的废纸篓，可以还原。
-
-Windows 创建目录软链接时可能需要开启“开发人员模式”；不确定时请使用默认的“复制”方式。
-
-## 支持的 Agent
-
-应用只会把本机检测到或你手动添加的 Agent 加入数据源；检测到的 Agent 默认都会显示，
-可以在“设置 → 常用 Agent”中调整。
-
-| Agent | 默认技能目录 |
+| 你的电脑 | 下载这个文件 |
 | --- | --- |
-| Codex | `~/.codex/skills`、`~/.agents/skills`、`~/.codex/vendor_imports/skills` |
-| Claude Code | `~/.claude/skills` |
-| WorkBuddy | `~/.workbuddy/skills`、`~/.workbuddy/connectors/skills` |
-| Hermes Agent | `~/.hermes/skills`（按 Hermes 的规则递归，含 Profile 和外部目录） |
-| OpenClaw | `~/.openclaw/skills` 等 OpenClaw 的六个技能来源 |
-| QClaw | `~/.qclaw/skills`（只读） |
-| 办公小浣熊 | `~/.box-agent/skills`（只复制，不使用软链接） |
-| 订单来了（SmartOrder） | `~/.smartorder/skills`，以及配置中已启用插件的技能目录 |
-| Cursor | `~/.cursor/skills` |
-| Gemini CLI | `~/.gemini/skills` |
-| Kiro | `~/.kiro/skills` |
-| Trae | `~/.trae/skills` |
-| OpenCode | `~/.config/opencode/skills`、`~/.opencode/skills` |
-| Windsurf | `~/.windsurf/skills` |
-| Cline | `~/.cline/skills` |
-| Roo Code | `~/.roo/skills`、`~/.roo-code/skills` |
-| CodeBuddy | `~/.codebuddy/skills` |
-| Qwen Code | `~/.qwen/skills`、`~/.qwen-code/skills` |
-| GitHub Copilot | `~/.copilot/skills`、`~/.github/copilot/skills` |
+| Mac，Apple 芯片（M1、M2、M3、M4 等） | [Skill-Control-mac-arm64.dmg](https://github.com/zifeixu85/skill-control/releases/latest/download/Skill-Control-mac-arm64.dmg) |
+| Mac，Intel 芯片 | [Skill-Control-mac-x64.dmg](https://github.com/zifeixu85/skill-control/releases/latest/download/Skill-Control-mac-x64.dmg) |
+| Windows 10 / 11（x64） | [Skill-Control-win-x64-setup.exe](https://github.com/zifeixu85/skill-control/releases/latest/download/Skill-Control-win-x64-setup.exe) |
+| Linux（x64） | [Skill-Control-linux-x86_64.AppImage](https://github.com/zifeixu85/skill-control/releases/latest/download/Skill-Control-linux-x86_64.AppImage) |
 
-不在表中的工具可以通过名称、简称、颜色和一个或多个技能目录手动添加。移除一个 Agent
-只会删除这项配置，不会删除目录里的技能文件。LumiClaw、MotiClaw 和 Clawith 只读显示
-是否安装、版本和数量。
+- 不确定 Mac 是哪种芯片：点屏幕左上角的苹果菜单 →“关于本机”。写着“芯片 Apple M…”选第一个，写着“处理器 …Intel…”选第二个。
+- Windows 便携版、Linux 的 `.deb` 和历史版本在 [Releases](https://github.com/zifeixu85/skill-control/releases) 页面。那里的 `.zip`、`latest*.yml`、`.blockmap` 是应用内更新用的，不需要下载。
 
-### 订单来了：技能与连接器
+### 2. 第一次打开
 
-自动检测当前用户目录下的 `.smartorder`，Windows 与 Mac 使用相同的相对目录规则。
-可以查看本地技能、内置技能和已启用插件内的技能；遵循 `skills.config` 的停用项，市场清单、
-未登记缓存和历史版本不会混入已安装列表。插件与系统内置技能只读，不允许通过普通安装或
-同步覆盖。连接器只展示配置摘要，不访问远程服务、不执行连接器命令，也不展示凭据、
-环境变量值、启动参数或 URL 的路径 / 查询部分。
+- **macOS**：打开 dmg，把 Skill Control 拖进“应用程序”，再双击打开。第一次会被系统拦下，按[首次打开（macOS）](#首次打开macos)操作一次即可。
+- **Windows / Linux**：见[首次打开（Windows / Linux）](#首次打开windows--linux)。
 
-## 获取与运行
+### 3. 选常用 Agent
 
-### 桌面版
+第一次打开有两步：
 
-从 [Releases](../../releases) 下载与你的系统对应的文件：
+1. 先说明它会读取什么、只在本机统计、改动先给你看、会联网检查更新。这里可以直接关掉“自动检查更新”。
+2. 选你主要用的 Agent（最多 4 个）。有会话记录时，会按最近 30 天的使用情况推荐。技能状态和自动接入都围绕这几个 Agent。
 
-| 你的系统 | 应选择的文件 |
-| --- | --- |
-| Apple Silicon Mac（M1/M2/M3/M4/M5…） | `Skill-Control-<版本>-mac-arm64.dmg` |
-| Intel Mac | `Skill-Control-<版本>-mac-x64.dmg` |
-| Windows x64 | `Skill-Control-<版本>-win-x64-setup.exe`（安装版）或 `…-portable.exe`（便携版） |
-| Linux x64 | `Skill-Control-<版本>-linux-x86_64.AppImage` 或 `…-linux-amd64.deb` |
+没有检测到 Agent 时：装好其中一个、至少打开过一次，再点“重新检测”。之后可以在“设置 → 常用 Agent”里修改。
 
-不确定 Mac 是哪种芯片：点屏幕左上角苹果菜单 →“关于本机”，看“芯片”一行。
+## 能做什么
 
-Apple Silicon 用户不要选择 `mac-x64`，否则 macOS 会把它当作 Intel 应用。Release 中的
-`*.zip`、`latest*.yml` 和 `*.blockmap` 供应用内更新使用，不需要手动下载；
-`SHA256SUMS.txt` 提供全部文件的校验值。
+- **技能**：一张表看清每个技能装在哪些 Agent 里、近 30 天用了几次。点空圆点可以装到那个 Agent。同名技能内容不同时，可以查看差异，或用较新的一份更新另一份（先备份）。
+- **技能库**：技能只存一份，各 Agent 都能用，见[下一节](#技能库装一次各-agent-都能用)。
+- **更新**：检查 Agent 软件、技能和插件有没有新版本；更新前先列出要做的事。
+- **数据**：各 Agent、模型和项目的会话数、Token、缓存命中率，以及按官方 API 价格估算的费用。这是估算，订阅内的用量不等于实际账单。
+- **体检**：失效链接、缺少的命令和环境变量、配置里的明文密钥等。每一项都可以“复制 AI 指令”交给你自己的 AI 处理；命令行工具的部分问题可以“预览修复”。
+- **插件、专家与 Agent、连接器与 MCP、命令行工具、密钥**：看清每个 Agent 装了什么，密钥存在哪里、有没有变化。
+
+除了[自动接入](#技能库装一次各-agent-都能用)，所有改动都先列出每一步，确认后才执行；包括自动接入在内，都可以在“设置 → 历史与撤销”里撤销。
+
+<p>
+  <img src="./docs/images/skills.png" width="49%" alt="技能：每个技能装在哪些 Agent 里，近 30 天用了几次">
+  <img src="./docs/images/usage.png" width="49%" alt="数据：各 Agent 的会话数、Token 和预估费用">
+</p>
+
+## 技能库：装一次，各 Agent 都能用
+
+技能只在 `~/.agents/skills/<名称>` 放一份，这个目录叫“技能库”。各 Agent 用自己能读的方式接入：
+
+| 接入方式 | Agent | 做了什么 |
+| --- | --- | --- |
+| 会自动读取技能库 | Codex、Gemini CLI、Cursor、GitHub Copilot、OpenCode、Windsurf、OpenClaw、QClaw | 不用改动，放进库就能看到 |
+| 需要逐个接入 | Claude Code、WorkBuddy、Kiro、Trae、CodeBuddy | 在它自己的技能目录里，为每个技能建一个指向库的链接 |
+| 通过额外目录读取 | Hermes | 在它的配置里加一次技能库目录；需要你同意，改之前备份 |
+| 需要复制一份 | 办公小浣熊 | 它不认链接，每个技能复制一份。库里的技能更新后，这份副本暂时不会自动跟着更新 |
+
+其他 Agent（如 Cline、Roo Code、Qwen Code、订单来了）暂时不读取技能库，仍用它们自己的目录。每个 Agent 的目录和识别方式见[支持的 Agent](./docs/AGENTS-SUPPORT.md)。Windows 上会依次尝试符号链接和目录联接，都不行时复制一份。
+
+![技能库：哪些 Agent 还看不到库里的技能，自动接入开关和补齐接入](./docs/images/library.png)
+
+**自动接入**（默认开启，开关在技能库页）：新放进技能库的技能，会自动接入你的常用 Agent，也可以改成“所有已安装的 Agent”。
+
+- 只给还没有这个技能的 Agent 接入。Agent 自己已有同名副本的不动，留给“一键整理”由你决定。
+- 开启时（包括从旧版本升级后第一次启动），库里已经有的技能先不动。这些缺口在技能库页的“补齐接入”里一次处理：先列出每个 Agent 要接入多少个，确认后执行，可以撤销。
+- 不会自动修改 Hermes 的配置。
+- 每次自动接入后都会弹出提示，可以直接撤销。撤销过或取消接入的，以后不会再自动接回。
+
+**安装方式**：在“设置 → 安装方式”里选“统一技能库（推荐）”或“各装一份”（复制到每个 Agent 自己的目录）。导入技能（`.skill`、`.zip` 或文件夹）或者从一个 Agent 装到其他 Agent 时，可以选“所有常用 Agent（推荐）”“选择 Agent”或“只装到某个 Agent”（不进技能库）。
+
+**命令行工具和 skill-control 技能**：都在“设置 → Agent 集成”里。
+
+- “安装命令行工具”会写一个小脚本 `~/.local/bin/skill-control`（目前支持 macOS 和 Linux）。它用应用自带的运行环境执行，不打开窗口、不联网，和应用共用备份、历史和撤销。`~/.local/bin` 需要在 PATH 里。
+
+  ```bash
+  skill-control status              # 技能库位置、自动接入设置、各 Agent 能不能看到
+  skill-control add ./my-skill      # 校验后放进技能库，接入常用 Agent
+  skill-control doctor              # 说明哪个 Agent 看不到哪个技能、为什么
+  skill-control undo <historyId>    # 撤销一次改动
+  ```
+
+  会改东西的命令加 `--dry-run` 只预览；加 `--json` 输出给 Agent 读。完整用法见 `skill-control --help`。
+- “skill-control 技能 → 装到常用 Agent”会把随附的 `skill-control` 技能放进技能库并接入。之后在 Agent 里说“装个技能”“从 GitHub 装这个 skill”，它会先问装给哪些 Agent，把来源下载到临时目录做安全检查，再用 `skill-control add` 放进技能库；没装命令行工具时，按手动步骤操作。
+
+设计细节见 [docs/LIBRARY-UPDATES-CLI.md](./docs/LIBRARY-UPDATES-CLI.md)。
+
+## 系统要求
+
+| 系统 | 要求 | 测试情况 |
+| --- | --- | --- |
+| macOS | 12 或更高，Apple 芯片或 Intel | 主要在这里开发和测试 |
+| Windows | Windows 10 / 11，x64 | 测试较少 |
+| Linux | x64，AppImage 或 `.deb` | 测试较少。AppImage 的注意事项见[首次打开](#首次打开windows--linux) |
+
+Windows 和 Linux 上还有这些差别：Agent 桌面应用的版本和图标只在 macOS 上识别，“更新 → Agent 软件”只列出命令行版本；命令行工具 `skill-control` 暂不支持 Windows。
+
+## 首次打开
 
 ### 首次打开（macOS）
 
-Skill Control 是个人开源项目，安装包没有经过 Apple 开发者证书签名和公证，所以 macOS
-第一次打开时会拦一下。应用本身是完整签名的（ad-hoc），可以放心按下面的步骤打开：
+Skill Control 是个人开源项目，没有 Apple 开发者证书（Developer ID），也没有经过 Apple 公证，所以 macOS 第一次打开时会拦下它。按下面做一次，以后就能正常打开。以下以 macOS 15 及以后为例，旧版本的文字略有不同。
 
 1. 打开 dmg，把 Skill Control 拖进“应用程序”文件夹，然后双击打开。
-2. 如果提示“Apple 无法验证‘Skill Control’是否包含恶意软件”或“无法打开”，先点“完成”。
-3. 打开“系统设置 → 隐私与安全性”，滚到页面底部的“安全性”，点“Skill Control”旁边的
-   “仍要打开”，输入开机密码确认。以后就能正常打开了。
-   （macOS 14 及更早的版本，也可以在“应用程序”里右键点 Skill Control →“打开”。）
+2. 系统弹窗的标题是 未打开“Skill Control”，正文说 Apple无法验证“Skill Control”是否包含可能危害Mac安全或泄漏隐私的恶意软件。点“完成”，不要点“移到废纸篓”。
+3. 打开“系统设置 → 隐私与安全性”，滚到“安全性”一节，会看到一行字：已阻止“Skill Control”以保护Mac。在它旁边点“仍要打开”。
+4. 系统会再确认一次，按提示输入登录密码或使用触控 ID。
 
-**如果提示“已损坏，无法打开，你应该将它移到废纸篓”**：这是 v0.2.0 的 macOS 安装包签名
-不完整造成的，v0.2.1 起已修复，建议下载最新版本。已经装好的 v0.2.0 可以在“终端”里运行下面
-这条命令，去掉下载时系统加的隔离标记，然后再打开：
+**找不到“仍要打开”**：这个按钮只在被拦下后大约一小时内显示。先再双击一次应用，再回到设置里找。
+
+macOS 14 及更早，也可以在“应用程序”里按住 Control 点按 Skill Control，选“打开”。如果提示“已损坏，无法打开”，那是 v0.2.0 的问题，请下载最新版本。
+
+**签名能说明什么**：从 v0.3.0 起，macOS 版用一张固定的自签名证书签名，证书 SHA-1 是 `313A65FF9080E447216EBC2C090344785D2652B1`。签名能证明应用在签名后没有被改动，并且各个版本出自同一张证书，应用内更新也会核对这一点。它不能证明发布者的身份：这张证书不是 Apple 签发的，应用也没有经过公证，所以 macOS 仍会拦一下。介意的话，可以先核对下载文件，或者[从源码运行](#从源码运行)。
 
 ```bash
-xattr -dr com.apple.quarantine "/Applications/Skill Control.app"
-```
+# 下载文件的 SHA-256，和 Release 里 SHA256SUMS.txt 中同名的一行比较
+shasum -a 256 ~/Downloads/Skill-Control-mac-arm64.dmg
 
-这条命令只移除“从网上下载”的标记，不改动应用本身；请只对从本仓库 Releases 下载的文件
-这样做，必要时可以用 `SHA256SUMS.txt` 核对下载文件的校验值（`shasum -a 256 文件名`）。
+# 应用的签名证书：应输出 313a65ff9080e447216ebc2c090344785d2652b1（大小写不影响）
+codesign -d --extract-certificates=/tmp/skill-control-cert- "/Applications/Skill Control.app"
+shasum -a 1 /tmp/skill-control-cert-0
+```
 
 ### 首次打开（Windows / Linux）
 
-- **Windows**：SmartScreen 可能提示“未知发布者”，点“更多信息 → 仍要运行”。
-- **Linux**：AppImage 需要先赋予执行权限：`chmod +x Skill-Control-*.AppImage`。
+- **Windows**：安装包没有代码签名，SmartScreen 可能显示“Windows 已保护你的电脑”。点“更多信息”，再点“仍要运行”。
+- **Linux**：先给 AppImage 加执行权限再运行：`chmod +x Skill-Control-linux-x86_64.AppImage`。Ubuntu 22.04 及以后要先装 libfuse2（`sudo apt install libfuse2`，Ubuntu 24.04 上包名是 `libfuse2t64`）。Ubuntu 24.04 默认的 AppArmor 设置可能让 Electron 应用的沙箱起不来，导致无法启动；我们还没有在 Linux 上实测这一点，遇到请[反馈](https://github.com/zifeixu85/skill-control/issues)。
 
-### 应用更新
+### 更新 Skill Control
 
-从 v0.2.0 开始，Skill Control 会检查 GitHub Releases 上的新版本：启动后（距上次检查超过
-24 小时时）和之后每天一次，也可以在“设置 → 关于”里手动检查。
+在“设置 → 版本检查”里检查和安装新版本（只提供正式版本）。macOS 会先校验下载的文件和签名证书，再替换应用并重启，任何一步失败都会恢复原来的版本。如果 macOS 阻止替换，界面会告诉你到“系统设置 → 隐私与安全性 → App管理”里允许 Skill Control，也可以打开下载页手动更新。请把应用放在“应用程序”文件夹里；直接从 dmg 运行时不能应用内更新。Windows 安装版和 Linux AppImage 可以在应用内更新；便携版和 `.deb` 请手动下载新版本。
 
-- **macOS**：校验 sha512 并确认新应用的标识和版本后替换当前应用，旧版本移到废纸篓，
-  然后自动重启；任何一步失败都会恢复原来的版本。请把应用放在“应用程序”文件夹里，
-  从 DMG 直接运行或放在不可写的位置时会改为打开下载页；
-- **Windows**：安装版可以应用内下载并安装（安装包未签名，SmartScreen 可能提示）；
-  便携版需要手动下载替换；
-- **Linux**：AppImage 可以应用内更新；`.deb` 请手动下载新的安装包；
-- 只提供正式版本，不提供预发布版本；离线模式和从源码运行时不检查。
+## 隐私
 
-### 从源码运行
+- 没有遥测、没有账户、没有维护者运营的服务器，不上传任何内容。
+- 会读取会话记录文件来统计次数和 Token，只保存数字，不保存、不上传对话内容。
+- 不显示、不保存密钥的值，只在本机保存一个加盐指纹，用来判断是否变化。
+- 会联网检查更新（GitHub、npm 和各 Agent 应用自己的更新地址），只发出版本查询。可以在“设置 → 数据与隐私”里关掉“自动检查更新”。
 
-需要 Node.js `22.13.0` 或更高版本、npm 和 Git。
+读取的每个位置、保存的内容、什么时候改动其他 Agent 的文件夹，见 [PRIVACY.md](./PRIVACY.md)。
+
+## 卸载
+
+1. （可选）在“设置 → Agent 集成”里卸载命令行工具。
+2. 退出 Skill Control，删除应用：macOS 把“应用程序”里的 Skill Control 移到废纸篓；Windows 在系统的“应用”设置里卸载（卸载时会保留数据）；Linux 删除 AppImage 文件，或运行 `sudo apt remove skill-control`。
+3. （可选）删除数据。先看一眼 `~/.agent-skill-manager/trash/` 和 `backups/`：从 Agent 移除的技能和替换前的旧版本都在里面，删掉就找不回。
+
+   | 位置 | 内容 |
+   | --- | --- |
+   | `~/.agent-skill-manager/` | 设置、历史、用量统计、备份和回收站 |
+   | `~/Library/Application Support/Skill Control/`（Windows `%APPDATA%\Skill Control`，Linux `~/.config/Skill Control`） | 应用更新状态和缓存 |
+   | `~/Library/Preferences/dev.skillcontrol.desktop.plist` | macOS 的偏好设置 |
+   | `~/.local/bin/skill-control` | 命令行工具。应用已经删了的话，确认文件第二行是 `# skill-control-launcher …` 再删 |
+
+   ```bash
+   # macOS：确认不需要 trash/ 和 backups/ 之后再运行
+   rm -rf ~/.agent-skill-manager "$HOME/Library/Application Support/Skill Control"
+   rm -f ~/Library/Preferences/dev.skillcontrol.desktop.plist
+   ```
+
+4. **不要删除技能库 `~/.agents/skills`。** 各 Agent 技能目录里指向它的链接（例如 `~/.claude/skills/<名称>`）在卸载应用后照常可用；删掉技能库，这些链接就会失效。
+
+## 从源码运行
+
+需要 Node.js 22.13.0 或更高版本、npm 和 Git。
 
 ```bash
 git clone https://github.com/zifeixu85/skill-control.git
 cd skill-control
 npm install
-npm run dev
+npm run dev          # 打开 http://localhost:3000
+npm run desktop:dev  # 或者用 Electron 开发窗口
 ```
 
-打开 [http://localhost:3000](http://localhost:3000)。`npm run dev` 会同时启动界面和只监听
-`127.0.0.1:43110` 的本地管理服务。
-
-```bash
-npm run build && npm start   # 构建后运行
-npm run desktop:dev          # Electron 开发窗口
-```
-
-桌面打包命令列在 `package.json` 中；发布维护者应只在对应平台构建并验证产物，
-见 [发布指南](./docs/RELEASING.md)。
-
-## `.skill` 与 ZIP 导出
-
-Skill Control 使用 ZIP 容器作为 `.skill` 格式，包内必须包含一个 `SKILL.md`，可以位于
-压缩包根目录或单一顶层文件夹中。导出时可以保留 `.skill` 扩展名，也可以选择通用 `.zip`。
-导入时的限制：压缩包和单个文件不超过 25 MB、最多 1,500 个条目、解压后总大小不超过
-100 MB，拒绝路径穿越和包含多个技能根目录的包。导入文件先解压到本机预览区，选择文件
-不会直接修改任何 Agent 目录。
-
-## 数据与隐私
-
-Skill Control 的数据位于：
-
-```text
-~/.agent-skill-manager/
-├── config.json            配置（常用 Agent、显示的 Agent、自定义目录等）
-├── history.jsonl          操作记录
-├── backups/               替换前的备份
-├── trash/                 卸载和清理移出的技能
-├── imports/               .skill 导入预览
-├── usage-index.json       用量索引（只有计数，不含对话内容）
-├── fingerprint-cache.json 内容指纹缓存
-└── …                      更新检查、Agent 版本、密钥变化快照等缓存
-```
-
-应用更新的检查结果保存在桌面应用的用户数据目录（macOS 为
-`~/Library/Application Support/Skill Control/app-update.json`）；下载的更新包放在系统临时
-目录，安装或失败后删除。
-
-Skill Control 没有遥测，也不会上传技能内容。会联网的只有：应用更新检查（本项目在
-`api.github.com` / `github.com` 上的 Release）、Agent 版本检查与技能 / 插件更新检测
-（npm registry、GitHub 和各产品自己的更新源），以及你确认执行的一键更新命令。设置
-`SKILL_MANAGER_UPDATES_OFFLINE=1` 会关闭全部检查。完整说明见 [PRIVACY.md](./PRIVACY.md)。
-
-## 开发
-
-```bash
-npm run dev         # 本地管理服务 + 开发界面
-npm run dev:ui      # 在旁路端口启动界面开发环境
-npm run build       # 构建界面
-npm start           # 运行构建产物 + 本地管理服务
-npm run desktop:dev # Electron 开发窗口
-npm test            # 构建并运行 Node 测试
-npm run lint        # ESLint
-npm run typecheck   # TypeScript 类型检查
-```
-
-```text
-app/       React 界面
-desktop/   Electron 主进程、预加载脚本、应用更新和开发启动器
-server/    本地扫描、预览、同步、更新、用量与体检服务
-scripts/   开发、打包与发布脚本
-tests/     Node 测试
-resources/ 桌面图标、许可证与平台资源
-worker/    Web 构建入口
-```
-
-本地服务默认只接受 `http://localhost:3000` 和 `http://127.0.0.1:3000` 来源的请求。
-修改涉及文件写入、压缩包解析或路径解析的代码前，请先阅读
-[CONTRIBUTING.md](./CONTRIBUTING.md) 中的安全约束；架构说明见
-[docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
-
-## 路线图
-
-- 应用签名与公证；
-- 可选 CLI，供自动化和高级用户使用；
-- 可审计的 Agent 目录规则扩展机制。
-
-路线图是方向说明，不代表相应能力已经在当前版本可用。
+开发、测试和打包见 [CONTRIBUTING.md](./CONTRIBUTING.md)、[架构说明](./docs/ARCHITECTURE.md) 和[发布指南](./docs/RELEASING.md)。
 
 ## 参与贡献
 
 欢迎提交 Bug、交互改进、Agent 适配和安全修复：
 
-- [贡献指南](./CONTRIBUTING.md)
-- [行为准则](./CODE_OF_CONDUCT.md)
-- [安全政策](./SECURITY.md)
-- [第三方声明](./THIRD_PARTY_NOTICES.md)
-- [版本记录](./CHANGELOG.md)
-- [架构说明](./docs/ARCHITECTURE.md)
-- [发布指南](./docs/RELEASING.md)
-- [GitHub 仓库配置](./docs/REPOSITORY_SETUP.md)
+- [贡献指南](./CONTRIBUTING.md) · [行为准则](./CODE_OF_CONDUCT.md) · [安全政策](./SECURITY.md)
+- [版本记录](./CHANGELOG.md) · [支持的 Agent](./docs/AGENTS-SUPPORT.md) · [架构说明](./docs/ARCHITECTURE.md)
+- [第三方声明](./THIRD_PARTY_NOTICES.md) · [发布指南](./docs/RELEASING.md)
 
 ## 作者
 
 由 A梦 开发和维护。
 
-- 仓库：[github.com/zifeixu85/skill-control](https://github.com/zifeixu85/skill-control)
 - 网站：[ameng.blog](https://ameng.blog)
-
-问题与建议请提交到 [GitHub Issues](https://github.com/zifeixu85/skill-control/issues)。
+- 仓库：[github.com/zifeixu85/skill-control](https://github.com/zifeixu85/skill-control)
+- 问题与建议：[GitHub Issues](https://github.com/zifeixu85/skill-control/issues)
 
 ## 许可证
 
-本项目使用 [MIT License](./LICENSE)。
+[MIT License](./LICENSE)
