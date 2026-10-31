@@ -30,5 +30,5 @@ export const PROMISES: { title: string; detail: string }[] = [
   { title: "会读取", detail: "各 Agent 的技能目录和配置；会话记录只用来统计次数和 Token。" },
   { title: "只在本机统计", detail: "只保存数字，不保存、不上传对话内容；密钥只在本机保存一个加盐指纹，用来判断是否变化。" },
   { title: "改动先给你看", detail: "安装、整理、更新前先列出每一步，确认后才执行，之后可以撤销。" },
-  { title: "会联网检查更新", detail: "从 GitHub 和 npm 查 Skill Control 与各 Agent 的新版本，不上传本机数据。" },
+  { title: "会联网检查更新", detail: "从 GitHub、npm 和各 Agent 的官方更新地址查 Skill Control 与各 Agent 的新版本，不上传本机数据。" },
 ];

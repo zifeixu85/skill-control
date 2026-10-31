@@ -130,7 +130,7 @@ export function OnboardingSheet({ onLater }: { onLater: () => void }) {
           <label className={`onb-check ${offline ? "disabled" : ""}`}>
             <input type="checkbox" checked={checks && !offline} disabled={offline} onChange={(event) => setChecks(event.target.checked)} />
             <span>
-              自动检查更新（GitHub、npm）
+              自动检查更新
               <small>{offline ? ENV_OFFLINE_TEXT : "可以随时在“设置 → 数据与隐私”里关闭，关闭后不会自动联网。"}</small>
             </span>
           </label>

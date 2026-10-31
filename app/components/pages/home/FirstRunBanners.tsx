@@ -58,7 +58,7 @@ export function FirstRunBanners() {
           </span>
           <p>
             <b>{updateChecksOn(config.data) ? "Skill Control 会联网检查更新" : "自动检查更新已关闭"}</b>
-            <span>从 GitHub 和 npm 查 Skill Control 与各 Agent 的新版本，不上传本机数据。</span>
+            <span>从 GitHub、npm 和各 Agent 的官方更新地址查 Skill Control 与各 Agent 的新版本，不上传本机数据。</span>
           </p>
           <span className="banner-acts">
             <button

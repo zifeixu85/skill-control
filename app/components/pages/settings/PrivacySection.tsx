@@ -68,16 +68,16 @@ export function PrivacySection() {
       </p>
       <div className="set-row">
         <div className="set-row-text">
-          <b id="set-update-checks">自动检查更新（GitHub、npm）</b>
+          <b id="set-update-checks">自动检查更新</b>
           <span>
             {offline
               ? ENV_OFFLINE_TEXT
               : checks
-                ? "启动时和之后每天一次，查 Skill Control 与各 Agent 的新版本；只发出版本查询，不上传本机数据。点“立即检查”时也会联网。"
+                ? "启动时和之后每天一次，从 GitHub、npm 和各 Agent 的官方更新地址查 Skill Control 与各 Agent 的新版本；只发出版本查询，不上传本机数据。点“立即检查”时也会联网。"
                 : "已关闭：不会自动联网检查。你点“立即检查”或检查技能更新时仍会联网。"}
           </span>
         </div>
-        <Switch checked={checks && !offline} label="自动检查更新（GitHub、npm）" disabled={savingConfig || offline} onChange={() => void toggleChecks()} />
+        <Switch checked={checks && !offline} label="自动检查更新" disabled={savingConfig || offline} onChange={() => void toggleChecks()} />
       </div>
       <div className="set-row">
         <div className="set-row-text">
