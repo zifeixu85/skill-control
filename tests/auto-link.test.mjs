@@ -186,8 +186,15 @@ test("file-system watching: a skill dropped into the library is linked after the
   assert.ok(listeners.has(library), "the library folder is watched");
   assert.ok(listeners.has(path.join(home, ".claude", "skills")), "and the in-scope Agents' link folders");
   await addSkill(library, "dropped-in");
-  const linked = new Promise((resolve) => {
-    notify = () => runs.some((record) => record.items.some((item) => item.skill === "dropped-in")) && resolve();
+  // The debounce timer is unref'd (the server keeps the app alive), and the injected watcher holds
+  // no handle, so this ref'd guard keeps the event loop alive until the run lands, or fails clearly.
+  const linked = new Promise((resolve, reject) => {
+    const guard = setTimeout(() => reject(new Error("the dropped-in skill was not linked within 10 s")), 10_000);
+    notify = () => {
+      if (!runs.some((record) => record.items.some((item) => item.skill === "dropped-in"))) return;
+      clearTimeout(guard);
+      resolve();
+    };
   });
   listeners.get(library)("rename", "dropped-in");
   await linked;
