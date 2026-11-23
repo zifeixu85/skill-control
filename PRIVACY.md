@@ -1,8 +1,8 @@
 # 隐私说明 / Privacy Notice
 
-最后更新：2026-11-xx（适用于 v0.3.0）
+最后更新：2026-11-24（适用于 v0.3.0）
 
-Last updated: 2026-11-xx (applies to v0.3.0)
+Last updated: 2026-11-24 (applies to v0.3.0)
 
 [中文](#中文) · [English](#english)
 

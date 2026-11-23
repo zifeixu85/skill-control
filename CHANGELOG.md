@@ -7,7 +7,7 @@
 All notable changes to Skill Control are documented here. The format is based
 on Keep a Changelog and the project follows Semantic Versioning.
 
-## [Unreleased]
+## [0.3.0] - 2026-11-24
 
 ### Added
 
