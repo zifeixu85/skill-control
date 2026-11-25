@@ -48,6 +48,13 @@ v0.3（2026-11-01，技能库优先）：办公小浣熊改为复制档（1.2）
 - 对单个 Agent 停用：写该 Agent 原生开关（Codex `[[skills.config]] enabled=false`；OpenClaw/QClaw `skills.entries.<name>.enabled=false`；Hermes `skills.disabled`；WorkBuddy `skillOverrides`；Trae `disabledSkills`）；没有开关的删链。
 - 原生读取的 Agent 只能靠开关停用，界面要说明“进库 = 默认对 Codex/QClaw 可见”。
 - 只给某个 Agent 用的技能不进库。
+- 暂停此技能（v0.3.1）：一次把一个技能在所有能看到它的 Agent 里关掉，按 Agent 各用各的办法——有已核实开关的写开关
+  （Codex、Gemini、OpenClaw / QClaw、办公小浣熊、Hermes），软链接档取下链接，软链接档里 Agent 自己的同名副本移到
+  `~/.agent-skill-manager/paused/`；原生读取且没有开关的（Cursor 等）暂停不到，计划里单列说明。做了什么记在
+  `paused-skills.json`；恢复此技能按记录逐项改回：配置文件按当时的内容只去掉那一项（Codex 的 `[[skills.config]]`
+  只删 `name` + `enabled = false` 两行都对得上的那段，其余内容解析比对不变才写），不用旧备份整份覆盖，因为 Agent
+  会自己改配置。暂停期间自动接入和补齐接入跳过这个技能；某个 Agent 被手动或从历史撤销改回后，就不再算暂停。
+  命令行：`skill-control pause <名称>` / `skill-control resume <名称>`。
 - 卸载：先撤链接和配置项，再把库条目移到 `~/.agent-skill-manager/trash/`，可恢复。
 
 ### 1.6 `library-lock.json`
@@ -78,7 +85,7 @@ v0.3（2026-11-01，技能库优先）：办公小浣熊改为复制档（1.2）
 
 ### 1.9 命令行与随附技能（v0.3）
 
-- `skill-control status | add | link | unlink | adopt | sync | undo | doctor`：与应用同一套计划、备份、历史和锁
+- `skill-control status | add | link | unlink | adopt | pause | resume | sync | undo | doctor`：与应用同一套计划、备份、历史和锁
   （`~/.agent-skill-manager/library.lock`，应用和命令行可以同时运行），不联网；`--read-only` 或 `SKILL_MANAGER_DRY_RUN=1`
   不写任何文件。
 - 启动脚本 `~/.local/bin/skill-control` 在设置页安装 / 卸载，不覆盖别人的同名文件；macOS 按 bundle id 找应用并用应用自带的

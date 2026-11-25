@@ -80,6 +80,7 @@ export function PlanReview({ request, onClose, onWiden }: { request: PlanRequest
   const body = libraryPlanBody(request, choices, lastItems);
   const scope = request.scope;
   const catchUp = request.action === "catch-up";
+  const pausing = request.action === "pause" || request.action === "resume";
 
   const flow = usePlanApply<LibraryPlan, LibraryApplyResult>({
     requestKey: JSON.stringify(body),
@@ -103,7 +104,15 @@ export function PlanReview({ request, onClose, onWiden }: { request: PlanRequest
     onApplied: (outcome) => {
       const applied = outcome.results.filter((item) => item.status === "applied").length;
       const failed = outcome.results.length - applied;
-      const done = scope?.select ? `已完成：${request.title}` : catchUp ? `已补齐接入 ${applied} 项` : "技能库已整理";
+      const done = scope?.select
+        ? `已完成：${request.title}`
+        : catchUp
+          ? `已补齐接入 ${applied} 项`
+          : request.action === "pause"
+            ? "已暂停，随时可以恢复"
+            : request.action === "resume"
+              ? "已恢复"
+              : "技能库已整理";
       const message = failed ? `完成 ${applied} 项，${failed} 项没有成功，已自动撤回` : done;
       undoToast(message, applied ? outcome.historyId : null, failed ? "error" : "default");
     },
@@ -148,6 +157,10 @@ export function PlanReview({ request, onClose, onWiden }: { request: PlanRequest
               <p>
                 开启自动接入之前就有的缺口，这里一次补齐：给每个 Agent 接入它还看不到的库里技能。它们自己另有副本的不动，留给「一键整理」。每一项失败都会自动撤回，完成后可以撤销。
               </p>
+            ) : request.action === "pause" ? (
+              <p>暂停后，下面这些 Agent 暂时调用不了它。技能本身留在库里不动，改之前会备份，随时可以恢复。</p>
+            ) : request.action === "resume" ? (
+              <p>把暂停时关掉的地方改回来。配置文件按现在的内容只去掉当时加的那一项，其他设置不动。</p>
             ) : (
               <p>下面是将要执行的全部步骤。勾选要处理的项目，冲突默认“先不处理”。每一项都会先备份，失败时自动撤回；执行后会重新检查各 Agent 能否看到这些技能。</p>
             )}
@@ -177,7 +190,7 @@ export function PlanReview({ request, onClose, onWiden }: { request: PlanRequest
             </div>
           </>
         )}
-        {flow.applying ? <RunningProgress label={`正在整理 ${active} 项…`} expectedMs={Math.max(6_000, active * 1_500)} detail="替换前都会先备份；完成前不能关闭。" /> : null}
+        {flow.applying ? <RunningProgress label={pausing ? `正在处理 ${active} 个 Agent…` : `正在整理 ${active} 项…`} expectedMs={Math.max(6_000, active * 1_500)} detail="替换前都会先备份；完成前不能关闭。" /> : null}
         {flow.planError || flow.error ? (
           <p className="form-error" role="alert">
             {flow.planError || flow.error}
@@ -199,7 +212,7 @@ export function PlanReview({ request, onClose, onWiden }: { request: PlanRequest
                   if (historyId) setRestoreHistoryId(historyId);
                 }}
               >
-                {catchUp ? "撤销这次接入" : "撤销这次整理"}
+                {catchUp ? "撤销这次接入" : request.action === "pause" ? "撤销这次暂停" : request.action === "resume" ? "撤销这次恢复" : "撤销这次整理"}
               </button>
             ) : null}
             {!flow.result && (flow.planError || flow.expired) ? (
@@ -209,7 +222,7 @@ export function PlanReview({ request, onClose, onWiden }: { request: PlanRequest
             ) : null}
             {!flow.result ? (
               <button type="button" className="btn primary" disabled={!flow.canApply || !active} onClick={() => void flow.confirm()}>
-                {flow.applying ? "正在执行…" : `确认执行 ${active} 项`}
+                {flow.applying ? "正在执行…" : request.action === "pause" ? "确认暂停此技能" : request.action === "resume" ? "确认恢复此技能" : `确认执行 ${active} 项`}
               </button>
             ) : null}
           </span>

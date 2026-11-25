@@ -56,7 +56,7 @@ class RouteError extends Error {
   }
 }
 
-const ACTIONS = ["adopt", "link", "unlink", "disable", "remove", "batch"];
+const ACTIONS = ["adopt", "link", "unlink", "disable", "pause", "resume", "remove", "batch"];
 
 /**
  * `context`: { homeDirectory, homes, stateDirectory, backupDirectory, historyFile, getConfig,
@@ -144,7 +144,7 @@ export function createManageRoutes(context) {
     getAgents: context.getAgents,
     materialize: context.materialize,
     // Undoing a link or removing one by hand writes an auto-link tombstone.
-    onLinksChanged: (changes) => library.autoLink.record(changes),
+    onLinksChanged: (changes) => library.afterRestore(changes),
   });
 
   const installs = createInstallService({

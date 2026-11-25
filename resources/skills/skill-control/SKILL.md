@@ -2,7 +2,7 @@
 name: skill-control
 description: 统一技能库安装规范（Skill Control 随附）。用户说“装个技能”“从 GitHub 装这个 skill”“npx skills add …”“把这个技能给所有 Agent 用”“为什么某个 Agent 看不到这个技能”时使用，即使没点名本技能。流程：问范围 → 下载到临时目录做安全检查 → skill-control add 放进 ~/.agents/skills 并接入各 Agent → 验证。附手动步骤与安全检查清单。Install agent skills into the shared library (install skill, add skill from GitHub, npx skills add, share a skill with all agents).
 metadata:
-  version: 1.1.1
+  version: 1.2.0
 ---
 
 # Skill Control · 统一技能库安装
@@ -23,6 +23,7 @@ metadata:
 - 来源是本地文件夹 / `.skill` / `.zip` → 解压或复制到临时目录（Phase 2），再 `skill-control add`。
 - 用户明确给出 `npx skills add …` 命令 → 先把同一来源取到临时目录做 Phase 2 的安全检查；通过后才运行 `DO_NOT_TRACK=1 DISABLE_TELEMETRY=1 npx skills add <来源> [--skill <名称>] -g -a codex -y`（前两个变量关闭这个命令行工具的使用统计上报；只写入技能库这一份，不换成其他 `-a`；告诉用户改了哪些参数），装完用 `diff -rq` 比对技能库里的这份和检查过的那份，不一致就告诉用户；再运行 `skill-control sync` 接入其他 Agent（提示“自动接入已关闭”时改用 `skill-control link <名称> --primary`）。
 - 用户要求只让一个 Agent 看到 → 不能进技能库，命令行做不到：请用户在 Skill Control 里安装时选“只装到某个 Agent”。
+- 用户要暂时不让 Agent 用某个技能（“先停一下”“暂停这个技能”）→ 先 `skill-control pause <名称> --dry-run` 给用户看会在哪些 Agent 里关掉、哪些暂停不到（标“需要注意”的行），同意后去掉 `--dry-run`；要用回来时 `skill-control resume <名称>`。不要自己删技能、改配置或挪目录。
 
 ## 初始对话协议
 
@@ -64,6 +65,6 @@ metadata:
 
 ## 资源引用
 
-- `skill-control --help`：status、add、link、unlink、adopt、sync、undo、doctor 和 `--json`、`--dry-run`、`--read-only` 的完整用法，以它为准，不读命令行源码。退出码：0 完成 / 1 失败 / 2 用法错误 / 3 需要选择。命令行不联网。
+- `skill-control --help`：status、add、link、unlink、adopt、pause、resume、sync、undo、doctor 和 `--json`、`--dry-run`、`--read-only` 的完整用法，以它为准，不读命令行源码。退出码：0 完成 / 1 失败 / 2 用法错误 / 3 需要选择。命令行不联网。
 - [references/manual-install.md](references/manual-install.md)：没有 `skill-control` 时的手动步骤、各 Agent 的目录与接入方式、命令行里用的 Agent id。
 - [references/safety-review.md](references/safety-review.md)：安全检查清单与汇报格式。

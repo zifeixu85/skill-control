@@ -580,3 +580,56 @@
   background: var(--info-wash);
   color: var(--info);
 }
+
+/* 暂停此技能 (v0.3.1): the head button, the paused banner and chips. */
+.lib-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.lib-section-head .btn svg,
+.lib-paused .btn svg {
+  width: 13px;
+  height: 13px;
+}
+.lib-paused {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: var(--warn-wash);
+  color: var(--warn);
+}
+.lib-paused-icon {
+  width: 16px;
+  height: 16px;
+}
+.lib-paused-text {
+  display: grid;
+  gap: 2px;
+  font-size: 12px;
+  line-height: 1.5;
+  min-width: 0;
+}
+.lib-paused-text b {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.state-chip.paused {
+  background: var(--warn-wash);
+  color: var(--warn);
+}
+/* A pause row for an Agent it cannot reach: read, not ticked. */
+.plan-item.unpausable {
+  background: var(--warn-wash);
+  box-shadow: none;
+}
+.plan-item.unpausable b,
+.plan-item.unpausable .muted {
+  color: var(--warn);
+}

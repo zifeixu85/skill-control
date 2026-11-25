@@ -17,6 +17,14 @@ export interface Fanout {
   autoLinkable: boolean | null;
   /** v0.3: the user took this pair out (取消接入 / 撤销); auto-link won't connect it again. */
   skipped: boolean;
+  /** v0.3.1: 暂停此技能 turned it off in this Agent. */
+  paused: boolean;
+}
+
+/** v0.3.1 暂停此技能: since when, and the Agents it is off in right now. */
+export interface PausedInfo {
+  since: string | null;
+  agents: string[];
 }
 
 export interface LibraryEntry {
@@ -29,6 +37,8 @@ export interface LibraryEntry {
   fanout: Record<string, Fanout>;
   /** When the skill came into the library (v0.2). */
   installedAt: string | null;
+  /** Null unless the skill is paused. */
+  paused: PausedInfo | null;
 }
 
 export interface LibraryAgent {
@@ -101,7 +111,7 @@ export interface LibraryData {
   trash: TrashItem[];
 }
 
-export type LibraryAction = "adopt" | "link" | "unlink" | "disable" | "remove" | "batch" | "catch-up";
+export type LibraryAction = "adopt" | "link" | "unlink" | "disable" | "pause" | "resume" | "remove" | "batch" | "catch-up";
 
 export interface PlanStepItem {
   type: string;
@@ -206,6 +216,9 @@ export const ITEM_KIND_LABELS: Record<string, string> = {
   config: "加进额外目录",
   unlink: "取消接入",
   disable: "停用",
+  pause: "暂停",
+  resume: "恢复",
+  unpausable: "暂停不到",
   remove: "移到回收站",
   instructions: "需要手动处理",
 };
@@ -261,12 +274,24 @@ function fanoutOf(value: unknown): Fanout {
     tier: tierOf(record.tier),
     autoLinkable: typeof record.autoLinkable === "boolean" ? record.autoLinkable : null,
     skipped: record.skipped === true,
+    paused: record.paused === true,
     state: (["visible", "hidden", "missing", "duplicate", "private-copy"].includes(asString(record.state))
       ? record.state
       : "none") as FanoutState,
     reason: asOptionalString(record.reason),
     path: asOptionalString(record.path),
   };
+}
+
+function pausedOf(value: unknown): PausedInfo | null {
+  const record = asRecord(value);
+  const agents = asStringList(record.agents);
+  return agents.length ? { since: asOptionalString(record.since), agents } : null;
+}
+
+/** Paused library skills by lower-case name (the skills list marks them). */
+export function pausedByName(library: LibraryData | null | undefined): Map<string, PausedInfo> {
+  return new Map((library?.entries || []).filter((entry) => entry.paused).map((entry) => [entry.name.toLowerCase(), entry.paused as PausedInfo]));
 }
 
 function fanoutMap(value: unknown): Record<string, Fanout> {
@@ -302,6 +327,7 @@ export function normalizeLibrary(raw: unknown): LibraryData {
           source: asOptionalString(locks.source),
           fanout: fanoutMap(entry.fanout),
           installedAt: asOptionalString(entry.installedAt),
+          paused: pausedOf(entry.paused),
         };
       })
       .filter((entry) => entry.name),

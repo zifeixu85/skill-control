@@ -2,6 +2,7 @@
 
 import type { CSSProperties, KeyboardEvent } from "react";
 import type { ChipSpec } from "../../../lib/chips";
+import type { PausedInfo } from "../../../lib/library";
 import type { SkillView } from "../../../lib/skill-model";
 import { useData } from "../../providers/DataProvider";
 import { AgentAvatar } from "../../ui/Avatar";
@@ -9,8 +10,9 @@ import { ItemText, TagStack } from "../../ui/Item";
 import { Slot } from "./Slot";
 
 /** The 标记 column: copies, differing versions, and how the primary Agents get it. */
-function skillChips(view: SkillView, primary: string[]): ChipSpec[] {
+function skillChips(view: SkillView, primary: string[], paused: PausedInfo | null): ChipSpec[] {
   const chips: ChipSpec[] = [];
+  if (paused) chips.push({ id: "paused", kind: "status", tone: "warn", text: "已暂停", title: "暂停此技能后，Agent 暂时调用不了它" });
   if (view.multi) chips.push({ id: "multi", kind: "status", tone: "warn", text: "多份" });
   if (view.differs && !view.multi) chips.push({ id: "differs", kind: "status", tone: "warn", text: "版本不同" });
   const via = primary.map((agentId) => view.slots[agentId]).find((slot) => slot && (slot.kind === "plugin" || slot.kind === "readonly"));
@@ -21,12 +23,14 @@ function skillChips(view: SkillView, primary: string[]): ChipSpec[] {
 function SkillRow({
   view,
   primary,
+  paused,
   selected,
   onOpen,
   onSlot,
 }: {
   view: SkillView;
   primary: string[];
+  paused: PausedInfo | null;
   selected: boolean;
   onOpen: (id: string) => void;
   onSlot: (view: SkillView, agentId: string) => void;
@@ -54,11 +58,15 @@ function SkillRow({
         <ItemText title={view.title} meta={view.showTech ? view.techName : null} mono desc={view.summary || null} />
       </div>
       <div role="cell" className="cell-tags">
-        <TagStack chips={skillChips(view, primary)} />
+        <TagStack chips={skillChips(view, primary, paused)} />
       </div>
       {primary.map((agentId) => (
         <div role="cell" className="slotcell" key={agentId}>
-          {view.slots[agentId] ? <Slot slot={view.slots[agentId]} onClick={() => onSlot(view, agentId)} /> : null}
+          {paused?.agents.includes(agentId) ? (
+            <span className="slot-paused" title="已暂停；在详情里点「恢复此技能」">已暂停</span>
+          ) : view.slots[agentId] ? (
+            <Slot slot={view.slots[agentId]} onClick={() => onSlot(view, agentId)} />
+          ) : null}
         </div>
       ))}
       <div role="cell" className="usage metric">
@@ -71,6 +79,7 @@ function SkillRow({
 export function SkillTable({
   views,
   total,
+  paused,
   selectedId,
   onOpen,
   onSlot,
@@ -78,6 +87,8 @@ export function SkillTable({
 }: {
   views: SkillView[];
   total: number;
+  /** Paused library skills by lower-case name. */
+  paused: Map<string, PausedInfo>;
   selectedId: string | null;
   onOpen: (id: string) => void;
   onSlot: (view: SkillView, agentId: string) => void;
@@ -108,6 +119,7 @@ export function SkillTable({
               key={view.id}
               view={view}
               primary={primary}
+              paused={paused.get(view.techName.toLowerCase()) || null}
               selected={view.id === selectedId}
               onOpen={onOpen}
               onSlot={onSlot}

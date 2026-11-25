@@ -1,8 +1,8 @@
 # 隐私说明 / Privacy Notice
 
-最后更新：2026-11-24（适用于 v0.3.0）
+最后更新：2026-11-26（适用于 v0.3.1）
 
-Last updated: 2026-11-24 (applies to v0.3.0)
+Last updated: 2026-11-26 (applies to v0.3.1)
 
 [中文](#中文) · [English](#english)
 
@@ -50,7 +50,7 @@ Skill Control 在你的电脑上读取各 Agent 的文件，并在本机整理�
    - 关闭：技能库页的“自动接入”开关。高级用户也可以设置环境变量 `SKILL_MANAGER_AUTO_LINK=off`。
 2. **安装技能**：导入 `.skill`、`.zip` 或文件夹，从一个 Agent 装到其他 Agent，技能详情里的安装开关，以及 `skill-control add`。会放进技能库并接入你选的 Agent，或者只复制到某一个 Agent 的目录。
 3. **补齐接入**：一次接入开启自动接入之前就有的缺口。Hermes 的“额外目录”（在 `~/.hermes/config.yaml` 的 `skills.external_dirs` 里加上技能库）只有在你勾选时才会修改，改之前备份。
-4. **一键整理、取消接入、停用、移除**：可能把某个 Agent 里的副本移进技能库、原位置换成链接；停用会在对应 Agent 的配置里记一笔（Codex 的 `config.toml`、Gemini 的 `settings.json`、OpenClaw / QClaw 的配置、办公小浣熊的 `skill-settings.json`，Hermes 通过 `hermes config set`）；移除的技能放进 `~/.agent-skill-manager/trash/`，可以放回原位。
+4. **一键整理、取消接入、停用、移除**：可能把某个 Agent 里的副本移进技能库、原位置换成链接；停用会在对应 Agent 的配置里记一笔（Codex 的 `config.toml`、Gemini 的 `settings.json`、OpenClaw / QClaw 的配置、办公小浣熊的 `skill-settings.json`，Hermes 通过 `hermes config set`）；暂停此技能会在能看到它的各个 Agent 里做同样的停用，或者取下链接、把 Agent 自己的那份暂时移到 `~/.agent-skill-manager/paused/`，恢复此技能时按记录改回来；移除的技能放进 `~/.agent-skill-manager/trash/`，可以放回原位。
 5. **更新**：技能更新会替换技能文件夹（先备份），并更新 `~/.agents/.skill-lock.json` 里对应的一条；插件、`lark-cli`、git 检出和 Agent 软件的更新，运行它们自己的官方命令（如 `claude plugin update`、`lark-cli update`、`git pull --ff-only`、`npm` 安装命令）。
 6. **命令行工具的“预览修复”**（在“连接器与 MCP → 命令行工具”里，也可以从体检进入）：在 `~/.local/bin` 写一个命令启动脚本，或给 Agent 补放行规则；写之前展示改动并备份。
 7. **设置 → Agent 集成**：“安装命令行工具”写入 `~/.local/bin/skill-control`（已有同名文件且不是 Skill Control 写的，就拒绝覆盖）；“装到常用 Agent”把随附的 `skill-control` 技能放进技能库并接入。两者都可以在同一处卸载。
@@ -84,7 +84,7 @@ Skill Control 自己发出的联网请求只有下表这些。请求里不带账
 
 | 位置 | 内容 |
 | --- | --- |
-| `~/.agent-skill-manager/`（Windows：`%USERPROFILE%\.agent-skill-manager`） | 配置 `config.json`、操作历史 `history.jsonl`、替换前的备份 `backups/`、从技能库或 Agent 移除的技能 `trash/`、导入预览 `imports/`，以及上面表格里的统计和缓存文件、`auto-link.json`（自动接入记录） |
+| `~/.agent-skill-manager/`（Windows：`%USERPROFILE%\.agent-skill-manager`） | 配置 `config.json`、操作历史 `history.jsonl`、替换前的备份 `backups/`、从技能库或 Agent 移除的技能 `trash/`、导入预览 `imports/`，以及上面表格里的统计和缓存文件、`auto-link.json`（自动接入记录）、`paused-skills.json`（暂停了哪些技能、各 Agent 是怎么暂停的）和 `paused/`（暂停期间移开的副本） |
 | 桌面版用户数据：macOS `~/Library/Application Support/Skill Control/`，Windows `%APPDATA%\Skill Control`，Linux `~/.config/Skill Control` | 应用更新的检查结果 `app-update.json`，以及 Electron 的缓存 |
 | `~/Library/Preferences/dev.skillcontrol.desktop.plist`（macOS） | 系统为应用保存的偏好设置 |
 | `~/.local/bin/skill-control` | 命令行工具的启动脚本（只在你安装后才有） |
@@ -150,7 +150,7 @@ Except for item 1, auto-link, every change to another agent's folder or configur
    - Turn off: the 自动接入 switch on the library page, or the environment variable `SKILL_MANAGER_AUTO_LINK=off`.
 2. **Installing skills**: importing a `.skill`, `.zip` or folder, installing from one agent to others, the install switches in skill details, and `skill-control add`. The skill goes into the library and is connected to the agents you chose, or is copied into one agent's own folder only.
 3. **Catch-up (补齐接入)**: connects the gaps that existed before auto-link was turned on. Hermes' extra directory (adding the library to `skills.external_dirs` in `~/.hermes/config.yaml`) is changed only when you tick it, after a backup.
-4. **Tidy up, unlink, disable, remove**: may move an agent's copy into the library and put a link in its place; disabling records the switch in that agent's configuration (Codex `config.toml`, Gemini `settings.json`, the OpenClaw / QClaw configuration, Office Raccoon `skill-settings.json`, or `hermes config set` for Hermes); removed skills go to `~/.agent-skill-manager/trash/` and can be put back.
+4. **Tidy up, unlink, disable, remove**: may move an agent's copy into the library and put a link in its place; disabling records the switch in that agent's configuration (Codex `config.toml`, Gemini `settings.json`, the OpenClaw / QClaw configuration, Office Raccoon `skill-settings.json`, or `hermes config set` for Hermes); pausing a skill does the same in every agent that can see it, or removes its link, or moves the agent's own copy to `~/.agent-skill-manager/paused/` for the time being, and resuming it turns back exactly what the pause changed; removed skills go to `~/.agent-skill-manager/trash/` and can be put back.
 5. **Updates**: a skill update replaces the skill folder (after a backup) and updates its entry in `~/.agents/.skill-lock.json`; plugin, `lark-cli`, git checkout and agent software updates run the tool's own official command (such as `claude plugin update`, `lark-cli update`, `git pull --ff-only` or an `npm` install).
 6. **"Preview fix" for command-line tools** (in 连接器与 MCP → 命令行工具, also reachable from the health check): a launcher script in `~/.local/bin` or a missing allow rule for an agent; the change is shown and backed up first.
 7. **Settings → Agent 集成 (agent integration)**: "install command-line tool" writes `~/.local/bin/skill-control` (an existing file of that name that Skill Control did not write is never overwritten); "install to primary agents" puts the bundled `skill-control` skill into the library and connects it. Both can be removed in the same place.
@@ -184,7 +184,7 @@ These are the only network requests Skill Control makes itself. They carry no ac
 
 | Location | Contents |
 | --- | --- |
-| `~/.agent-skill-manager/` (Windows: `%USERPROFILE%\.agent-skill-manager`) | `config.json`, the operation history `history.jsonl`, backups taken before replacements `backups/`, skills removed from the library or an agent `trash/`, staged imports `imports/`, the usage and cache files listed above, and `auto-link.json` (auto-link records) |
+| `~/.agent-skill-manager/` (Windows: `%USERPROFILE%\.agent-skill-manager`) | `config.json`, the operation history `history.jsonl`, backups taken before replacements `backups/`, skills removed from the library or an agent `trash/`, staged imports `imports/`, the usage and cache files listed above, `auto-link.json` (auto-link records), `paused-skills.json` (which skills are paused and how, per agent) and `paused/` (copies moved aside while paused) |
 | Desktop user data: macOS `~/Library/Application Support/Skill Control/`, Windows `%APPDATA%\Skill Control`, Linux `~/.config/Skill Control` | The app update state `app-update.json` and Electron's caches |
 | `~/Library/Preferences/dev.skillcontrol.desktop.plist` (macOS) | Preferences the system keeps for the app |
 | `~/.local/bin/skill-control` | The command-line launcher (only if you installed it) |

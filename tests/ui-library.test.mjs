@@ -166,3 +166,20 @@ test("CLI fix reasons show names, guide commands are only real command lines", (
   assert.deepEqual([...cli.commandLines(text)], ["lark-cli config bind --source hermes", "lark-cli config keychain-downgrade"]);
   assert.equal(cli.commandLines("Skill Control 不会修改 launchd 配置。").size, 0);
 });
+
+test("paused skills: the view's pause info reaches entries, fanouts and the list's lookup", () => {
+  const data = library.normalizeLibrary({
+    ...view,
+    entries: [
+      { name: "Shared-B", kind: "real", paused: { since: "2026-11-26T08:00:00.000Z", agents: ["codex", null] }, fanout: { codex: { tier: "native", state: "hidden", paused: true }, cursor: { tier: "native", state: "visible" } } },
+      { name: "empty", kind: "real", paused: { since: "2026-11-26T08:00:00.000Z", agents: [] }, fanout: {} },
+      ...view.entries,
+    ],
+  });
+  assert.deepEqual(data.entries[0].paused, { since: "2026-11-26T08:00:00.000Z", agents: ["codex"] });
+  assert.equal(data.entries[0].fanout.codex.paused, true);
+  assert.equal(data.entries[0].fanout.cursor.paused, false);
+  assert.equal(data.entries[1].paused, null, "a pause with no Agent left is no pause");
+  assert.deepEqual([...library.pausedByName(data).keys()], ["shared-b"]);
+  assert.equal(library.pausedByName(null).size, 0);
+});

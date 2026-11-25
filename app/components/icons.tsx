@@ -156,3 +156,9 @@ export const SparkIcon = (props: IconProps) => (
     <path d="M15 13.5v3M13.5 15h3" />
   </Icon>
 );
+export const PauseIcon = (props: IconProps) => (
+  <Icon strokeWidth={2} {...props}><path d="M7.5 4.5v11M12.5 4.5v11" /></Icon>
+);
+export const PlayIcon = (props: IconProps) => (
+  <Icon {...props}><path d="M6.5 4.2v11.6L15.5 10 6.5 4.2Z" fill="currentColor" /></Icon>
+);

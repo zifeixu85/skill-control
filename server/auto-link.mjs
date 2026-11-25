@@ -4,6 +4,7 @@ import path from "node:path";
 import { assertSafeWrite } from "./home-guard.mjs";
 import { tierOf } from "./library-agents.mjs";
 import { DEFAULT_LIBRARY_SETTINGS, normalizeLibrarySettings } from "./library-settings.mjs";
+import { pausedNow } from "./paused-skills.mjs";
 import { withStateLock } from "./state-lock.mjs";
 
 /**
@@ -87,7 +88,7 @@ export const scopeAgents = (agents, scope) =>
  * connect now, the baseline gaps per Agent (catch-up), Hermes' pending confirmation and
  * per-pair flags for the API.
  */
-export function computeAutoLink({ entries, agents, settings, state, now = Date.now() }) {
+export function computeAutoLink({ entries, agents, settings, state, paused = new Set(), now = Date.now() }) {
   const at = new Date(now).toISOString();
   const names = entries.map((entry) => entry.name);
   const present = new Set(names);
@@ -122,6 +123,11 @@ export function computeAutoLink({ entries, agents, settings, state, now = Date.n
     for (const entry of entries) {
       if (entry.kind === "broken" || !NAME.test(entry.name) || entry.fanout?.[agent.agentId]?.state !== "missing") continue;
       const key = pairKey(agent.agentId, entry.name);
+      // A paused skill stays off everywhere until 恢复 (its baseline and handled marks are kept).
+      if (paused.has(entry.name)) {
+        flags.set(key, { skipped: true });
+        continue;
+      }
       if (next.skip[key] || next.handled[key]) {
         skipped += 1;
         flags.set(key, { skipped: true });
@@ -192,7 +198,8 @@ export function createAutoLinker(context) {
     const snapshot = library || (await context.manager.snapshot());
     const state = await readAutoLinkState(context.stateDirectory);
     const settings = settingsOf(config);
-    return { snapshot, state, settings, decision: computeAutoLink({ entries: snapshot.entries, agents: snapshot.agents, settings, state, now: now() }) };
+    const paused = new Set((await pausedNow(context.stateDirectory, snapshot, context.homeDirectory)).keys());
+    return { snapshot, state, settings, decision: computeAutoLink({ entries: snapshot.entries, agents: snapshot.agents, settings, state, paused, now: now() }) };
   }
 
   /** One reconcile: baseline bookkeeping, then link / copy the new skills. `dryRun` writes nothing. */
@@ -359,7 +366,7 @@ export function createAutoLinker(context) {
     if (action === "auto-link") return;
     const pairs = (item) => (item.agents || []).map((agentId) => ({ agentId, skill: item.skill }));
     await record({
-      connected: items.filter((item) => ["link", "copy", "dedupe", "conflict", "adopt"].includes(item.kind)).flatMap(pairs),
+      connected: items.filter((item) => ["link", "copy", "dedupe", "conflict", "adopt"].includes(item.kind) || (item.kind === "resume" && item.ops?.some((op) => op.op === "link"))).flatMap(pairs),
       // "取消接入" and the link-removing "disable" of link-tier Agents are tombstones.
       removed: [...items.filter((item) => item.kind === "unlink" || (item.kind === "disable" && item.ops?.some((op) => op.op === "unlink"))).flatMap(pairs), ...skip],
     });

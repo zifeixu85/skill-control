@@ -127,6 +127,11 @@ async function runOp(op, context) {
     case "write": {
       await guard(op.path);
       const existed = await exists(op.path);
+      // Edits computed from a file's content (an Agent's config) run only over that same content.
+      if (op.ifUnchanged !== undefined) {
+        const current = existed ? createHash("sha256").update(await readFile(op.path)).digest("hex") : null;
+        if (current !== op.ifUnchanged) throw new LibraryError(409, `${context.display(op.path)} 在生成计划后被改过，请重新生成计划。`, "stale-plan");
+      }
       op.existed = existed;
       if (existed) {
         await guard(op.backup);

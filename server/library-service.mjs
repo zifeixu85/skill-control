@@ -7,6 +7,7 @@ import { isWithin, object } from "./fs-safe.mjs";
 import { hermesHomeFor } from "./hermes.mjs";
 import { createLibraryManager } from "./library-plan.mjs";
 import { readLibrary } from "./library.mjs";
+import { createPausedStore, pausedNow } from "./paused-skills.mjs";
 import { commandEnv as defaultCommandEnv, runCommand } from "./update-apply.mjs";
 import { findGitCheckout } from "./update-sources.mjs";
 
@@ -51,8 +52,12 @@ export function createLibraryService({
     platform,
     fsImpl,
     readOnly,
-    // Manual links / unlinks keep auto-link's bookkeeping (handled pairs, tombstones) current.
-    onApplied: (payload) => autoLinker.onApplied(payload),
+    // Manual links / unlinks keep auto-link's bookkeeping (handled pairs, tombstones) current;
+    // pauses and resumes keep the paused-skills record.
+    onApplied: async (payload) => {
+      await pausedStore.onApplied(payload);
+      await autoLinker.onApplied(payload);
+    },
     async isExternalPath(real) {
       if (!isWithin(homeDirectory, real)) return true;
       if (isWithin(path.join(homeDirectory, "Library", "Application Support"), real)) return true;
@@ -90,6 +95,7 @@ export function createLibraryService({
       }];
     },
   };
+  const pausedStore = createPausedStore({ stateDirectory, homeDirectory, readOnly });
   const manager = createLibraryManager(context);
   const autoLinker = createAutoLinker({
     homeDirectory,
@@ -107,17 +113,22 @@ export function createLibraryService({
     const config = await getConfig();
     const library = await readLibrary({ config, homeDirectory, homes, stateDirectory });
     const { block, flags } = await autoLinker.describe(config, library.internal);
+    const paused = await pausedNow(stateDirectory, library.internal, homeDirectory);
     const publicView = { ...library };
     delete publicView.internal;
-    publicView.entries = publicView.entries.map((entry) => ({
-      ...entry,
-      fanout: Object.fromEntries(
-        Object.entries(entry.fanout).map(([agentId, item]) => {
-          const flag = flags.get(pairKey(agentId, entry.name)) || {};
-          return [agentId, { ...item, autoLinkable: Boolean(flag.autoLinkable), ...(flag.catchUp ? { catchUp: true } : {}), ...(flag.skipped ? { skipped: true } : {}) }];
-        }),
-      ),
-    }));
+    publicView.entries = publicView.entries.map((entry) => {
+      const pause = paused.get(entry.name);
+      return {
+        ...entry,
+        ...(pause ? { paused: { since: pause.since, agents: pause.agents } } : {}),
+        fanout: Object.fromEntries(
+          Object.entries(entry.fanout).map(([agentId, item]) => {
+            const flag = flags.get(pairKey(agentId, entry.name)) || {};
+            return [agentId, { ...item, autoLinkable: Boolean(flag.autoLinkable), ...(flag.catchUp ? { catchUp: true } : {}), ...(flag.skipped ? { skipped: true } : {}), ...(pause?.agents.includes(agentId) ? { paused: true } : {}) }];
+          }),
+        ),
+      };
+    });
     return { ...publicView, autoLink: block, trash: await manager.listTrash() };
   }
 
@@ -127,6 +138,11 @@ export function createLibraryService({
     apply: (input) => manager.apply({ ...input, origin }),
     restore: manager.restore,
     autoLink: autoLinker,
+    /** After an undo from history: auto-link tombstones and the paused-skills record. */
+    async afterRestore(changes) {
+      await pausedStore.onRestored(changes);
+      await autoLinker.record(changes);
+    },
     snapshot: manager.snapshot,
     readInternal: () => getConfig().then((config) => readLibrary({ config, homeDirectory, homes, stateDirectory })),
   };

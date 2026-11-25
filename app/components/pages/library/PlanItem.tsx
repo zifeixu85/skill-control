@@ -54,7 +54,7 @@ export function PlanItem({
     );
   }
   return (
-    <div className={`plan-item ${on ? "" : "off"}`}>
+    <div className={`plan-item ${item.kind === "unpausable" ? "unpausable" : on ? "" : "off"}`}>
       <div className="plan-item-head">
         {toggleable ? (
           <input

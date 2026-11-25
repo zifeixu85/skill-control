@@ -1,20 +1,21 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdir, readdir, realpath } from "node:fs/promises";
+import { appendFile, lstat, mkdir, readdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { classifyPath, relativeLinkTarget } from "./fs-links.mjs";
-import { compactHomePath, homeVariants, object } from "./fs-safe.mjs";
+import { compactHomePath, homeVariants, isWithin, object } from "./fs-safe.mjs";
 import { tierOf } from "./library-agents.mjs";
 import { isReversible, LibraryError, recordOp, runOps } from "./library-ops.mjs";
 import { createPlanStore } from "./plan-store.mjs";
 import { createHasher, readLibrary } from "./library.mjs";
 import { writeLibraryLock } from "./library-lock.mjs";
-import { disableOps } from "./library-switches.mjs";
+import { disableOps, enableOps, SWITCH_AGENTS } from "./library-switches.mjs";
+import { expandRecorded, PAUSED_FOLDER, readPausedSkills } from "./paused-skills.mjs";
 import { withStateLock } from "./state-lock.mjs";
 import { listTrash as listTrashEntries, restoreTrash } from "./trash.mjs";
 
 /**
- * Library plans: adopt, link, unlink, disable, remove, the batch clean-up, the one-off
- * catch-up of baseline gaps and installs through the library. A plan is a list of items,
+ * Library plans: adopt, link, unlink, disable, pause / resume, remove, the batch clean-up,
+ * the one-off catch-up of baseline gaps and installs through the library. A plan is a list of items,
  * each a small transaction of reversible ops; nothing runs without a plan from this process
  * (10 minutes, single use) and an explicit confirmation — except auto-link runs
  * (server/auto-link.mjs), which execute link / copy items for "missing" pairs only. Every
@@ -222,6 +223,83 @@ export function createLibraryManager(context) {
     };
   }
 
+  // -------------------------------------------------------------------------
+  // 暂停此技能 / 恢复此技能 (server/paused-skills.mjs keeps what a pause did).
+
+  const homeRelative = (target) => path.relative(context.homeDirectory, target);
+  const pausedRoot = () => path.join(context.stateDirectory, PAUSED_FOLDER);
+
+  /** The first of an Agent's own folders that holds something under this name. */
+  async function ownLocation(agent, entry) {
+    for (const directory of agent.ownDirs) {
+      const location = path.join(directory, entry.name);
+      const classified = await classifyPath(location, entry.path);
+      if (classified.kind !== "absent") return { location, kind: classified.kind };
+    }
+    return null;
+  }
+
+  /**
+   * Turning one library skill off in one Agent, the Agent's own way: its config switch when it
+   * has a verified one, else removing its link to the library, else moving its own copy aside
+   * (a link-tier Agent with a private copy). Agents that read the library and have no switch
+   * cannot be paused; they get a row saying so.
+   */
+  async function pauseItems(agent, entry, group) {
+    const status = entry.fanout?.[agent.agentId]?.state;
+    if (!["visible", "duplicate", "private-copy"].includes(status)) return [];
+    const base = { id: `pause:${agent.agentId}:${entry.name}`, skill: entry.name, agentId: agent.agentId, expect: [] };
+    const active = (title, ops, pause) => ({ ...base, title: `${agent.name}：${title}`, kind: "pause", choices: ["pause", "skip"], choice: "pause", ops, pause });
+    const unpausable = (text) => ({ ...base, title: `${agent.name}：${text}`, kind: "unpausable", choice: "skip", ops: [] });
+    if (SWITCH_AGENTS.has(agent.agentId)) {
+      const item = await disableOps(agent, entry.name, { ...context, group, libraryEntry: entry });
+      // It sees the skill but has nothing to switch (e.g. no config file yet).
+      if (!item) return [unpausable("没找到它的配置文件，没有自动暂停。")];
+      if (item.kind !== "disable") return [unpausable(`没能自动暂停。${item.title.slice(agent.name.length + 1)}`)];
+      return [active(item.title.slice(agent.name.length + 1), item.ops, { method: "switch" })];
+    }
+    // Removing a link changes nothing for an Agent that reads the library itself.
+    if (tierOf(agent.agentId) === "native") return [unpausable("暂停不到。它直接读取技能库，没有停用开关，暂停期间仍能用。")];
+    const own = await ownLocation(agent, entry);
+    // The record keeps home-relative paths; anything else could not be put back.
+    if (own && !isWithin(context.homeDirectory, own.location)) return [unpausable("它的技能目录不在主目录下，没有自动暂停。")];
+    if (own?.kind === "link-to-library") {
+      return [active(`先拿掉 ${entry.name} 的链接，恢复时接回`, [{ op: "unlink", path: own.location }], { method: "unlink", path: homeRelative(own.location) })];
+    }
+    if (own && ["real-dir", "foreign-link"].includes(own.kind)) {
+      const stash = path.join(pausedRoot(), group, agent.agentId, entry.name);
+      if (!isWithin(context.homeDirectory, stash)) return [unpausable("Skill Control 的数据目录不在主目录下，没有自动暂停。")];
+      return [active(`把它自己的这份 ${entry.name} 暂时移开，恢复时放回`, [{ op: "stash", path: own.location, to: stash }], { method: "stash", path: homeRelative(own.location), stash: homeRelative(stash) })];
+    }
+    return [unpausable("暂停不到。")];
+  }
+
+  /** Turning back on what the pause turned off in one Agent, from how things are now. */
+  async function resumeItem(agent, entry, name, how, group) {
+    const base = { id: `resume:${agent.agentId}:${name}`, skill: name, agentId: agent.agentId };
+    const active = (title, ops, expect = []) => ({ ...base, title: `${agent.name}：${title}`, kind: "resume", choices: ["resume", "skip"], choice: "resume", ops, expect });
+    const manual = (text) => ({ ...base, title: `${agent.name}：${text}`, kind: "instructions", choice: "skip", ops: [], expect: [] });
+    // Resume steps carry what the pause did, so undoing them from history pauses again.
+    const withPause = (item) => (item?.kind === "resume" ? { ...item, pause: how } : item);
+    if (how.method === "switch") return withPause(await enableOps(agent, name, { ...context, group }));
+    const location = expandRecorded(context.homeDirectory, how.path);
+    // Only back into one of this Agent's own folders, under the skill's own name.
+    if (!location || path.basename(location) !== name || !agent.ownDirs.includes(path.dirname(location))) return manual("记录的位置不在它的技能目录里，没有自动恢复。");
+    if (how.method === "unlink") {
+      if (!entry || entry.kind === "broken") return manual(`技能库里已经没有 ${name}，没法接回。`);
+      const classified = await classifyPath(location, entry.path);
+      if (classified.kind === "link-to-library") return null;
+      if (classified.kind !== "absent") return manual(`原来的位置已经有同名的 ${name}，没有接回。`);
+      return withPause(active(`重新接入 ${name}`, linkOps(agent, location, entry.path), [agent.agentId]));
+    }
+    const stash = expandRecorded(context.homeDirectory, how.stash);
+    const inside = stash ? path.relative(pausedRoot(), stash) : "";
+    if (!stash || !inside || inside.startsWith("..") || path.isAbsolute(inside) || path.basename(stash) !== name) return manual("记录里移开的位置不对，没有自动恢复。");
+    if (!(await lstat(stash).catch(() => null))) return null;
+    if (await lstat(location).catch(() => null)) return manual(`原来的位置已经有同名的 ${name}，移开的那份还在 ${display(stash)}。`);
+    return withPause(active(`把它自己的这份 ${name} 放回原处`, [{ op: "move", from: stash, to: location }]));
+  }
+
   async function hermesConfigItem(agent, state) {
     if ((agent.switches.externalDirs || []).includes(state.realRoot)) return null;
     const hermes = await context.findCommand("hermes");
@@ -334,6 +412,23 @@ export function createLibraryManager(context) {
         if (!skill) throw new LibraryError(400, "缺少技能名称。", "invalid-request");
         for (const agent of targetAgents) {
           const item = await disableOps(agent, skill, { ...context, group, libraryEntry: entries.get(skill) });
+          if (item) items.push(item);
+        }
+        break;
+      }
+      case "pause": {
+        const entry = entries.get(skill);
+        if (!entry || entry.kind === "broken") throw new LibraryError(404, "库中没有这个技能。", "not-found");
+        for (const agent of state.agents) items.push(...(await pauseItems(agent, entry, group)));
+        break;
+      }
+      case "resume": {
+        if (!skill) throw new LibraryError(400, "缺少技能名称。", "invalid-request");
+        const record = (await readPausedSkills(context.stateDirectory)).skills[skill];
+        if (!record) throw new LibraryError(404, "这个技能没有暂停。", "not-found");
+        for (const [agentId, how] of Object.entries(record.agents)) {
+          const agent = agents.get(agentId);
+          const item = agent ? await resumeItem(agent, entries.get(skill), skill, how, group) : null;
           if (item) items.push(item);
         }
         break;
@@ -589,7 +684,7 @@ export function createLibraryManager(context) {
       const recordedItems = [];
       for (const result of results.filter((item) => item.status === "applied")) {
         const ops = (await Promise.all(result.item.ops.map((op) => recordOp(op, display)))).filter(Boolean);
-        recordedItems.push({ id: result.item.id, title: result.item.title, kind: result.item.kind, skill: result.item.skill, ...(result.item.agentId ? { agents: [result.item.agentId] } : {}), ...(result.item.trashId ? { trashId: result.item.trashId } : {}), ops });
+        recordedItems.push({ id: result.item.id, title: result.item.title, kind: result.item.kind, skill: result.item.skill, ...(result.item.agentId ? { agents: [result.item.agentId] } : {}), ...(result.item.trashId ? { trashId: result.item.trashId } : {}), ...(result.item.pause ? { pause: result.item.pause } : {}), ops });
       }
       const record = recordedItems.length
         ? {
@@ -610,7 +705,8 @@ export function createLibraryManager(context) {
         await mkdir(path.dirname(context.historyFile), { recursive: true });
         await appendFile(context.historyFile, `${JSON.stringify(record)}\n`, "utf8");
       }
-      await context.onApplied?.({ action, origin, items: recordedItems, historyId: record?.id || null, skip: recordedItems.length ? skip : [] });
+      const notApplied = results.filter((result) => result.status !== "applied").map((result) => ({ id: result.item.id, kind: result.item.kind, skill: result.item.skill, agentId: result.item.agentId || null }));
+      await context.onApplied?.({ action, origin, items: recordedItems, failed: notApplied, historyId: record?.id || null, skip: recordedItems.length ? skip : [], library: { entries: final.entries, agents: final.agents } });
       return {
         results: results.map((result) => ({
           id: result.item.id,

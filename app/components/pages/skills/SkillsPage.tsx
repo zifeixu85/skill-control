@@ -2,6 +2,9 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { useEscape } from "../../../hooks/useEscape";
+import { useResource } from "../../../hooks/useResource";
+import { api } from "../../../lib/api";
+import { pausedByName } from "../../../lib/library";
 import { usePersistent } from "../../../hooks/usePersistent";
 import { resetScrollMemory, useScrollMemory } from "../../../hooks/useScrollMemory";
 import {
@@ -56,6 +59,9 @@ function Filters({ chips, value, onChange }: { chips: FilterChip[]; value: strin
 
 export function SkillsPage() {
   const { views, primary, agentName, scan, viewsById } = useData();
+  // Paused library skills get a mark in the list (the same cached resource the detail panel uses).
+  const library = useResource("library", () => api.library());
+  const paused = useMemo(() => pausedByName(library.data), [library.data]);
   const nav = useNav();
   const toast = useToast();
   const scrollRef = useScrollMemory<HTMLDivElement>(SCROLL_KEY);
@@ -186,6 +192,7 @@ export function SkillsPage() {
               <SkillTable
                 views={shown}
                 total={list.length}
+                paused={paused}
                 selectedId={selected?.id || null}
                 onOpen={open}
                 onSlot={onSlot}

@@ -131,7 +131,7 @@ test("v0.3 routes: auto-link, catch-up, installs, the companion skill and the CL
 
   // The companion skill: bundled, then in the library and linked to the primary Agents.
   const companion = (await call("companion", "/api/library/companion-skill")).json;
-  assert.deepEqual([companion.available, companion.inLibrary, companion.version], [true, false, "1.1.1"]);
+  assert.deepEqual([companion.available, companion.inLibrary, companion.version], [true, false, "1.2.0"]);
   assert.equal((await post("companion:no-header", "/api/library/companion-skill/install", { confirm: true })).status, 400);
   const installed = (await post("companion:install", "/api/library/companion-skill/install", { confirm: true }, HEADER)).json;
   assert.deepEqual([installed.status.inLibrary, installed.status.upToDate, installed.status.fanout.claude.state], [true, true, "visible"]);

@@ -175,15 +175,21 @@ export function createRestoreService({ homeDirectory, homes, stateDirectory, bac
 
   const publicUnit = (unit) => ({ id: unit.id, title: unit.title, selected: Boolean(unit.selected), ...(unit.conflict ? { conflict: unit.conflict } : {}), ...(unit.unrestorable ? { unrestorable: unit.unrestorable } : {}), steps: unit.steps });
 
-  /** Links a restore undid (connect items → removed) or brought back (unlink items → connected). */
+  /**
+   * Links a restore undid (connect items → removed) or brought back (unlink items → connected),
+   * and pauses it undid (unpaused) or brought back (repaused, from a resume step's record).
+   */
   function linkChanges(entry, done) {
-    const changes = { connected: [], removed: [] };
+    const changes = { connected: [], removed: [], unpaused: [], repaused: [] };
     if (entry.type !== "library" || !Array.isArray(entry.items)) return changes;
     for (const unit of done) {
       const item = entry.items.find((candidate) => candidate.id === unit.id);
       if (!item?.skill || !Array.isArray(item.agents)) continue;
       const pairs = item.agents.map((agentId) => ({ agentId, skill: item.skill }));
-      if (item.kind === "unlink") changes.connected.push(...pairs);
+      if (item.kind === "pause") changes.unpaused.push(...pairs);
+      else if (item.kind === "resume") {
+        if (item.pause) changes.repaused.push(...pairs.map((pair) => ({ ...pair, how: item.pause })));
+      } else if (item.kind === "unlink") changes.connected.push(...pairs);
       else if (["link", "copy", "dedupe", "conflict", "adopt"].includes(item.kind) || entry.action === "auto-link") changes.removed.push(...pairs);
     }
     return changes;

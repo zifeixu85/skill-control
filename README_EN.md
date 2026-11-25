@@ -76,6 +76,8 @@ Other agents (such as Cline, Roo Code, Qwen Code and SmartOrder) do not read the
 - Hermes' configuration is never changed automatically.
 - After each auto-link a notice offers undo. Anything you undid or unlinked is never linked again automatically.
 
+**Pause a skill** (暂停此技能): to keep agents from using a skill for a while, click 暂停此技能 in the 技能库 (library) part of the skill's details. The confirmation lists how each agent is switched off: Codex, OpenClaw and others get their own disable switch, Claude Code and other link-based agents lose their link, and an agent's own copy with the same name is moved aside. Agents that read the library themselves and have no switch (such as Cursor) can't be paused and are listed separately. The skill stays in the library, auto-link leaves it alone while it is paused, and 恢复此技能 (resume) turns back exactly what the pause changed. On the command line: `skill-control pause <name>` and `skill-control resume <name>`.
+
 **Install mode**: in 设置 → 安装方式 (Settings → Install mode) choose 统一技能库 (shared library, recommended) or 各装一份 (a copy in each agent's own folder). When you import a skill (`.skill`, `.zip` or a folder) or install it from one agent to others, choose all primary agents (recommended), chosen agents, or one agent only (outside the library).
 
 **Command line and the skill-control skill**: both in 设置 → Agent 集成 (Settings → Agent integration).

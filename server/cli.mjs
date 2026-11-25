@@ -26,6 +26,8 @@ const USAGE = `skill-control —— Skill Control 技能库命令行
   skill-control link <名称> [--primary|--all|--agents a,b] [--dry-run] [--json]
   skill-control unlink <名称> --agents a,b [--dry-run] [--json]   取消接入（之后不会再自动接回）
   skill-control adopt <agentId> <名称> [--dry-run] [--json]       把某个 Agent 的副本收进库，原位置换成链接
+  skill-control pause <名称> [--dry-run] [--json]                 暂停此技能：在能看到它的 Agent 里暂时关掉
+  skill-control resume <名称> [--dry-run] [--json]                恢复此技能：把暂停时关掉的地方改回来
   skill-control sync [--dry-run] [--json]                         按自动接入设置接入新技能
   skill-control undo <historyId> [--json]                         撤销一次改动
   skill-control doctor [--json]                                   解释哪些 Agent 看不到哪些技能、为什么
@@ -127,7 +129,7 @@ async function createCore({ readOnly }) {
     },
     getAgents: async () => (await getConfig()).agents.map((agent) => ({ ...agent, paths: agent.paths.map(expand) })),
     materialize: materializeSkillDirectory,
-    onLinksChanged: (changes) => library.autoLink.record(changes),
+    onLinksChanged: (changes) => library.afterRestore(changes),
     readOnly,
   });
   return { homeDirectory, stateDirectory, getConfig, library, restore };
@@ -154,6 +156,9 @@ function undoHint(historyEntry) {
   return historyEntry?.id ? `撤销：skill-control undo ${historyEntry.id}` : null;
 }
 
+/** Rows the plan cannot do by itself (an Agent a pause cannot reach, a manual step). */
+const noteLines = (plan) => (plan.items || []).filter((item) => ["unpausable", "instructions"].includes(item.kind)).map((item) => `  需要注意  ${item.title}`);
+
 function planLines(plan) {
   const lines = [];
   for (const item of plan.items || []) {
@@ -161,7 +166,7 @@ function planLines(plan) {
     lines.push(`  ${item.requiresChoice ? "需要选择" : "将执行"}  ${item.title}`);
     for (const step of item.steps || []) lines.push(`      ${step.type} ${step.path || step.to || ""}${step.target ? ` → ${step.target}` : ""}`);
   }
-  return lines;
+  return [...lines, ...noteLines(plan)];
 }
 
 // ---------------------------------------------------------------------------
@@ -204,11 +209,12 @@ async function commandStatus(core, { positional }) {
       const agents = Object.entries(entry.fanout)
         .map(([agentId, item]) => ({ agentId, name: agentName(view, agentId), primary: primary.some((agent) => agent.agentId === agentId), ...item }))
         .sort((left, right) => Number(right.primary) - Number(left.primary));
-      result.skill = { name, inLibrary: true, kind: entry.kind, agents };
-      lines.push("", `${name}  在技能库中${entry.kind === "real" ? "" : `（${entry.kind}）`}`);
+      result.skill = { name, inLibrary: true, kind: entry.kind, agents, paused: entry.paused || null };
+      lines.push("", `${name}  在技能库中${entry.kind === "real" ? "" : `（${entry.kind}）`}${entry.paused ? `；已暂停（恢复：skill-control resume ${name}）` : ""}`);
       for (const agent of agents.filter((item) => item.primary || item.state !== "missing" || ["link", "copy", "config"].includes(item.tier))) {
-        const hint = agent.state === "missing" && ["link", "copy"].includes(agent.tier) ? ` → skill-control link ${name} --agents ${agent.agentId}` : "";
-        lines.push(`  ${agent.primary ? "*" : " "} ${pad(agent.name, 16)}${pad(TIER_LABELS[agent.tier] || agent.tier, 10)}${STATE_LABELS[agent.state] || agent.state}${agent.reason ? `：${agent.reason}` : ""}${hint}`);
+        const hint = agent.paused ? "" : agent.state === "missing" && ["link", "copy"].includes(agent.tier) ? ` → skill-control link ${name} --agents ${agent.agentId}` : "";
+        const state = agent.paused ? "已暂停" : `${STATE_LABELS[agent.state] || agent.state}${agent.reason ? `：${agent.reason}` : ""}`;
+        lines.push(`  ${agent.primary ? "*" : " "} ${pad(agent.name, 16)}${pad(TIER_LABELS[agent.tier] || agent.tier, 10)}${state}${hint}`);
       }
       lines.push("  （* 常用 Agent）");
     }
@@ -242,14 +248,14 @@ async function resolveAgents(core, flags, { required = false, defaultPrimary = t
 async function planAndApply(core, input, { flags, readOnly, title }) {
   const plan = await core.library.plan(input);
   const view = await core.library.view();
-  if (!plan.planId && !plan.needsChoice) return { result: { nothingToDo: true, plan }, lines: [title, `  ${plan.message || "没有需要执行的改动。"}`] };
+  if (!plan.planId && !plan.needsChoice) return { result: { nothingToDo: true, plan }, lines: [title, `  ${plan.message || "没有需要执行的改动。"}`, ...noteLines(plan)] };
   if (flags["dry-run"] || readOnly || !plan.planId) {
     const lines = [`${title}${readOnly ? "（只读模式：没有写入）" : flags["dry-run"] ? "（预览，没有写入）" : ""}`, ...planLines(plan)];
     if (!plan.planId) lines.push(`  ${plan.message || "没有需要执行的改动。"}`);
     return { result: { dryRun: true, plan }, lines, exitCode: plan.planId || !plan.needsChoice ? 0 : 3 };
   }
   const applied = await core.library.apply({ planId: plan.planId, confirm: true });
-  const lines = [title, ...describeResults(applied, view), ...(applied.backups ? [`备份：${applied.backups}`] : []), undoHint(applied.historyEntry)].filter(Boolean);
+  const lines = [title, ...describeResults(applied, view), ...noteLines(plan), ...(applied.backups ? [`备份：${applied.backups}`] : []), undoHint(applied.historyEntry)].filter(Boolean);
   const failed = applied.results.some((item) => item.status !== "applied");
   return { result: { plan: { needsChoice: plan.needsChoice }, results: applied.results, historyId: applied.historyEntry?.id || null, undo: undoHint(applied.historyEntry) }, lines, exitCode: failed ? 1 : 0 };
 }
@@ -385,6 +391,14 @@ async function run(parsed, { readOnly }) {
       if (!agentId || !name) throw new UsageError("用法：skill-control adopt <agentId> <名称>");
       await resolveAgents(core, { agents: agentId });
       return planAndApply(core, { action: "adopt", skill: name, agents: [agentId], from: agentId }, { flags, readOnly, title: `把 ${agentId} 的 ${name} 收进技能库` });
+    }
+    case "pause": {
+      if (!positional[0]) throw new UsageError("用法：skill-control pause <名称>");
+      return planAndApply(core, { action: "pause", skill: positional[0] }, { flags, readOnly, title: `暂停 ${positional[0]}（恢复：skill-control resume ${positional[0]}）` });
+    }
+    case "resume": {
+      if (!positional[0]) throw new UsageError("用法：skill-control resume <名称>");
+      return planAndApply(core, { action: "resume", skill: positional[0] }, { flags, readOnly, title: `恢复 ${positional[0]}` });
     }
     case "sync":
       return commandSync(core, parsed, readOnly);
