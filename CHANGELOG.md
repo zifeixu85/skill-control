@@ -7,6 +7,39 @@
 All notable changes to Skill Control are documented here. The format is based
 on Keep a Changelog and the project follows Semantic Versioning.
 
+## [0.3.1] - 2026-11-26
+
+### Added
+
+- Pause a skill (暂停此技能): one library skill is switched off in every agent that can see
+  it, each its own way: the agent's verified switch (Codex `[[skills.config]]`, Gemini
+  `skills.disabled`, OpenClaw / QClaw `skills.entries.<name>.enabled`, Office Raccoon
+  `disabledSkillNames`, Hermes `hermes config set skills.disabled`), the link of a link-tier
+  agent removed, or a link-tier agent's own copy with the same name moved to
+  `~/.agent-skill-manager/paused/`. Agents that read the library natively and have no
+  switch (Cursor, Copilot, …) cannot be paused and are listed as such in the plan. Same
+  plan → confirm → backup → history flow as every library write (`action: "pause"`).
+- Resume (恢复此技能, `action: "resume"`): turns back exactly what the pause changed, from
+  the files as they are now rather than from the old backups, since agents rewrite their
+  own configs. Codex: only the `[[skills.config]]` table with that `name` and
+  `enabled = false` is removed, and only when the rest of `config.toml` parses unchanged.
+- `paused-skills.json` records what each pause did per agent; an agent counts as paused
+  only while that is still in place, so an undo from history or a manual change ends it.
+  Auto-link and catch-up skip paused skills (their baseline and handled pairs are kept).
+- `GET /api/library` entries carry `paused: { since, agents }` and fanouts `paused: true`;
+  the skill details show a pause button, a banner with the resume button and 已暂停 chips;
+  the skills list marks paused skills.
+- `skill-control pause <name>` and `skill-control resume <name>`; `status <name>` shows the
+  pause. The bundled skill-control skill (1.2.0) tells agents to preview a pause first.
+
+### Fixed
+
+- Config edits for 停用 / pause / resume (Codex, Gemini, OpenClaw / QClaw, Office Raccoon)
+  carry the hash of the file they were planned from and stop with "请重新生成计划" if the
+  agent changed the file between plan and confirm, instead of overwriting that change.
+- Undo from history keeps the paused-skills record in step: undoing a pause ends it, undoing
+  a resume pauses again (resume steps carry what the pause did).
+
 ## [0.3.0] - 2026-11-24
 
 ### Added
